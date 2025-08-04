@@ -369,22 +369,22 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
     }
 
-    private float subtilParallax = 0.7f;
+    private float subtilParallax = 0f;
     private float subtilConvergence = 0.7f; //0.7f
 
     private void drawWithDibrAiSubtleShader() {
         drawWithDualBubbleDepth(dibr3dProgram, subtilParallax, subtilConvergence);
     }
 
-    private float normalParallax = 0.00f;
+    private float normalParallax = 0.2f;
     private float normalConvergence = 0.8f;
 
     private void drawWithFake3DShader() {
         drawWithDualBubbleDepth(dibr3dProgram, normalParallax, normalConvergence);
     }
 
-    private float strongParallax = 0.8f;
-    private float strongConvergence = 0f;
+    private float strongParallax = 0.3f;
+    private float strongConvergence = 1f;
 
     private void drawWithDibrAiStrongShader() {
         drawWithDualBubbleDepth(dibr3dProgram, strongParallax, strongConvergence);

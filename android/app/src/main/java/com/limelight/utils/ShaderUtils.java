@@ -58,9 +58,9 @@ public class ShaderUtils {
                     // --- Der Rest Ihrer bewährten Logik ---
                     "  vec4 originalColor = texture2D(s_ColorTexture, v_TexCoord);\n" +
                     "  vec4 shiftedColor = texture2D(s_ColorTexture, clamp(shiftedCoord, 0.0, 1.0));\n" +
-                    //"  float shiftMagnitude = abs(ai_shift) / max(u_parallax, 0.001);\n" +
-                    //  "  float artifactBlendFactor = 1.0 - smoothstep(0.25, 0.4, shiftMagnitude);\n" +
-                    "  vec4 finalColor = shiftedColor;\n" +
+                    "  float shiftMagnitude = abs(total_shift) / max(u_parallax, 0.001);\n" +
+                    "  float artifactBlendFactor = 1.0 - smoothstep(0.25, 0.4, shiftMagnitude);\n" +
+                    "  vec4 finalColor = mix(originalColor, shiftedColor, artifactBlendFactor);\n" +
                     "\n" +
                     // --- Debug-Farben ---
                     "  if (u_debugMode) {\n" +
