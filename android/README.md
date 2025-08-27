@@ -1,3 +1,40 @@
+--------------------------------------------------------------------------------------------------------------------
+# Hello, derflacco here  
+This fork is an attempt to reduce the infamous high decoding latency on MediaTek devices with Moonlight/Artemis.  
+Don’t expect miracles — my time (and coding skills) are limited.  
+
+## What to expect from the stable builds  
+- Noticeably lower **c2.mtk** decoding latency (in my tests: from ~20 ms down to ~6–8 ms on my Poco X6 Pro)  
+- Possible bugs with older **omx.mtk** decoders  
+
+## What to expect from the experimental builds  
+- Potentially huge reductions in **c2.mtk** decoding latency on newer devices  
+- Bugs… think the first edition of *TES II: Daggerfall*, or a badly modded *Skyrim*  
+- Some ChatGPT Plus–generated code: feel free to improve or clean it up!
+
+
+░░░░░░░░░▄░░░░░░░░░░░░░░▄░░░░
+░░░░░░░░▌▒█░░░░░░░░░░░▄▀▒▌░░░
+░░░░░░░░▌▒▒█░░░░░░░░▄▀▒▒▒▐░░░
+░░░░░░░▐▄▀▒▒▀▀▀▀▄▄▄▀▒▒▒▒▒▐░░░
+░░░░░▄▄▀▒░▒▒▒▒▒▒▒▒▒█▒▒▄█▒▐░░░
+░░░▄▀▒▒▒░░░▒▒▒░░░▒▒▒▀██▀▒▌░░░ 
+░░▐▒▒▒▄▄▒▒▒▒░░░▒▒▒▒▒▒▒▀▄▒▒▌░░
+░░▌░░▌█▀▒▒▒▒▒▄▀█▄▒▒▒▒▒▒▒█▒▐░░
+░▐░░░▒▒▒▒▒▒▒▒▌██▀▒▒░░░▒▒▒▀▄▌░
+░▌░▒▄██▄▒▒▒▒▒▒▒▒▒░░░░░░▒▒▒▒▌░
+▐▒▀▐▄█▄█▌▄░▀▒▒░░░░░░░░░░▒▒▒▐░
+▐▒▒▐▀▐▀▒░▄▄▒▄▒▒▒▒▒▒░▒░▒░▒▒▒▒▌
+▐▒▒▒▀▀▄▄▒▒▒▄▒▒▒▒▒▒▒▒░▒░▒░▒▒▐░
+░▌▒▒▒▒▒▒▀▀▀▒▒▒▒▒▒░▒░▒░▒░▒▒▒▌░
+░▐▒▒▒▒▒▒▒▒▒▒▒▒▒▒░▒░▒░▒▒▄▒▒▐░░
+░░▀▄▒▒▒▒▒▒▒▒▒▒▒░▒░▒░▒▄▒▒▒▒▌░░
+░░░░▀▄▒▒▒▒▒▒▒▒▒▒▄▄▄▀▒▒▒▒▄▀░░░
+░░░░░░▀▄▄▄▄▄▄▀▀▀▒▒▒▒▒▄▄▀░░░░░
+░░░░░░░░░▒▒▒▒▒▒▒▒▒▒▀▀░░░░░░░░
+--------------------------------------------------------------------------------------------------------------------
+ASCII Art credits:https://emojicombos.com/doge-ascii-art
+
 # Artemis Android
 
 Previously named Moonlight Noir
