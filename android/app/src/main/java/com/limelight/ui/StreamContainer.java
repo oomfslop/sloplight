@@ -69,7 +69,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
         // View for both 3D modes, which require custom OpenGL rendering
         mGLSurfaceView = new GLSurfaceView(context);
-        mGLSurfaceView.setEGLContextClientVersion(2);
+        mGLSurfaceView.setEGLContextClientVersion(3);
         // Pass 'this' as the listener to the renderer.
         mStereoRenderer = new Stereo3DRenderer(mGLSurfaceView, this, context);
         mGLSurfaceView.setRenderer(mStereoRenderer);
@@ -78,6 +78,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
         //setStreamMode(StreamMode.MODE_2D, true);
     }
+
 
     public void setPrefConfig(PreferenceConfiguration prefConfig) {
         mStereoRenderer.setPrefConfig(prefConfig);

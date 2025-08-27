@@ -21,6 +21,7 @@ import com.limelight.nvstream.input.KeyboardPacket;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.KeyConfigHelper;
 import com.limelight.utils.KeyMapper;
+import com.limelight.utils.Stereo3DRenderer;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -145,6 +146,9 @@ public class GameMenu implements Game.GameMenuCallbacks {
 
     private void showMenuDialog(String title, MenuOption[] options) {
         int themeResId = game.getApplicationInfo().theme;
+
+      //  Stereo3DRenderer.isDebugMode = !Stereo3DRenderer.isDebugMode;
+
         Context themedContext = new ContextThemeWrapper(dialogScreenContext, themeResId);
         AlertDialog.Builder builder = new AlertDialog.Builder(themedContext);
         builder.setTitle(title);
