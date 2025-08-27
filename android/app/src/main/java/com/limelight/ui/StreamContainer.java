@@ -66,7 +66,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
         // View for both 3D modes, which require custom OpenGL rendering
         mGLSurfaceView = new GLSurfaceView(context);
-        mGLSurfaceView.setEGLContextClientVersion(3);
+        mGLSurfaceView.setEGLContextClientVersion(2);
         // Pass 'this' as the listener to the renderer.
         mStereoRenderer = new Stereo3DRenderer(mGLSurfaceView, this, context);
         mGLSurfaceView.setRenderer(mStereoRenderer);
