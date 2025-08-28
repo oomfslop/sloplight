@@ -584,6 +584,8 @@ return videoFormat;
 
         videoDecoder.configure(format, renderTarget, null, 0);
 
+        try { applySurfaceFrameRate(renderTarget, targetFps); } catch (Throwable ignored) {}
+
 try {
     MediaCodecInfo __info = (android.os.Build.VERSION.SDK_INT >= 21) ? videoDecoder.getCodecInfo() : null;
     String __name = (__info != null) ? __info.getName() : "<unknown>";
@@ -1071,7 +1073,12 @@ try {
                 long __ts = System.nanoTime();
                 videoDecoder.releaseOutputBuffer(nextOutputBuffer, __ts);
             } else {
-                videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
+                if (android.os.Build.VERSION.SDK_INT >= 21) {
+    long __ts = System.nanoTime();
+    videoDecoder.releaseOutputBuffer(nextOutputBuffer, __ts);
+} else {
+    videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
+}
             }
                     }
 
@@ -1197,7 +1204,12 @@ try {
                 long __ts = System.nanoTime();
                 videoDecoder.releaseOutputBuffer(__last, __ts);
             } else {
-                videoDecoder.releaseOutputBuffer(__last, true);
+                if (android.os.Build.VERSION.SDK_INT >= 21) {
+    long __ts = System.nanoTime();
+    videoDecoder.releaseOutputBuffer(__last, __ts);
+} else {
+    videoDecoder.releaseOutputBuffer(__last, true);
+}
             }
                             } else if (android.os.Build.VERSION.SDK_INT >= 21) {
                                 long __now = System.nanoTime();
@@ -1207,7 +1219,12 @@ try {
                 long __ts = System.nanoTime();
                 videoDecoder.releaseOutputBuffer(__last, __ts);
             } else {
-                videoDecoder.releaseOutputBuffer(__last, true);
+                if (android.os.Build.VERSION.SDK_INT >= 21) {
+    long __ts = System.nanoTime();
+    videoDecoder.releaseOutputBuffer(__last, __ts);
+} else {
+    videoDecoder.releaseOutputBuffer(__last, true);
+}
             }
                             }
                             continue; // handled this iteration
@@ -1296,7 +1313,12 @@ try {
                 long __ts = System.nanoTime();
                 videoDecoder.releaseOutputBuffer(lastIndex, __ts);
             } else {
-                videoDecoder.releaseOutputBuffer(lastIndex, true);
+                if (android.os.Build.VERSION.SDK_INT >= 21) {
+    long __ts = System.nanoTime();
+    videoDecoder.releaseOutputBuffer(lastIndex, __ts);
+} else {
+    videoDecoder.releaseOutputBuffer(lastIndex, true);
+}
             }
 
                                         // [STATS] anche su pre-Lollipop, dopo presentazione
@@ -1355,7 +1377,12 @@ try {
                 long __ts = System.nanoTime();
                 videoDecoder.releaseOutputBuffer(lastIndex, __ts);
             } else {
-                videoDecoder.releaseOutputBuffer(lastIndex, true);
+                if (android.os.Build.VERSION.SDK_INT >= 21) {
+    long __ts = System.nanoTime();
+    videoDecoder.releaseOutputBuffer(lastIndex, __ts);
+} else {
+    videoDecoder.releaseOutputBuffer(lastIndex, true);
+}
             }
 
                                         // [STATS] anche su pre-Lollipop, dopo presentazione
