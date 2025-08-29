@@ -38,7 +38,6 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
@@ -64,7 +63,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
     // Constants
     private static final int GL_TEXTURE_EXTERNAL_OES = 0x8D65;
-    private static final int DOWNSAMPLE_SIZE = 16;
     private static final float[] QUAD_VERTICES = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
     private static final float[] TEXTURE_VERTICES = {0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f};
     public static Boolean isDebugMode = false;
@@ -76,7 +74,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private final FloatBuffer quadVertexBuffer;
     private final FloatBuffer textureVertexBuffer;
     private final Object frameLock = new Object();
-    private final Object depthMapLock = new Object();
 
     // OpenGL Handles
     private int videoTextureId;
@@ -86,12 +83,19 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private int fboTextureId;
 
     private int filterFboHandle;
-    private int downsampleFboHandle;
-    private int downsampleTextureId;
     private int simple3dProgram;
     private int bilateralBlurProgram;
     private int dibr3dProgram;
 
+
+    private final int NUM_INPUT_BUFFERS = 3;
+    private BlockingQueue<ByteBuffer> freeInputBuffers;
+    private final int NUM_SMOOTHED_BUFFERS = 3;
+    private BlockingQueue<ByteBuffer> freeSmoothedBuffers;
+    private BlockingQueue<ByteBuffer> readyToRenderQueue;
+
+    // The single buffer that the GPU is currently reading from
+    private ByteBuffer currentlyRenderingMap;
     // AI & TFLite Variables
     private Interpreter tflite;
     private GpuDelegate gpuDelegate;
@@ -103,23 +107,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private Surface videoSurface;
     private SurfaceTexture videoSurfaceTexture;
     private PreferenceConfiguration prefConf;
-    private double latestSceneDifference = 0.0f;
-    private ByteBuffer latestUnsmoothedDepthMap = createFlatDepthMap();
-    private ByteBuffer previousSmoothedDepthBytes = createFlatDepthMap();
     private ByteBuffer previousPixelBuffer;
-    private ByteBuffer downsamplePixelBuffer;
-    private ByteBuffer previousDownsamplePixelBuffer;
-    private float[] smoothedDepthPosition;
-    private float[] depthVelocity;
-
-    // Threading & Concurrency
     private ExecutorService executorService;
     private final AtomicBoolean isAiRunning = new AtomicBoolean(false);
-    private final AtomicBoolean isSmoothingRunning = new AtomicBoolean(false);
     private final AtomicBoolean isAiResultHandlingRunning = new AtomicBoolean(false);
     private final AtomicBoolean gpuDelegateFailed = new AtomicBoolean(false);
     private final AtomicBoolean frameAvailable = new AtomicBoolean(false);
-    private final AtomicReference<ByteBuffer> newSmoothedMapAvailable = new AtomicReference<>();
 
     public Stereo3DRenderer(GLSurfaceView view, OnSurfaceReadyListener listener, Context context) {
         this.glSurfaceView = view;
@@ -165,7 +158,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         initializeIntermediateFbo();
         initializeTfLite();
         initializeFbo();
-        initializeDownsampleFbo();
         initBuffer();
 
         int mapSize = modelInputWidth * modelInputHeight;
@@ -184,47 +176,11 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             freeInputBuffers.offer(ByteBuffer.allocateDirect(inputPixelSize).order(ByteOrder.nativeOrder()));
         }
 
-        executorService = Executors.newFixedThreadPool(3);
+        executorService = Executors.newFixedThreadPool(2);
 
         if (onSurfaceReadyListener != null) {
             onSurfaceReadyListener.onSurfaceReady(videoSurface);
         }
-    }
-
-    /**
-     * Führt eine performante Szenenänderungs-Erkennung auf einer kleinen
-     * heruntergerechneten Version des Videobildes durch.
-     *
-     * @return Der berechnete Unterschiedswert (z.B. average pixel difference).
-     */
-    private double detectSceneChange() {
-        // 1. Zeichne das große Videobild in die kleine Downsample-Textur.
-        //    Die GPU erledigt die Skalierung automatisch und blitzschnell.
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, downsampleFboHandle);
-        GLES20.glViewport(0, 0, DOWNSAMPLE_SIZE, DOWNSAMPLE_SIZE);
-        drawQuad(simple3dProgram, 1.0f, 0.0f); // Zeichne das Video-Quad
-
-        // 2. Lese NUR die kleine 16x16 Textur zurück zur CPU. Das ist extrem schnell.
-        downsamplePixelBuffer.rewind();
-        GLES20.glReadPixels(0, 0, DOWNSAMPLE_SIZE, DOWNSAMPLE_SIZE, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, downsamplePixelBuffer);
-
-        // Setze den Framebuffer zurück, damit wieder auf den Bildschirm gezeichnet wird
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-
-        // 3. Vergleiche den aktuellen kleinen Buffer mit dem vom letzten Frame
-        double difference = 0.0;
-        if (previousDownsamplePixelBuffer != null) {
-            difference = calculateAverageDifferenceOCV(downsamplePixelBuffer, previousDownsamplePixelBuffer, DOWNSAMPLE_SIZE, DOWNSAMPLE_SIZE);
-        }
-
-        // 4. Speichere den aktuellen kleinen Buffer für den nächsten Frame
-        if (previousDownsamplePixelBuffer == null) {
-            previousDownsamplePixelBuffer = ByteBuffer.allocateDirect(downsamplePixelBuffer.capacity());
-        }
-        previousDownsamplePixelBuffer.rewind();
-        downsamplePixelBuffer.rewind();
-        previousDownsamplePixelBuffer.put(downsamplePixelBuffer);
-        return difference;
     }
 
     private void initializeIntermediateFbo() {
@@ -374,14 +330,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
     }
 
-    private final int NUM_INPUT_BUFFERS = 3;
-    private BlockingQueue<ByteBuffer> freeInputBuffers;
-    private final int NUM_SMOOTHED_BUFFERS = 3;
-    private BlockingQueue<ByteBuffer> freeSmoothedBuffers;
-    private BlockingQueue<ByteBuffer> readyToRenderQueue;
-
-    // The single buffer that the GPU is currently reading from
-    private ByteBuffer currentlyRenderingMap;
     @Override
     public void onDrawFrame(GL10 gl) {
         long startTime = System.nanoTime();
@@ -426,10 +374,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
         applyTwoPassGaussianBlur();
         if (tflite != null) {
-            if (previousSmoothedDepthBytes != null && !isSmoothingRunning.get()) {
-                isSmoothingRunning.set(true);
-                //   executorService.submit(new SmoothDepthmapTask());
-            }
             if (!isAiResultHandlingRunning.get()) {
                 isAiResultHandlingRunning.set(true);
                 executorService.submit(new AiResultHandling());
@@ -519,24 +463,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, modelInputWidth, modelInputHeight, GLES20.GL_LUMINANCE, GLES20.GL_UNSIGNED_BYTE, depthMap);
         }
     }
-
-    // Rufe diese Methode in onSurfaceCreated() auf
-    private void initializeDownsampleFbo() {
-        downsampleTextureId = createRgbaTexture(DOWNSAMPLE_SIZE, DOWNSAMPLE_SIZE);
-        int[] fbos = new int[1];
-        GLES20.glGenFramebuffers(1, fbos, 0);
-        downsampleFboHandle = fbos[0];
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, downsampleFboHandle);
-        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, downsampleTextureId, 0);
-        if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) != GLES20.GL_FRAMEBUFFER_COMPLETE) {
-            Log.e("Stereo3DRenderer", "Downsample Framebuffer is not complete.");
-        }
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-
-        // Initialisiere die Buffer für den CPU-Vergleich
-        downsamplePixelBuffer = ByteBuffer.allocateDirect(DOWNSAMPLE_SIZE * DOWNSAMPLE_SIZE * 4).order(ByteOrder.nativeOrder());
-    }
-
 
     private void drawQuad(int program, float scale, float offset) {
         GLES20.glUseProgram(program);
@@ -767,7 +693,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                         double instabilityFactor = rawDifference / Math.max(imageDifference, MIN_IMAGE_DIFFERENCE);
 
 
-                        if(instabilityFactor > INSTABILITY_THRESHOLD_STRONG && imageDifference <= IMAGE_TRESHOLD) {
+                        if (instabilityFactor > INSTABILITY_THRESHOLD_STRONG && imageDifference <= IMAGE_TRESHOLD) {
                             LimeLog.info("Unstable AI ignored strong " + instabilityFactor +
                                     " (DepthDiff: " + rawDifference + ", ImageDiff: " + imageDifference + ")");
                             takeResult = false;
@@ -792,7 +718,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                         resultBuffer.rewind();
                         readyToRenderQueue.put(resultBuffer);
                     }
-                    latestSceneDifference = imageDifference;
                     freeOutputBuffers.put(rawDepthBuffer);
                 } catch (Exception e) {
                     Log.e("Stereo3DRenderer", "AIRESULT exception", e);
@@ -806,7 +731,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                     if (resultBuffer != null) {
                         freeSmoothedBuffers.offer(resultBuffer);
                     }
-                    if(result != null) {
+                    if (result != null) {
                         freeInputBuffers.offer(result.pixelBuffer);
                     }
                     long duration = (System.nanoTime() - startTime) / 1_000_000;
@@ -816,57 +741,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             }
             Log.d("Stereo3DRenderer", "Total AI RESULT FALSE");
             isAiResultHandlingRunning.set(false);
-        }
-    }
-
-
-    private ByteBuffer newSmoothedBytes;
-
-    private class SmoothDepthmapTask implements Runnable {
-
-        @Override
-        public void run() {
-            while (!Thread.currentThread().isInterrupted()) {
-                long startTime = System.nanoTime();
-                try {
-                    synchronized (depthMapLock) {
-                        if (latestUnsmoothedDepthMap == null) {
-                            return;
-                        }
-                        // 1. Berechne die Unterschiede
-                        double imageDiff = latestSceneDifference;
-                        double depthDiff = calculateAverageDifferenceOCV(latestUnsmoothedDepthMap, previousSmoothedDepthBytes, modelInputWidth, modelInputHeight);
-
-                        // 2. Berechne den adaptiven Mix-Faktor
-                        final double MAX_CHANGE_SCORE = 100.0; // Der "Unterschieds-Wert", bei dem zu 100% die neue Karte genommen wird
-                        final float MIN_MIX_FACTOR = 0.1f;    // Mindest-Mischung, um "stuck frames" zu vermeiden
-                        final float MAX_MIX_FACTOR = 1.0f;    // Maximale Mischung
-
-                        double changeScore = imageDiff + depthDiff;
-                        double ratio = Math.min(changeScore / MAX_CHANGE_SCORE, 1.0);
-                        float mixFactor = (float) (MIN_MIX_FACTOR + (MAX_MIX_FACTOR - MIN_MIX_FACTOR) * ratio);
-
-                        // 3. Führe die Mischung (LERP) durch
-                        ByteBuffer resultBuffer = ByteBuffer.allocateDirect(latestUnsmoothedDepthMap.capacity());
-                        latestUnsmoothedDepthMap.rewind();
-                        previousSmoothedDepthBytes.rewind();
-
-                        for (int i = 0; i < latestUnsmoothedDepthMap.capacity(); i++) {
-                            int prev = previousSmoothedDepthBytes.get(i) & 0xFF;
-                            int curr = latestUnsmoothedDepthMap.get(i) & 0xFF;
-                            int mixed = (int) (prev * (1.0f - mixFactor) + curr * mixFactor);
-                            resultBuffer.put((byte) mixed);
-                        }
-                        newSmoothedMapAvailable.set(resultBuffer);
-
-                    }
-                } catch (Exception e) {
-                } finally {
-                    long duration = (System.nanoTime() - startTime) / 1_000_000;
-                    Log.d("Stereo3DRenderer", "CalculateTime Smoothing time: " + duration + " ms");
-                }
-            }
-            isSmoothingRunning.set(false);
         }
     }
 
