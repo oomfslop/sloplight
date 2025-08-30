@@ -1140,4 +1140,40 @@ public class MediaCodecHelper {
         
         return false;
     }
+
+
+    // --- Helpers to safely set vendor-specific flags without crashing ---
+
+    private static void safeSet(MediaFormat format, String key, int value) {
+        try {
+            format.setInteger(key, value);
+        } catch (Throwable ignored) {
+            // key not supported, ignore
+        }
+    }
+
+    private static void safeSet(MediaFormat format, String key, boolean value) {
+        try {
+            format.setInteger(key, value ? 1 : 0);
+        } catch (Throwable ignored) {
+            // key not supported, ignore
+        }
+    }
+
+    private static void safeSet(MediaFormat format, String key, long value) {
+        try {
+            format.setLong(key, value);
+        } catch (Throwable ignored) {
+            // key not supported, ignore
+        }
+    }
+
+    private static void safeSet(MediaFormat format, String key, String value) {
+        try {
+            format.setString(key, value);
+        } catch (Throwable ignored) {
+            // key not supported, ignore
+        }
+    }
+
 }
