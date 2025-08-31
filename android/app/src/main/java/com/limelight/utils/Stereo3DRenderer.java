@@ -4,7 +4,9 @@ import android.content.Context;
 import android.content.res.AssetFileDescriptor;
 import android.graphics.SurfaceTexture;
 import android.opengl.GLES20;
+import android.opengl.GLES30;
 import android.opengl.GLSurfaceView;
+import android.os.Build;
 import android.util.Log;
 import android.view.Surface;
 
@@ -159,6 +161,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         initializeTfLite();
         initializeFbo();
         initBuffer();
+        initializePBOs();
 
         int mapSize = modelInputWidth * modelInputHeight;
         freeSmoothedBuffers = new ArrayBlockingQueue<>(NUM_SMOOTHED_BUFFERS);
@@ -180,6 +183,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         if (onSurfaceReadyListener != null) {
             onSurfaceReadyListener.onSurfaceReady(videoSurface);
+        }
+        if (!isAiResultHandlingRunning.get()) {
+            isAiResultHandlingRunning.set(true);
+            executorService.submit(new AiResultHandling());
+        }
+        if (!isAiRunning.get()) {
+            isAiRunning.set(true);
+            executorService.submit(new AiTask());
         }
     }
 
@@ -330,14 +341,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
     }
 
+    public static float fps = 0;
+
+    private long totalDrawTime = 0;
+    public static int depthMapResultCount = 0;
+    public static int threeDFps = 0;
+    private long lastFpsTime = 0;
+
     @Override
     public void onDrawFrame(GL10 gl) {
         long startTime = System.nanoTime();
-        if (gpuDelegateFailed.getAndSet(false)) {
-            Log.w("Stereo3DRenderer", "GPU delegate failed at runtime. Re-initializing interpreter on CPU.");
-            reinitializeTfLiteOnCpu();
-        }
-
         synchronized (frameLock) {
             if (!frameAvailable.get()) {
                 Log.w("Stereo3DRenderer", "No new frame available, skipping draw");
@@ -346,7 +359,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
             frameAvailable.set(false);
         }
-
+        try {
+            videoSurfaceTexture.updateTexImage();
+        } catch (Exception e) {
+            Log.w("Stereo3DRenderer", "updateTexImagse failed", e);
+            return;
+        }
         // Return the buffer we used last frame to the free pool
         if (currentlyRenderingMap != null) {
             freeSmoothedBuffers.offer(currentlyRenderingMap);
@@ -357,6 +375,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         ByteBuffer newMap = readyToRenderQueue.poll();
         if (newMap != null) {
             currentlyRenderingMap = newMap;
+            depthMapResultCount++;
         }
 
         // Upload the latest completed map to the GPU.
@@ -364,53 +383,68 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         if (currentlyRenderingMap != null) {
             uploadLatestDepthMapToGpu(currentlyRenderingMap);
         }
-        try {
-            videoSurfaceTexture.updateTexImage();
-        } catch (Exception e) {
-            Log.w("Stereo3DRenderer", "updateTexImagse failed", e);
-            return;
-        }
 
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
         applyTwoPassGaussianBlur();
+        drawWithShader();
         if (tflite != null) {
-            if (!isAiResultHandlingRunning.get()) {
-                isAiResultHandlingRunning.set(true);
-                executorService.submit(new AiResultHandling());
-            }
-            if (!isAiRunning.get()) {
-                isAiRunning.set(true);
-                executorService.submit(new AiTask());
-            }
             try {
                 ByteBuffer pixelBufferForAI = freeInputBuffers.poll();
                 if (pixelBufferForAI != null) {
                     // 1. Try to get a free, empty buffer from the resource pool.
                     // 2. A buffer was available. Fill it with the latest pixel data.
-                    readPixelsForAI(pixelBufferForAI);
+                    boolean success = readPixelsForAI_Async(pixelBufferForAI);
 
-                    // 3. Offer the now-FILLED buffer to the AI's "to-do" queue.
-                    if (inferenceInputQueue.offer(pixelBufferForAI)) {
-                        // Success: The AI will now process this buffer.
-                        Log.d("InferenceTask", "Success: The AI will now process this buffer.");
-                    } else {
-                        // The AI is still busy with the last job, and our single-slot
-                        // "to-do" queue is full. This is rare but possible.
-                        // Return the buffer we just filled immediately to the free pool.
+                    if (success) {
+                        // 3. Offer the now-FILLED buffer to the AI's "to-do" queue.
+                        if (inferenceInputQueue.offer(pixelBufferForAI)) {
+                            // Success: The AI will now process this buffer.
+                            Log.d("InferenceTask", "Success: The AI will now process this buffer.");
+                        } else {
+                            // The AI is still busy with the last job, and our single-slot
+                            // "to-do" queue is full. This is rare but possible.
+                            // Return the buffer we just filled immediately to the free pool.
 
-                        freeInputBuffers.put(pixelBufferForAI);
+                            freeInputBuffers.put(pixelBufferForAI);
+                        }
+                        // If pixelBufferForAI was null, it means all buffers are busy.
+                        // We simply skip this frame, which is the correct back-pressure behavior.
                     }
-                    // If pixelBufferForAI was null, it means all buffers are busy.
-                    // We simply skip this frame, which is the correct back-pressure behavior.
+                } else {
+                    freeInputBuffers.put(pixelBufferForAI);
                 }
             } catch (InterruptedException e) {
             }
-            drawWithShader();
             long endTime = System.nanoTime();
-            long durationMs = (endTime - startTime) / 1000000;
-            Log.d("Stereo3DRenderer", "Total onDrawFrame time: " + durationMs + " ms ");
+
+            fps++;
+            if (lastFpsTime == 0) {
+                lastFpsTime = startTime; // Initialisiere beim ersten Frame
+            }
+            totalDrawTime = totalDrawTime + (endTime - lastFpsTime);
+            // Prüfe, ob eine Sekunde (1 Milliarde Nanosekunden) vergangen ist
+            if (endTime - lastFpsTime >= 1_000_000_000) {
+                if(fps > 0) {
+                    drawDelay = ((float) totalDrawTime /  fps / 1000000000f);
+                }
+                // Logge die Anzahl der Frames, die in dieser Sekunde gezeichnet wurden
+                performanceStats = "3D : FPS: " + fps + " DPS: " + depthMapResultCount + " DPAIS: " + threeDFps;
+                Log.d("Stereo3DRenderer", performanceStats);
+                totalDrawTime = 0;
+
+                // Setze den Zähler und die Zeit für die nächste Sekunde zurück
+                fps = 0;
+                depthMapResultCount = 0;
+                threeDFps = 0;
+                lastFpsTime = endTime;
+            }
         }
     }
+
+    public static String performanceStats = "";
+
+    public static float drawDelay = 0.0f;
+    public static String renderer = "CPU";
 
     private ByteBuffer readPixelsForAI() {
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboHandle);
@@ -513,6 +547,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
                     aiTime = System.nanoTime();
                     tflite.run(tfliteInputBuffer, outputBuffer);
+                    threeDFps++;
                     aiTime_end = System.nanoTime();
                     filledOutputBuffers.put(new InferenceResult(pixelBuffer, outputBuffer));
                     Log.d("InferenceTask", "AI inference ended");
@@ -624,6 +659,91 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
     }
 
+    private void initializePBOs() {
+        // Berechne die Größe des Buffers, den wir auslesen wollen
+        PBO_SIZE = modelInputWidth * modelInputHeight * 4; // RGBA
+
+        // Erzeuge zwei Puffer-Objekte auf der GPU
+        GLES30.glGenBuffers(2, pboHandles, 0);
+
+        // Konfiguriere Puffer 0
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboHandles[0]);
+        GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, PBO_SIZE, null, GLES30.GL_DYNAMIC_READ);
+
+        // Konfiguriere Puffer 1
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboHandles[1]);
+        GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, PBO_SIZE, null, GLES30.GL_DYNAMIC_READ);
+
+        // Hebe die Bindung auf
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0);
+    }
+
+    private final int[] pboHandles = new int[2];
+    private int pboIndex = 0;
+    private int PBO_SIZE = modelInputWidth * modelInputHeight * 4;
+
+    /**
+     * Liest die Pixel des FBOs asynchron aus, ohne die GPU-Pipeline zu blockieren.
+     * Verwendet zwei Pixel Buffer Objects (PBOs) in einer Ping-Pong-Konfiguration.
+     *
+     * @return Ein ByteBuffer mit den Pixeldaten des VORHERIGEN Frames, oder null beim ersten Frame.
+     */
+    /**
+     * Liest Pixel asynchron aus und schreibt das Ergebnis in einen
+     * vom Aufrufer bereitgestellten Ziel-Buffer.
+     *
+     * @param destinationBuffer Der Buffer, in den das Ergebnis geschrieben wird. Returns false if no data was available.
+     */
+    private boolean readPixelsForAI_Async(ByteBuffer destinationBuffer) {
+        // 1. Zeichne das aktuelle Videobild in den FBO, aus dem wir lesen wollen
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboHandle);
+        GLES20.glViewport(0, 0, modelInputWidth, modelInputHeight);
+        drawQuad(simple3dProgram, 1.0f, 0.0f);
+
+        // 2. Bestimme die Puffer-Indizes für den "Ping-Pong"-Tausch
+        int writeIndex = pboIndex;
+        int readIndex = (pboIndex + 1) % 2;
+
+        // --- ASYNCHRONER BEFEHL: Beginne, den aktuellen Frame in den "write" PBO zu kopieren ---
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboHandles[writeIndex]);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            GLES30.glReadPixels(0, 0, modelInputWidth, modelInputHeight, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0);
+        }
+
+        // --- LESEZUGRIFF: Greife jetzt auf den "read" PBO zu, der die Daten vom letzten Frame enthält ---
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboHandles[readIndex]);
+
+        // 3. "Mappe" den GPU-Speicher in eine temporäre, für die CPU lesbare Ansicht.
+        ByteBuffer mappedBuffer = (ByteBuffer) GLES30.glMapBufferRange(
+                GLES30.GL_PIXEL_PACK_BUFFER, 0, PBO_SIZE, GLES30.GL_MAP_READ_BIT);
+
+        boolean success = false;
+        if (mappedBuffer != null) {
+            // --- HIER IST DEINE GEWÜNSCHTE LOGIK ---
+            // 4. Bereite beide Buffer vor und kopiere die Daten aus der temporären Ansicht
+            //    in deinen finalen Ziel-Buffer.
+            destinationBuffer.rewind();
+            // Mapped buffer is already rewound by default, but this is safe
+            mappedBuffer.rewind();
+            destinationBuffer.put(mappedBuffer);
+            // --- ENDE DER KOPIE ---
+
+            // 5. Hebe das Mapping der temporären Ansicht auf.
+            GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER);
+            success = true;
+        }
+
+        // 6. Hebe alle Bindungen auf.
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0);
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+
+        // 7. Wechsle zum nächsten Puffer für den nächsten Frame.
+        pboIndex = readIndex;
+
+        // 8. Gib zurück, ob die Operation erfolgreich war.
+        return success;
+    }
+
     private class AiResultHandling implements Runnable {
 
         private final byte[] processedDataArray = new byte[modelInputWidth * modelInputHeight];
@@ -633,71 +753,66 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         public void run() {
             ByteBuffer resultBuffer = createFlatDepthMap();
             InferenceResult result = null;
+            boolean takeResult = true;
             while (!Thread.currentThread().isInterrupted()) {
-                boolean takeResult = true;
                 long startTime = System.nanoTime();
                 long waitTime = System.nanoTime();
                 Mat rawMat = null;
                 Mat processedMat = null;
+                takeResult = true;
                 double rawDifference = 0.0;
                 try {
                     Log.d("Stereo3DRenderer", "checking AI started");
                     // 1. Warte auf ein gefülltes Ergebnis vom InferenceTask
                     result = filledOutputBuffers.take();
                     resultBuffer = freeSmoothedBuffers.take();
+                    waitTime = System.nanoTime();
 
+                    InferenceResult intermediate;
+                    while ((intermediate = filledOutputBuffers.poll()) != null) {
+                        // Immediately recycle the skipped, outdated buffers
+                        freeInputBuffers.offer(result.pixelBuffer);
+                        freeOutputBuffers.offer(result.rawDepthBuffer);
+                        result = intermediate;
+                    }
                     ByteBuffer rawDepthBuffer = result.rawDepthBuffer;
                     ByteBuffer currentPixelBuffer = result.pixelBuffer;
 
                     if (previousRawMap != null) {
-                        // Vergleiche den rohen Buffer von diesem Frame mit dem vom letzten.
                         rawDifference = calculateAverageDifferenceOCV(rawDepthBuffer, previousRawMap, modelInputWidth, modelInputHeight);
                     }
 
-                    // Aktualisiere 'previous' mit den aktuellen rohen Daten für den nächsten Test
                     if (previousRawMap == null || previousRawMap.capacity() != rawDepthBuffer.capacity()) {
                         previousRawMap = ByteBuffer.allocateDirect(rawDepthBuffer.capacity());
                     }
                     previousRawMap.rewind();
                     rawDepthBuffer.rewind();
                     previousRawMap.put(rawDepthBuffer);
-
-                    InferenceResult intermediateBuffer;
-                    while ((intermediateBuffer = filledOutputBuffers.poll()) != null) {
-                        freeOutputBuffers.put(result.rawDepthBuffer);
-                        rawDepthBuffer = intermediateBuffer.rawDepthBuffer;
+                    final double RENDER_TRESHHOLD = 6;
+                    if (rawDifference < RENDER_TRESHHOLD) {
+                        takeResult = false;
                     }
-                    rawDepthBuffer.rewind();
-                    rawMat = new Mat(modelInputHeight, modelInputWidth, CvType.CV_8UC1, rawDepthBuffer);
-                    processedMat = new Mat();
-                    Core.normalize(rawMat, processedMat, 0, 255, Core.NORM_MINMAX);
-                    processedMat.get(0, 0, processedDataArray);
-                    waitTime = System.nanoTime();
-                    rawDepthBuffer.rewind();
-                    rawDepthBuffer.put(processedDataArray);
-                    double imageDifference = 0.0f;
-                    final double INSTABILITY_THRESHOLD = 10.0;
-                    final double INSTABILITY_THRESHOLD_STRONG = 1.0;
-                    final double IMAGE_TRESHOLD = 6;
-                    final double MIN_IMAGE_DIFFERENCE = 1f;
+                    if (takeResult) {
+                        double imageDifference = 0.0f;
+                        final double INSTABILITY_THRESHOLD = 10.0;
+                        final double INSTABILITY_THRESHOLD_STRONG = 1.0;
 
-                    if (previousPixelBuffer != null) {
+                        final double MIN_IMAGE_DIFFERENCE = 1f;
+
                         currentPixelBuffer.rewind();
                         imageDifference = hasFrameChangedSignificantlyOCV(currentPixelBuffer, previousPixelBuffer) * 100;
-                        previousPixelBuffer.rewind();
-                        previousPixelBuffer.put(currentPixelBuffer);
+
                         if (imageDifference < MIN_IMAGE_DIFFERENCE) {
                             takeResult = false;
                         }
                         imageDifference = Math.max(imageDifference, 0);
                         double instabilityFactor = rawDifference / Math.max(imageDifference, MIN_IMAGE_DIFFERENCE);
 
-
-                        if (instabilityFactor > INSTABILITY_THRESHOLD_STRONG && imageDifference <= IMAGE_TRESHOLD) {
+                        if (instabilityFactor > INSTABILITY_THRESHOLD_STRONG && imageDifference <= RENDER_TRESHHOLD) {
                             LimeLog.info("Unstable AI ignored strong " + instabilityFactor +
                                     " (DepthDiff: " + rawDifference + ", ImageDiff: " + imageDifference + ")");
                             takeResult = false;
-                        } else if (instabilityFactor > INSTABILITY_THRESHOLD && imageDifference > IMAGE_TRESHOLD) {
+                        } else if (instabilityFactor > INSTABILITY_THRESHOLD && imageDifference > RENDER_TRESHHOLD) {
                             LimeLog.info("Unstable AI ignored weak " + instabilityFactor +
                                     " (DepthDiff: " + rawDifference + ", ImageDiff: " + imageDifference + ")");
                             takeResult = false;
@@ -706,18 +821,27 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                             LimeLog.info("New Result delivered for processing " + instabilityFactor +
                                     " (DepthDiff: " + rawDifference + ", ImageDiff: " + imageDifference + ")");
                         }
+
+                        if (takeResult) {
+                            rawMat = new Mat(modelInputHeight, modelInputWidth, CvType.CV_8UC1, rawDepthBuffer);
+                            processedMat = new Mat();
+                            Core.normalize(rawMat, processedMat, 0, 255, Core.NORM_MINMAX);
+                            processedMat.get(0, 0, processedDataArray);
+                            rawDepthBuffer.rewind();
+                            rawDepthBuffer.put(processedDataArray);
+
+                            rawDepthBuffer.rewind();
+                            resultBuffer.rewind();
+
+                            resultBuffer.put(rawDepthBuffer);
+
+                            rawDepthBuffer.rewind();
+                            resultBuffer.rewind();
+                            readyToRenderQueue.put(resultBuffer);
+                        }
                     }
-
-                    if (takeResult) {
-                        rawDepthBuffer.rewind();
-                        resultBuffer.rewind();
-
-                        resultBuffer.put(rawDepthBuffer);
-
-                        rawDepthBuffer.rewind();
-                        resultBuffer.rewind();
-                        readyToRenderQueue.put(resultBuffer);
-                    }
+                    previousPixelBuffer.rewind();
+                    previousPixelBuffer.put(currentPixelBuffer);
                     freeOutputBuffers.put(rawDepthBuffer);
                 } catch (Exception e) {
                     Log.e("Stereo3DRenderer", "AIRESULT exception", e);
@@ -736,7 +860,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                     }
                     long duration = (System.nanoTime() - startTime) / 1_000_000;
                     long waitTimeText = (waitTime - startTime) / 1_000_000;
-                    Log.d("Stereo3DRenderer", "CalculateTime AiResult:    " + duration + " ms" + " " + freeOutputBuffers.remainingCapacity() + " " + waitTimeText + " ms");
+                    Log.d("Stereo3DRenderer", "CalculateTime AiResult:    " + duration + " ms" + " " + freeOutputBuffers.remainingCapacity() + " " + waitTimeText + " ms " + takeResult);
                 }
             }
             Log.d("Stereo3DRenderer", "Total AI RESULT FALSE");
@@ -818,6 +942,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             GpuDelegate gpuDelegate = new GpuDelegate(gpuOptions);
             options.addDelegate(gpuDelegate);
             LimeLog.info("GPU Delegate aktiviert");
+            renderer = "GPU";
             tflite = new Interpreter(loadModelFile(context, AI_MODEL), options);
         } catch (Exception e) {
             LimeLog.info("GPU Delegate nicht verfügbar: " + e.getMessage());
@@ -825,15 +950,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             try {
                 NnApiDelegate nnapi = new NnApiDelegate();
                 options.addDelegate(nnapi);
-                LimeLog.info("NNAPI Delegate aktiviert");
                 tflite = new Interpreter(loadModelFile(context, AI_MODEL), options);
-
+                LimeLog.info("NNAPI Delegate aktiviert");
+                renderer = "NNAPI";
             } catch (Exception exception) {
                 LimeLog.info("NNAPI Delegate nicht verfügbar: " + e.getMessage());
                 // 3️⃣ CPU Fallback
                 try {
                     LimeLog.info("Fallback: CPU");
                     tflite = new Interpreter(loadModelFile(context, AI_MODEL), options);
+                    renderer = "CPU";
                 } catch (Exception ex) {
                     reinitializeTfLiteOnCpu();
                 }
