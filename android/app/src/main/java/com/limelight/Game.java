@@ -4038,10 +4038,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         toggleMouseLocalCursor();
                     } else {
                         applyMouseMode(selected.index);
-                        ProfilesManager.getInstance().getOverlayingSharedPreferences(this)
-                                .edit()
-                                .putString("mouse_mode_list", String.valueOf(selected.index))
-                                .apply();
+                        if (prefConfig.rememberMouseMode) {
+                            ProfilesManager.getInstance().getOverlayingSharedPreferences(this)
+                                    .edit()
+                                    .putString("mouse_mode_list", String.valueOf(selected.index))
+                                    .apply();
+                        }
                     }
                 })
                 .create()
