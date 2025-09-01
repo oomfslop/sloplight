@@ -832,12 +832,29 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         private final byte[] processedDataArray = new byte[modelInputWidth * modelInputHeight];
         private ByteBuffer previousRawMap = null;
+        private double continouesDifferenceImageCount = 0.0f;
+        private double continouesDifferenceDepthMapCount = 0.0f;
+
+        private int continouesMapCount = 0;
+
+        // NEW: A Mat to store the result from the last frame for smoothing.
+        private Mat previousSmoothedMat;
+        private static final double SMOOTHING_FACTOR = 0.05f;
+
+        private boolean isFirstFrame = true;
+
+        private void resetContinousCounter() {
+            continouesDifferenceImageCount = 0.0f;
+            continouesDifferenceDepthMapCount = 0.0f;
+            continouesMapCount = 0;
+        }
 
         @Override
         public void run() {
             ByteBuffer resultBuffer = createFlatDepthMap();
             InferenceResult result = null;
             boolean takeResult = true;
+            boolean takeContinousResult = false;
             while (!Thread.currentThread().isInterrupted()) {
                 long startTime = System.nanoTime();
                 long waitTime = System.nanoTime();
@@ -878,14 +895,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                     }
                     if (takeResult) {
                         double imageDifference = 0.0f;
+
                         final double INSTABILITY_THRESHOLD = 10.0;
                         final double INSTABILITY_THRESHOLD_STRONG = 1.0;
-
                         final double MIN_IMAGE_DIFFERENCE = 1f;
 
                         currentPixelBuffer.rewind();
                         imageDifference = hasFrameChangedSignificantlyOCV(currentPixelBuffer, previousPixelBuffer) * 100;
-
+                        continouesMapCount++;
                         if (imageDifference < MIN_IMAGE_DIFFERENCE) {
                             takeResult = false;
                         }
@@ -904,13 +921,42 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                         if (takeResult) {
                             LimeLog.info("New Result delivered for processing " + instabilityFactor +
                                     " (DepthDiff: " + rawDifference + ", ImageDiff: " + imageDifference + ")");
+                        } else {
+                            takeContinousResult = true;
+                            continouesDifferenceDepthMapCount += rawDifference;
+                            continouesDifferenceImageCount += imageDifference;
+                            double averageImageDifference = continouesDifferenceImageCount / continouesMapCount;
+                            instabilityFactor = continouesDifferenceDepthMapCount / Math.max(averageImageDifference, MIN_IMAGE_DIFFERENCE);
+                            if (instabilityFactor > INSTABILITY_THRESHOLD) {
+                                LimeLog.info("Unstable Continoues AI ignored weak " + instabilityFactor +
+                                        " (DepthDiff: " + continouesDifferenceDepthMapCount + ", ImageDiff: " + averageImageDifference + ")");
+                                takeContinousResult = false;
+                            }
+                            if (takeContinousResult) {
+                                LimeLog.info("New Continous Result delivered for processing " + instabilityFactor +
+                                        " (DepthDiff: " + continouesDifferenceDepthMapCount + ", ImageDiff: " + continouesDifferenceImageCount + ")");
+                            }
                         }
-
-                        if (takeResult) {
+                        if (continouesMapCount > 10) {
+                            resetContinousCounter();
+                        }
+                        if (takeResult || takeContinousResult) {
+                            resetContinousCounter();
                             rawMat = new Mat(modelInputHeight, modelInputWidth, CvType.CV_8UC1, rawDepthBuffer);
                             processedMat = new Mat();
                             Core.normalize(rawMat, processedMat, 0, 255, Core.NORM_MINMAX);
-                            processedMat.get(0, 0, processedDataArray);
+
+                            if (isFirstFrame) {
+                                previousSmoothedMat = processedMat.clone();
+                                isFirstFrame = false;
+                            }
+                            if (takeContinousResult) {
+                                Core.addWeighted(processedMat, SMOOTHING_FACTOR, previousSmoothedMat, 1.0 - SMOOTHING_FACTOR, 0.0, previousSmoothedMat);
+                            } else {
+                                previousSmoothedMat = processedMat.clone();
+                            }
+
+                            previousSmoothedMat.get(0, 0, processedDataArray);
                             rawDepthBuffer.rewind();
                             rawDepthBuffer.put(processedDataArray);
 
