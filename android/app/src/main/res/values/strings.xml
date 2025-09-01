@@ -245,7 +245,8 @@
     <string name="summary_checkbox_gamepad_motion_fallback">Uses your device\'s built-in motion sensors if gamepad sensors are not supported by your connected gamepad or your Android version.\nNote: Enabling this option may cause your gamepad to appear as a PlayStation controller on the host.</string>
     <string name="title_checkbox_force_device_motion">Always use device\'s motion sensors</string>
     <string name="summary_checkbox_force_device_motion">Enforce using devices\'s built-in motion sensor even when the controller reported motion sensors are supported.</string>
-
+    <string name="title_enable_rumble">Enable Rumble</string>
+    <string name="summary_enable_rumble">Enable rumble feedback on supported gamepads.</string>
     <string name="category_input_settings">Input Settings</string>
     <string name="title_checkbox_touchscreen_trackpad">Use the touchscreen as a trackpad</string>
     <string name="summary_checkbox_touchscreen_trackpad">If enabled, the touchscreen acts like a trackpad. If disabled, the touchscreen directly controls the mouse cursor.</string>
@@ -304,6 +305,8 @@
     <string name="summary_enable_hdr">Stream HDR when the game and PC GPU support it. HDR requires a GPU with HEVC Main 10 encoding support.</string>
     <string name="title_full_range">Force full range video (Experimental)</string>
     <string name="summary_full_range">This will cause loss of detail in light and dark areas if your device doesn\'t properly display full range video content.</string>
+    <string name="title_prevent_packet_loss">Prevent Packet Loss</string>
+    <string name="summary_prevent_packet_loss">For devices that have packet loss for unknown reasons, you can try to enable this option.</string>
     <string name="title_enable_perf_overlay">Show performance stats while streaming</string>
     <string name="summary_enable_perf_overlay">Display real-time stream performance information while streaming</string>
     <string name="title_enable_post_stream_toast">Show latency message after streaming</string>

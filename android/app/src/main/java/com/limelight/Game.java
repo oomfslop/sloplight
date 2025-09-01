@@ -164,6 +164,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private static final int FOUR_FINGER_TAP_THRESHOLD = 300;
     private static final int FIVE_FINGER_TAP_THRESHOLD = 300;
 
+    private final Handler timerHandler = new Handler(Looper.getMainLooper());
+
     private ControllerHandler controllerHandler;
     private KeyboardTranslator keyboardTranslator;
     private VirtualController virtualController;
@@ -1583,6 +1585,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         super.onDestroy();
 
         instance = null;
+        timerHandler.removeCallbacksAndMessages(null);
 
         if (prefConfig.enableFullExDisplay) handleDisplayRemoved();
 
@@ -3453,6 +3456,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                 // Stop processing controller input
                 controllerHandler.stop();
+                timerHandler.removeCallbacksAndMessages(null);
 
                 // Ungrab input
                 setInputGrabState(false);
@@ -3570,13 +3574,22 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 // when the spinner gets displayed. On Android Q, even now
                 // is too early to capture. We will delay a second to allow
                 // the spinner to dismiss before capturing.
-                Handler h = new Handler();
-                h.postDelayed(new Runnable() {
+                timerHandler.postDelayed(new Runnable() {
                     @Override
                     public void run() {
                         setInputGrabState(true);
                     }
                 }, 500);
+
+                if (prefConfig.preventPacketLoss) {
+                    Runnable mousePing = () -> {
+                        if (connected) {
+                            MoonBridge.sendEmptyPayload();
+                            timerHandler.postDelayed(this, 20);
+                        }
+                    };
+                    mousePing.run();
+                }
 
                 // Keep the display on
                 getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -3636,9 +3649,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void rumble(short controllerNumber, short lowFreqMotor, short highFreqMotor) {
-        LimeLog.info(String.format((Locale)null, "Rumble on gamepad %d: %04x %04x", controllerNumber, lowFreqMotor, highFreqMotor));
-
-        controllerHandler.handleRumble(controllerNumber, lowFreqMotor, highFreqMotor);
+        if (prefConfig.enableRumble) {
+            LimeLog.info(String.format((Locale)null, "Rumble on gamepad %d: %04x %04x", controllerNumber, lowFreqMotor, highFreqMotor));
+            controllerHandler.handleRumble(controllerNumber, lowFreqMotor, highFreqMotor);
+        }
     }
 
     @Override

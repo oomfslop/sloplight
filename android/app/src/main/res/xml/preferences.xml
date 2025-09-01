@@ -294,6 +294,12 @@
             android:title="@string/title_checkbox_gamepad_enable_battery_report"
             app:iconSpaceReserved="false" />
         <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="checkbox_enable_rumble"
+            android:summary="@string/summary_enable_rumble"
+            android:title="@string/title_enable_rumble"
+            app:iconSpaceReserved="false" />
+        <CheckBoxPreference
             android:defaultValue="false"
             android:key="checkbox_enable_device_rumble"
             android:summary="@string/summary_device_rumble"
@@ -859,6 +865,12 @@
             android:key="checkbox_full_range"
             android:summary="@string/summary_full_range"
             android:title="@string/title_full_range"
+            app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_prevent_packet_loss"
+            android:summary="@string/summary_prevent_packet_loss"
+            android:title="@string/title_prevent_packet_loss"
             app:iconSpaceReserved="false" />
         <ListPreference
             android:defaultValue="auto"
