@@ -162,11 +162,11 @@
             app:iconSpaceReserved="false" />
         <SeekBarPreference
             android:key="parallax_depth"
-            android:title="3D Depth"
-            android:summary="Adjust the effect strength for 3D"
-            android:defaultValue="25"
+            android:title="@string/title_render_mode_strength_title"
+            android:summary="@string/title_render_mode_strength_description"
+            android:defaultValue="80"
             android:max="100"
-            app:min="0"
+            app:min="1"
             app:showSeekBarValue="true"
             app:updatesContinuously="true"/>
         <CheckBoxPreference
