@@ -1,10 +1,6 @@
 package com.limelight.utils;
 
-/**
- * Enthält die GLSL-Shader-Programme, die für das 3D-Rendering benötigt werden.
- */
 public class ShaderUtils {
-
     public static final String VERTEX_SHADER =
             "attribute vec4 a_Position;\n" +
                     "attribute vec2 a_TexCoord;\n" +
@@ -24,14 +20,13 @@ public class ShaderUtils {
                     "uniform bool u_debugMode;\n" +
 
                     "void main() {\n" +
-                    // --- Basis-3D-Effekt aus der Tiefenkarte ---\n" +
                     "  float depth = texture2D(s_DepthTexture, v_TexCoord).r;\n" +
                     "  float parallax_magnitude = abs(u_parallax);\n" +
-                    "  float ai_shift = parallax_magnitude * (depth - 0.5) * 2.0 * pow(abs(depth - 0.5)*2.0, 0.7);\n" +
+                    "  float ai_shift = parallax_magnitude * (depth - 0.5) * 2.0 * pow(abs(depth - 0.5)*2.0, 0.6);\n" +
 
 
                     "  // --- Dynamische Vignette nur anhand der Randbereiche ---\n" +
-                    "  float edgeWidth = 0.01;\n" + // 5% links/rechts
+                    "  float edgeWidth = 0.01;\n" +
                     "  float depthLeft  = texture2D(s_DepthTexture, vec2(edgeWidth, 0.5)).r;\n" +
                     "  float depthRight = texture2D(s_DepthTexture, vec2(1.0 - edgeWidth, 0.5)).r;\n" +
                     "  float ai_shift_left  = u_parallax * (depthLeft  - 0.5);\n" +
@@ -49,22 +44,18 @@ public class ShaderUtils {
                     "        ai_shift = min(ai_shift, 0.0);\n" +
                     "    }\n" +
                     "\n" +
-                    // --- HORIZONTALE VIGNETTE-LOGIK START ---\n" +
                      "  float h_dist = pow(abs(v_TexCoord.x - 0.5) * 2.0, 1.5);\n" +
                      "  float vignette_factor = 1.0 - smoothstep(vignette_start, vignette_end, h_dist);\n" +
                     "   float final_shift = ai_shift * vignette_factor;\n" +
-                    // --- HORIZONTALE VIGNETTE-LOGIK ENDE ---\n" +
 
                     "  vec2 shiftedCoord = vec2(v_TexCoord.x - final_shift, v_TexCoord.y);\n" +
                     "\n" +
-                    // --- Der Rest Ihrer bewährten Logik ---\n" +
                     "  vec4 originalColor = texture2D(s_ColorTexture, v_TexCoord);\n" +
                     "  vec4 shiftedColor = texture2D(s_ColorTexture, clamp(shiftedCoord, 0.0, 1.0));\n" +
                     "  float shiftMagnitude = abs(final_shift) / max(abs(parallax_magnitude), 0.001);\n" +
                     "  float artifactBlendFactor = (1.0 - smoothstep(0.1, 1.0, shiftMagnitude)) * 0.005;\n" +
                     "  vec4 finalColor = mix(shiftedColor, originalColor, artifactBlendFactor);\n" +
                     "\n" +
-                    // --- Debug-Farben ---\n" +
                     "  if (u_debugMode) {\n" +
                     "    float debugDepth = final_shift;\n" +
                     "    vec3 debugTint = vec3(0.0);\n" +
@@ -74,11 +65,6 @@ public class ShaderUtils {
                     "  }\n" +
                     "  gl_FragColor = finalColor;\n" +
                     "}\n";
-
-
-
-
-
 
     /**
      * An optimized, single-pass Gaussian blur shader that works as a drop-in replacement.
@@ -92,13 +78,8 @@ public class ShaderUtils {
                     "uniform vec2 u_texelSize;\n" +
                     "uniform vec2 u_blurDirection;\n" +
 
-                    // --- OPTIMIZATIONS ---
-                    // 1. We reduce the loop iterations from 50 to 10 (21 total samples instead of 101).
                     "const float blurRadius = 15.0;\n" +
-                    // 2. We step by a larger amount to cover the same visual area. (10 * 5.0 = 50.0)
                     "const float blurStep = 5.0;\n" +
-                    // ---
-
                     "const float sigma = 22.0;\n" +
 
                     "void main() {\n" +
@@ -106,13 +87,10 @@ public class ShaderUtils {
                     "  float weightSum = 0.0;\n" +
 
                     "  for (float i = -blurRadius; i <= blurRadius; i++) {\n" +
-                    // The actual distance we sample at is now larger.
                     "    float sampleDistance = i * blurStep;\n" +
 
-                    // Calculate the weight for this larger distance.
                     "    float weight = exp(-(sampleDistance * sampleDistance) / (2.0 * sigma * sigma));\n" +
 
-                    // Read the color value at the larger, stepped position.
                     "    sum += texture2D(s_InputTexture, v_TexCoord + sampleDistance * u_texelSize * u_blurDirection) * weight;\n" +
                     "    weightSum += weight;\n" +
                     "  }\n" +

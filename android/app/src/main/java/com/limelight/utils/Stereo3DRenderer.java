@@ -45,43 +45,40 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
-/**
- * Eine eigenständige Klasse, die das gesamte OpenGL-Rendering für 2D- und 3D-Modi verwaltet.
- * Die KI-Berechnung läuft asynchron und schaltet bei Laufzeitfehlern sicher auf die CPU um.
- */
 public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.OnFrameAvailableListener {
 
     // Constants
     private static final int GL_TEXTURE_EXTERNAL_OES = 0x8D65;
     private static final float[] QUAD_VERTICES = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
     private static final float[] TEXTURE_VERTICES = {0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+    private final String AI_MODEL = "midas-midas-v2-w8a8.tflite";
     private final int modelInputHeight = 256;
     private final int modelInputWidth = 256;
     private final int NUM_BUFFERS = 6;
     private final int NUM_INPUT_BUFFERS = 10;
     private final int NUM_SMOOTHED_BUFFERS = 3;
-
     private final int[] pboHandles = new int[2];
     private int pboIndex = 0;
     private int PBO_SIZE = modelInputWidth * modelInputHeight * 4;
 
+    // Public Static Fields
     public static volatile float fps = 0;
     public static volatile float threeDFps = 0;
     public static volatile float drawDelay = 0.0f;
-    private static float calcFps = 0;
-    private static int depthMapResultCount = 0;
-    private static float calcThreeDFps = 0;
-    private long totalDrawTime = 0;
-    private long lastFpsTime = 0;
     public static Boolean isDebugMode = false;
     public static String performanceStats = "";
     public static String renderer = "CPU";
 
+    // Private Static Fields
+    private static float calcFps = 0;
+    private static int depthMapResultCount = 0;
+    private static float calcThreeDFps = 0;
+
     // Final Member Variables
     private final Context context;
-    private final Object frameLock = new Object();
     private final GLSurfaceView glSurfaceView;
     private final OnSurfaceReadyListener onSurfaceReadyListener;
+    private final Object frameLock = new Object();
     private final FloatBuffer quadVertexBuffer;
     private final FloatBuffer textureVertexBuffer;
     private final AtomicBoolean frameAvailable = new AtomicBoolean(false);
@@ -108,9 +105,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private NnApiDelegate nnApiDelegate;
     private ByteBuffer tfliteInputBuffer;
 
-    private ByteBuffer previousFrameForComparison;
-
     // Other Member Variables
+    private long totalDrawTime = 0;
+    private long lastFpsTime = 0;
+    private ByteBuffer previousFrameForComparison;
     private ByteBuffer currentlyRenderingMap;
     private ExecutorService executorService;
     private BlockingQueue<InferenceResult> filledOutputBuffers;
@@ -124,13 +122,37 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private Surface videoSurface;
     private SurfaceTexture videoSurfaceTexture;
 
+
+    public interface OnSurfaceReadyListener {
+        void onSurfaceReady(Surface surface);
+    }
+
+    static {
+        if (!OpenCVLoader.initLocal()) {
+            LimeLog.severe("Internal OpenCV library not found. Using OpenCV Manager for initialization");
+        } else {
+            LimeLog.info("OpenCV library found inside package. Using it!");
+        }
+    }
+
+    public Stereo3DRenderer(GLSurfaceView view, OnSurfaceReadyListener listener, Context context) {
+        this.glSurfaceView = view;
+        this.onSurfaceReadyListener = listener;
+        this.context = context;
+
+        quadVertexBuffer = ByteBuffer.allocateDirect(QUAD_VERTICES.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
+        quadVertexBuffer.put(QUAD_VERTICES).position(0);
+        textureVertexBuffer = ByteBuffer.allocateDirect(TEXTURE_VERTICES.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
+        textureVertexBuffer.put(TEXTURE_VERTICES).position(0);
+    }
+
     public void onSurfaceDestroyed() {
-        Log.d("Stereo3DRenderer", "Quit called. Shutting down 3dRenderer.");
+        LimeLog.info("Quit called. Shutting down 3dRenderer.");
         if (executorService != null) {
             executorService.shutdownNow();
             try {
                 if (!executorService.awaitTermination(500, TimeUnit.MILLISECONDS)) {
-                    Log.e("Stereo3DRenderer", "Thread pool did not terminate in time.");
+                    LimeLog.warning("Thread pool did not terminate in time.");
                 }
             } catch (InterruptedException e) {
                 executorService.shutdownNow();
@@ -188,30 +210,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         renderer = "CPU";
     }
 
-    public interface OnSurfaceReadyListener {
-        void onSurfaceReady(Surface surface);
-    }
-
-    static {
-        // This block is executed once when the class is first loaded.
-        if (!OpenCVLoader.initLocal()) {
-            Log.e("OpenCV", "Internal OpenCV library not found. Using OpenCV Manager for initialization");
-        } else {
-            Log.d("OpenCV", "OpenCV library found inside package. Using it!");
-        }
-    }
-
-    public Stereo3DRenderer(GLSurfaceView view, OnSurfaceReadyListener listener, Context context) {
-        this.glSurfaceView = view;
-        this.onSurfaceReadyListener = listener;
-        this.context = context;
-
-        quadVertexBuffer = ByteBuffer.allocateDirect(QUAD_VERTICES.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
-        quadVertexBuffer.put(QUAD_VERTICES).position(0);
-        textureVertexBuffer = ByteBuffer.allocateDirect(TEXTURE_VERTICES.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
-        textureVertexBuffer.put(TEXTURE_VERTICES).position(0);
-    }
-
     public void setPrefConfig(PreferenceConfiguration prefConf) {
         this.prefConf = prefConf;
     }
@@ -260,7 +258,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         previousFrameForComparison = ByteBuffer.allocateDirect(pboSize).order(ByteOrder.nativeOrder());
         int inputPixelSize = modelInputWidth * modelInputHeight * 4;
         freeInputBuffers = new ArrayBlockingQueue<>(NUM_INPUT_BUFFERS);
-        inferenceInputQueue = new ArrayBlockingQueue<>(1); // This queue still only needs one slot
+        inferenceInputQueue = new ArrayBlockingQueue<>(1);
         for (int i = 0; i < NUM_INPUT_BUFFERS; i++) {
             freeInputBuffers.offer(ByteBuffer.allocateDirect(inputPixelSize).order(ByteOrder.nativeOrder()));
         }
@@ -288,7 +286,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, intermediateFboHandle);
         GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, intermediateTextureId, 0);
         if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) != GLES20.GL_FRAMEBUFFER_COMPLETE) {
-            Log.e("Stereo3DRenderer", "Intermediate Framebuffer is not complete.");
+            LimeLog.warning("Intermediate Framebuffer is not complete.");
         }
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
     }
@@ -304,46 +302,35 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         int texelSizeHandle = GLES20.glGetUniformLocation(blurProgram, "u_texelSize");
         int directionHandle = GLES20.glGetUniformLocation(blurProgram, "u_blurDirection");
 
-        // Setze die Attribute (sind für beide Durchgänge gleich)
         GLES20.glVertexAttribPointer(posHandle, 2, GLES20.GL_FLOAT, false, 0, quadVertexBuffer);
         GLES20.glVertexAttribPointer(texHandle, 2, GLES20.GL_FLOAT, false, 0, textureVertexBuffer);
         GLES20.glEnableVertexAttribArray(posHandle);
         GLES20.glEnableVertexAttribArray(texHandle);
 
-        // Setze die Texel-Größe (ist für beide Durchgänge gleich)
         GLES20.glUniform2f(texelSizeHandle, 1.0f / modelInputWidth, 1.0f / modelInputHeight);
 
-
-        // --- 1. HORIZONTALER DURCHGANG (rohe Karte -> Zwischen-Textur) ---
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, intermediateFboHandle);
         GLES20.glViewport(0, 0, modelInputWidth, modelInputHeight);
 
-        // Setze die Richtung auf horizontal
         GLES20.glUniform2f(directionHandle, 1.0f, 0.0f);
 
-        // Binde die rohe Tiefenkarte (depthMapTextureId) als Input
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthMapTextureId);
         GLES20.glUniform1i(inputTextureHandle, 0);
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
-
-        // --- 2. VERTIKALER DURCHGANG (Zwischen-Textur -> finale gefilterte Textur) ---
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, filterFboHandle);
         GLES20.glViewport(0, 0, modelInputWidth, modelInputHeight);
 
-        // Setze die Richtung auf vertikal
         GLES20.glUniform2f(directionHandle, 0.0f, 1.0f);
 
-        // Binde die ZWISCHEN-Textur (intermediateTextureId) als Input
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, intermediateTextureId);
         GLES20.glUniform1i(inputTextureHandle, 0);
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
-        // Setze den Framebuffer auf den Standard-Bildschirm zurück
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
     }
 
@@ -351,15 +338,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         int viewWidth = glSurfaceView.getWidth();
         int viewHeight = glSurfaceView.getHeight();
 
-        float parallax = parallaxStrength * 0.035f;
+        float parallax = parallaxStrength * 0.03f;
 
         LimeLog.info("PArallax Strength " + parallax + " " + parallaxStrength);
 
-        // --- Left Eye (Positive Effects Only) ---
         GLES20.glViewport(0, 0, viewWidth / 2, viewHeight);
         drawEye(dualBubble3dProgram, -parallax);
 
-        // --- Right Eye (Negative Effects Only) ---
         GLES20.glViewport(viewWidth / 2, 0, viewWidth / 2, viewHeight);
         drawEye(dualBubble3dProgram, parallax);
     }
@@ -427,21 +412,18 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             Log.w("Stereo3DRenderer", "updateTexImagse failed", e);
             return;
         }
-        // Return the buffer we used last frame to the free pool
+
         if (currentlyRenderingMap != null) {
             freeSmoothedBuffers.offer(currentlyRenderingMap);
             currentlyRenderingMap = null;
         }
 
-        // Check for a new, completed frame. .poll() is non-blocking.
         ByteBuffer newMap = readyToRenderQueue.poll();
         if (newMap != null) {
             currentlyRenderingMap = newMap;
             depthMapResultCount++;
         }
 
-        // Upload the latest completed map to the GPU.
-        // If no new one was ready, it will re-upload the previous one.
         if (currentlyRenderingMap != null) {
             uploadLatestDepthMapToGpu(currentlyRenderingMap);
         }
@@ -461,12 +443,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                         previousFrameForComparison.put(pixelBufferForAI);
 
                         if (inferenceInputQueue.offer(pixelBufferForAI)) {
-                            Log.d("InferenceTask", "Success: The AI will now process this buffer.");
+                            Log.d("AiTask", "Success: The AI will now process this buffer.");
                         } else {
                             freeInputBuffers.offer(pixelBufferForAI);
                         }
                     } else {
-                        Log.d("InferenceTask", "Fail: The AI will now clear this buffer.");
+                        Log.d("AiTask", "Fail: The AI will now clear this buffer.");
                         freeInputBuffers.offer(pixelBufferForAI);
                     }
                 } else {
@@ -476,19 +458,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             long endTime = System.nanoTime();
 
             if (lastFpsTime == 0) {
-                lastFpsTime = startTime; // Initialisiere beim ersten Frame
+                lastFpsTime = startTime;
             }
             totalDrawTime = totalDrawTime + (endTime - lastFpsTime);
-            // Prüfe, ob eine Sekunde (1 Milliarde Nanosekunden) vergangen ist
+
             if (endTime - lastFpsTime >= 1_000_000_000) {
                 if (fps > 0) {
                     drawDelay = ((float) totalDrawTime / fps / 1000000000f);
                 }
-                // Logge die Anzahl der Frames, die in dieser Sekunde gezeichnet wurden
                 performanceStats = "3D : FPS: " + fps + " DPS: " + depthMapResultCount + " DPAIS: " + threeDFps;
                 totalDrawTime = 0;
-
-                // Setze den Zähler und die Zeit für die nächste Sekunde zurück
 
                 fps = calcFps;
                 calcFps = 0;
@@ -502,7 +481,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 int readyRenderCap = readyToRenderQueue.size() + readyToRenderQueue.remainingCapacity();
                 int freeSmoothCap = freeSmoothedBuffers.size() + freeSmoothedBuffers.remainingCapacity();
 
-                // This log shows the remaining capacity of each queue to see where pressure is building.
                 String queueStatus = String.format(
                         "Queues (Free/Cap) | FreeInput: %d/%d, To_AI: %d/%d, From_AI: %d/%d, To_Render: %d/%d, Free_Smooth: %d/%d",
                         freeInputBuffers.remainingCapacity(), freeInputCap,
@@ -511,7 +489,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                         readyToRenderQueue.remainingCapacity(), readyRenderCap,
                         freeSmoothedBuffers.remainingCapacity(), freeSmoothCap
                 );
-                Log.d("PIPELINE_STATUS", queueStatus);
+                Log.d("Stereo3DRenderer", queueStatus);
             } else {
                 calcFps++;
             }
@@ -560,61 +538,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
     }
 
-    private class AiTask implements Runnable {
-
-        @Override
-        public void run() {
-            ByteBuffer pixelBuffer = null;
-            while (!Thread.currentThread().isInterrupted()) {
-                long startTime = System.nanoTime();
-                long waitTime = System.nanoTime();
-                long aiTime = System.nanoTime();
-                long aiTime_end = System.nanoTime();
-                try {
-                    if (tflite == null) return;
-                    pixelBuffer = inferenceInputQueue.take();
-                    Log.d("InferenceTask", "AI inference started");
-                    // 1. Hole einen freien Buffer aus dem Pool (wartet, falls keiner verfügbar ist)
-                    ByteBuffer outputBuffer = freeOutputBuffers.take();
-                    waitTime = System.nanoTime();
-                    outputBuffer.rewind();
-
-                    // 2. Bereite den Input-Buffer vor (wie bisher)
-                    tfliteInputBuffer.rewind();
-                    pixelBuffer.rewind();
-
-                    convertRgbaToRgb(pixelBuffer, tfliteInputBuffer, modelInputWidth, modelInputHeight);
-
-                    aiTime = System.nanoTime();
-                    ReflectivePaddingInt8Minimal.applyReflectedPadding(tfliteInputBuffer);
-                    tflite.run(tfliteInputBuffer, outputBuffer);
-                    calcThreeDFps++;
-                    aiTime_end = System.nanoTime();
-                    filledOutputBuffers.put(new InferenceResult(pixelBuffer, outputBuffer));
-                    pixelBuffer = null;
-                } catch (InterruptedException e) {
-                    Log.d("InferenceTask", "AI inference failed", e);
-                    Thread.currentThread().interrupt();
-                } catch (Exception e) {
-                    Log.d("InferenceTask", "AI inference failed", e);
-                    gpuDelegateFailed.set(true);
-                } finally {
-                    long duration = (System.nanoTime() - startTime) / 1_000_000;
-                    long waitTimeText = (waitTime - startTime) / 1_000_000;
-                    long aitimeText = (aiTime_end - aiTime) / 1_000_000;
-                    if (pixelBuffer != null) {
-                        freeInputBuffers.offer(pixelBuffer);
-                    }
-                    Log.d("Stereo3DRenderer", "CalculateTime AiDepthMap: " + duration + " ms " + filledOutputBuffers.remainingCapacity() + " " + waitTimeText + " ms" + "aitime: " + aitimeText);
-                }
-            }
-            isAiRunning.set(false);
-        }
-    }
-
     private static class InferenceResult {
-        final ByteBuffer pixelBuffer; // The original image
-        final ByteBuffer rawDepthBuffer;  // The raw AI result
+        final ByteBuffer pixelBuffer;
+        final ByteBuffer rawDepthBuffer;
 
         InferenceResult(ByteBuffer pixelBuffer, ByteBuffer rawDepthBuffer) {
             this.pixelBuffer = pixelBuffer;
@@ -622,28 +548,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
     }
 
-    /**
-     * Converts an RGBA ByteBuffer to an RGB ByteBuffer using fast, native OpenCV functions.
-     * This method is thread-safe and cleans up all native resources.
-     *
-     * @param rgbaBuffer The source buffer containing RGBA data.
-     * @param rgbBuffer  The pre-allocated destination buffer for RGB data.
-     * @param width      The width of the image.
-     * @param height     The height of the image.
-     */
     public static void convertRgbaToRgb(ByteBuffer rgbaBuffer, ByteBuffer rgbBuffer, int width, int height) {
         Mat rgbaMat = null;
         Mat rgbMat = null;
         try {
-            // 1. Wrap the source and destination buffers in Mat headers (zero-copy)
             rgbaMat = new Mat(height, width, CvType.CV_8UC4, rgbaBuffer);
             rgbMat = new Mat(height, width, CvType.CV_8UC3, rgbBuffer);
-
-            // 2. Perform the conversion using the highly optimized native function
             Imgproc.cvtColor(rgbaMat, rgbMat, Imgproc.COLOR_RGBA2RGB);
-
         } finally {
-            // 3. CRUCIAL: Always release the Mat headers to prevent memory leaks
             if (rgbaMat != null) {
                 rgbaMat.release();
             }
@@ -653,44 +565,22 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
     }
 
-    /**
-     * Calculates the average pixel difference between two ByteBuffers using fast, native OpenCV functions.
-     * This is a high-performance replacement for a manual Java for-loop.
-     *
-     * @param buffer1 The first ByteBuffer (e.g., newestBuffer).
-     * @param buffer2 The second ByteBuffer (e.g., previousUnsmoothedDepthBytes).
-     * @param width   The width of the image.
-     * @param height  The height of the image.
-     * @return The average difference per pixel (a value between 0 and 255).
-     */
     public static double calculateAverageDifferenceOCV(ByteBuffer buffer1, ByteBuffer buffer2, int width, int height) {
-        // Safety check for uninitialized buffers
         if (buffer1 == null || buffer2 == null) {
-            return 255.0; // Return a high value to indicate a significant change
+            return 255.0;
         }
 
         Mat mat1 = null;
         Mat mat2 = null;
         Mat diffMat = null;
         try {
-            // 1. Wrap the buffers in Mat headers. This is a fast, zero-copy operation.
             mat1 = new Mat(height, width, CvType.CV_8UC1, buffer1);
             mat2 = new Mat(height, width, CvType.CV_8UC1, buffer2);
-
-            // 2. Create a destination Mat to hold the difference image.
             diffMat = new Mat();
-
-            // 3. Calculate the absolute difference for every pixel using a single, native call.
             Core.absdiff(mat1, mat2, diffMat);
-
-            // 4. Calculate the mean (average) value of all pixels in the difference matrix.
             Scalar meanDifference = Core.mean(diffMat);
-
-            // 5. The result for a single-channel image is in the first element of the Scalar.
             return meanDifference.val[0];
-
         } finally {
-            // 6. CRUCIAL: Always release the Mat headers to prevent native memory leaks.
             if (mat1 != null) {
                 mat1.release();
             }
@@ -704,36 +594,19 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     }
 
     private void initializePBOs() {
-        // Berechne die Größe des Buffers, den wir auslesen wollen
-        PBO_SIZE = modelInputWidth * modelInputHeight * 4; // RGBA
+        PBO_SIZE = modelInputWidth * modelInputHeight * 4;
 
-        // Erzeuge zwei Puffer-Objekte auf der GPU
         GLES30.glGenBuffers(2, pboHandles, 0);
 
-        // Konfiguriere Puffer 0
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboHandles[0]);
         GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, PBO_SIZE, null, GLES30.GL_DYNAMIC_READ);
 
-        // Konfiguriere Puffer 1
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboHandles[1]);
         GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, PBO_SIZE, null, GLES30.GL_DYNAMIC_READ);
 
-        // Hebe die Bindung auf
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0);
     }
 
-    /**
-     * Liest die Pixel des FBOs asynchron aus, ohne die GPU-Pipeline zu blockieren.
-     * Verwendet zwei Pixel Buffer Objects (PBOs) in einer Ping-Pong-Konfiguration.
-     *
-     * @return Ein ByteBuffer mit den Pixeldaten des VORHERIGEN Frames, oder null beim ersten Frame.
-     */
-    /**
-     * Liest Pixel asynchron aus und schreibt das Ergebnis in einen
-     * vom Aufrufer bereitgestellten Ziel-Buffer.
-     *
-     * @param destinationBuffer Der Buffer, in den das Ergebnis geschrieben wird. Returns false if no data was available.
-     */
     private boolean readPixelsForAI_Async(ByteBuffer destinationBuffer) {
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboHandle);
         GLES20.glViewport(0, 0, modelInputWidth, modelInputHeight);
@@ -763,314 +636,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         return success;
     }
 
-    private class AiResultHandling implements Runnable {
-
-        private final byte[] processedDataArray = new byte[modelInputWidth * modelInputHeight];
-        private ByteBuffer previousRawMap = null;
-        private double continouesDifferenceImageCount = 0.0f;
-        private double continouesAverageDifference = 0.0f;
-        private double continouesDifferenceDepthMapCount = 0.0f;
-
-        private int continouesMapCount = 0;
-
-        // NEW: A Mat to store the result from the last frame for smoothing.
-        private Mat previousSmoothedMat;
-        private static final double SMOOTHING_FACTOR = 0.05f;
-
-        private boolean isFirstFrame = true;
-
-        private void resetContinousCounter() {
-            continouesDifferenceImageCount = 0.0f;
-            continouesDifferenceDepthMapCount = 0.0f;
-            continouesMapCount = 0;
-        }
-
-        @Override
-        public void run() {
-            ByteBuffer resultBuffer = createFlatDepthMap();
-            InferenceResult result = null;
-            boolean takeResult = true;
-            boolean takeContinousResult = false;
-            while (!Thread.currentThread().isInterrupted()) {
-                long startTime = System.nanoTime();
-                long waitTime = System.nanoTime();
-                Mat rawMat = null;
-                Mat processedMat = null;
-                takeResult = true;
-                takeContinousResult = false;
-                double rawDifference = 0.0;
-                try {
-                    Log.d("Stereo3DRenderer", "checking AI started");
-                    // 1. Warte auf ein gefülltes Ergebnis vom InferenceTask
-                    result = filledOutputBuffers.take();
-                    resultBuffer = freeSmoothedBuffers.take();
-                    waitTime = System.nanoTime();
-
-                    InferenceResult intermediate;
-                    while ((intermediate = filledOutputBuffers.poll()) != null) {
-                        // Immediately recycle the skipped, outdated buffers
-                        freeInputBuffers.offer(result.pixelBuffer);
-                        freeOutputBuffers.offer(result.rawDepthBuffer);
-                        result = intermediate;
-                    }
-                    ByteBuffer rawDepthBuffer = result.rawDepthBuffer;
-                    ByteBuffer currentPixelBuffer = result.pixelBuffer;
-
-                    if (previousRawMap != null) {
-                        rawDifference = calculateAverageDifferenceOCV(rawDepthBuffer, previousRawMap, modelInputWidth, modelInputHeight);
-                    }
-
-                    if (previousRawMap == null || previousRawMap.capacity() != rawDepthBuffer.capacity()) {
-                        previousRawMap = ByteBuffer.allocateDirect(rawDepthBuffer.capacity());
-                    }
-                    previousRawMap.rewind();
-                    rawDepthBuffer.rewind();
-                    previousRawMap.put(rawDepthBuffer);
-                    final double RENDER_TRESHHOLD = 6;
-                    final double MINIMUM_TRESHOLD = 2;
-                    if (rawDifference < MINIMUM_TRESHOLD) {
-                        takeResult = false;
-                    }
-                    if (takeResult) {
-                        double imageDifference = 0.0f;
-
-                        final double INSTABILITY_THRESHOLD = 10.0;
-                        final double INSTABILITY_THRESHOLD_CONTINOUES = 2.0;
-                        final double INSTABILITY_THRESHOLD_STRONG = 1.0;
-                        final double MIN_IMAGE_DIFFERENCE = 1f;
-
-                        currentPixelBuffer.rewind();
-                        imageDifference = hasFrameChangedSignificantlyOCV(currentPixelBuffer, previousPixelBuffer) * 100;
-                        continouesMapCount++;
-                        if (imageDifference < MIN_IMAGE_DIFFERENCE) {
-                            takeResult = false;
-                        }
-                        imageDifference = Math.max(imageDifference, 0);
-                        double instabilityFactor = rawDifference / Math.max(imageDifference, MIN_IMAGE_DIFFERENCE);
-
-                        if (instabilityFactor > INSTABILITY_THRESHOLD_STRONG && imageDifference <= RENDER_TRESHHOLD) {
-                            LimeLog.info("Unstable AI ignored strong " + instabilityFactor +
-                                    " (DepthDiff: " + rawDifference + ", ImageDiff: " + imageDifference + ")");
-                            takeResult = false;
-                        } else if (instabilityFactor > INSTABILITY_THRESHOLD && imageDifference > RENDER_TRESHHOLD) {
-                            LimeLog.info("Unstable AI ignored weak " + instabilityFactor +
-                                    " (DepthDiff: " + rawDifference + ", ImageDiff: " + imageDifference + ")");
-                            takeResult = false;
-                        }
-                        if (takeResult) {
-                            LimeLog.info("New Result delivered for processing " + instabilityFactor +
-                                    " (DepthDiff: " + rawDifference + ", ImageDiff: " + imageDifference + ")");
-                        } else {
-                            takeContinousResult = false;
-                            continouesDifferenceDepthMapCount += rawDifference;
-                            continouesDifferenceImageCount += imageDifference;
-                            continouesAverageDifference = continouesDifferenceImageCount / continouesMapCount;
-                            instabilityFactor = continouesDifferenceDepthMapCount / Math.max(continouesAverageDifference, MIN_IMAGE_DIFFERENCE);
-                            if (instabilityFactor > INSTABILITY_THRESHOLD_CONTINOUES) {
-                                LimeLog.info("Unstable Continoues AI taken weak " + instabilityFactor +
-                                        " (DepthDiff: " + continouesDifferenceDepthMapCount + ", ImageDiff: " + continouesAverageDifference + ")");
-                                takeContinousResult = true;
-                            }
-                            if (imageDifference < 0.002) {
-                                takeContinousResult = false;
-                            }
-                            if (takeContinousResult) {
-                                LimeLog.info("New Continous Result delivered for processing " + instabilityFactor +
-                                        " (DepthDiff: " + continouesDifferenceDepthMapCount + ", ImageDiff: " + continouesDifferenceImageCount + ")");
-                            }
-                        }
-                        if (continouesMapCount > 20) {
-                               resetContinousCounter();
-                        }
-                        if (takeResult || takeContinousResult) {
-                            resetContinousCounter();
-                            rawMat = new Mat(modelInputHeight, modelInputWidth, CvType.CV_8UC1, rawDepthBuffer);
-                            processedMat = new Mat();
-                            Core.normalize(rawMat, processedMat, 0, 255, Core.NORM_MINMAX);
-
-                            if (isFirstFrame) {
-                                previousSmoothedMat = processedMat.clone();
-                                isFirstFrame = false;
-                            }
-                            if (takeContinousResult) {
-                                double smoothing = continouesAverageDifference / 10;
-                                smoothing = Math.min(smoothing, 0.2);
-                                smoothing = Math.max(smoothing, 0.08);
-                                Core.addWeighted(processedMat, smoothing, previousSmoothedMat, 1.0 - smoothing, 0.0, previousSmoothedMat);
-                            } else {
-                                previousSmoothedMat = processedMat.clone();
-                            }
-
-                            previousSmoothedMat.get(0, 0, processedDataArray);
-                            rawDepthBuffer.rewind();
-                            rawDepthBuffer.put(processedDataArray);
-
-                            rawDepthBuffer.rewind();
-                            resultBuffer.rewind();
-
-                            resultBuffer.put(rawDepthBuffer);
-
-                            rawDepthBuffer.rewind();
-                            resultBuffer.rewind();
-                            readyToRenderQueue.put(resultBuffer);
-                        }
-                    }
-                    previousPixelBuffer.rewind();
-                    previousPixelBuffer.put(currentPixelBuffer);
-                } catch (Exception e) {
-                    Log.e("Stereo3DRenderer", "AIRESULT exception", e);
-                } finally {
-                    if (rawMat != null) {
-                        rawMat.release();
-                    }
-                    if (processedMat != null) {
-                        processedMat.release();
-                    }
-                    if (resultBuffer != null) {
-                        freeSmoothedBuffers.offer(resultBuffer);
-                    }
-                    if (result != null) {
-                        // This correctly returns the pixel buffer
-                        freeInputBuffers.offer(result.pixelBuffer);
-
-                        // FIX: Always return the raw depth buffer to its pool here,
-                        // inside the finally block, to guarantee execution.
-                        freeOutputBuffers.offer(result.rawDepthBuffer);
-                    }
-                    long duration = (System.nanoTime() - startTime) / 1_000_000;
-                    long waitTimeText = (waitTime - startTime) / 1_000_000;
-                    Log.d("Stereo3DRenderer", "CalculateTime AiResult:    " + duration + " ms" + " " + freeOutputBuffers.remainingCapacity() + " " + waitTimeText + " ms " + takeResult);
-                }
-            }
-            Log.d("Stereo3DRenderer", "Total AI RESULT FALSE");
-            isAiResultHandlingRunning.set(false);
-        }
-    }
-
-    /**
-     * Compares two frames using OpenCV's histogram correlation to robustly detect scene changes.
-     *
-     * @param newPixelBuffer The RGBA buffer of the current frame.
-     * @param oldPixelBuffer The RGBA buffer of the previous frame.
-     * @return A "difference score" from 0.0 (identical) to 1.0 (very different).
-     */
-    private double hasFrameChangedSignificantlyOCV(ByteBuffer newPixelBuffer, ByteBuffer oldPixelBuffer) {
-        if (newPixelBuffer == null || oldPixelBuffer == null || newPixelBuffer.capacity() != oldPixelBuffer.capacity()) {
-            return 1.0; // Assume maximum change if buffers are invalid
-        }
-
-        Mat mat1 = null;
-        Mat mat2 = null;
-        Mat grayMat1 = null;
-        Mat grayMat2 = null;
-        Mat hist1 = null;
-        Mat hist2 = null;
-
-        try {
-            // 1. Wrap the ByteBuffers in Mat headers (no data is copied)
-            mat1 = new Mat(modelInputHeight, modelInputWidth, CvType.CV_8UC4, newPixelBuffer);
-            mat2 = new Mat(modelInputHeight, modelInputWidth, CvType.CV_8UC4, oldPixelBuffer);
-
-            // 2. Convert the images to grayscale for a simpler and more stable comparison
-            grayMat1 = new Mat();
-            grayMat2 = new Mat();
-            Imgproc.cvtColor(mat1, grayMat1, Imgproc.COLOR_RGBA2GRAY);
-            Imgproc.cvtColor(mat2, grayMat2, Imgproc.COLOR_RGBA2GRAY);
-
-            // 3. Calculate the histogram for each grayscale image
-            hist1 = new Mat();
-            hist2 = new Mat();
-            Imgproc.calcHist(Collections.singletonList(grayMat1), new MatOfInt(0), new Mat(), hist1, new MatOfInt(256), new MatOfFloat(0f, 256f));
-            Imgproc.calcHist(Collections.singletonList(grayMat2), new MatOfInt(0), new Mat(), hist2, new MatOfInt(256), new MatOfFloat(0f, 256f));
-
-            // 4. Compare the two histograms using the correlation method
-            //    Result is between -1.0 (inverse) and 1.0 (identical).
-            double correlation = Imgproc.compareHist(hist1, hist2, Imgproc.HISTCMP_CORREL);
-
-            // 5. Convert the correlation score into a "difference" score
-            //    1.0 becomes 0.0 (no difference)
-            //    0.0 becomes 1.0 (high difference)
-            return 1.0 - correlation;
-
-        } finally {
-            // CRUCIAL: ALWAYS release Mat memory to prevent leaks
-            if (mat1 != null) mat1.release();
-            if (mat2 != null) mat2.release();
-            if (grayMat1 != null) grayMat1.release();
-            if (grayMat2 != null) grayMat2.release();
-            if (hist1 != null) hist1.release();
-            if (hist2 != null) hist2.release();
-        }
-    }
-
-    /**
-     * A very fast, lightweight comparison of two frames by checking a sparse sample of pixels.
-     * This method is non-blocking, allocates no new objects, and is safe for the GL thread.
-     *
-     * @param currentFrame  The RGBA buffer of the current frame.
-     * @param previousFrame The RGBA buffer of the previous frame.
-     * @return True if the frames are significantly different.
-     */
-    private boolean hasSceneChangedFast(ByteBuffer currentFrame, ByteBuffer previousFrame) {
-        // 1. Basic safety checks
-        if (currentFrame == null || previousFrame == null || currentFrame.capacity() != previousFrame.capacity()) {
-            return true; // Assume change if buffers are invalid
-        }
-
-        currentFrame.rewind();
-        previousFrame.rewind();
-
-        long totalDifference = 0;
-        int pixelsSampled = 0;
-
-        // --- Tuning Parameters ---
-        // How many bytes to skip for each pixel sample. 4 for RGBA.
-        final int PIXEL_STRIDE = 4;
-        // How many pixels to skip in a row. A larger number is faster.
-        final int PIXEL_SAMPLE_RATE = 32;
-        // How many rows to skip. A larger number is faster.
-        final int ROW_SAMPLE_RATE = 32;
-        // The total number of bytes to jump for each sample check.
-        final int SAMPLE_STRIDE = PIXEL_STRIDE * PIXEL_SAMPLE_RATE;
-        // The total number of bytes to jump to get to the next sampled row.
-        final int ROW_STRIDE = modelInputWidth * PIXEL_STRIDE * ROW_SAMPLE_RATE;
-        // ---
-
-        // 2. Loop through a sparse grid of pixels
-        for (int row = 0; row < currentFrame.capacity(); row += ROW_STRIDE) {
-            for (int col = 0; col < modelInputWidth * PIXEL_STRIDE; col += SAMPLE_STRIDE) {
-                int index = row + col;
-                if (index + 2 >= currentFrame.capacity()) break;
-
-                // 3. Calculate the difference for this one pixel (Sum of Absolute Differences)
-                // We only need to check RGB; Alpha is usually constant.
-                totalDifference += Math.abs((currentFrame.get(index) & 0xFF) - (previousFrame.get(index) & 0xFF));
-                totalDifference += Math.abs((currentFrame.get(index + 1) & 0xFF) - (previousFrame.get(index + 1) & 0xFF));
-                totalDifference += Math.abs((currentFrame.get(index + 2) & 0xFF) - (previousFrame.get(index + 2) & 0xFF));
-                pixelsSampled++;
-            }
-        }
-
-        if (pixelsSampled == 0) return true;
-
-        // 4. Compare the average difference against a threshold
-        double averageDifference = (double) totalDifference / pixelsSampled;
-
-        // Tune this threshold. A lower value makes it more sensitive to change.
-        // A good starting point is between 15.0 and 30.0.
-        final double CHANGE_THRESHOLD = 15.0;
-
-        return averageDifference > CHANGE_THRESHOLD;
-    }
-
     private void initializeTfLite() {
-
         Interpreter.Options options = new Interpreter.Options();
 
-        // 1️⃣ NnApiDelegate
         try {
             GpuDelegate.Options gpuOptions = new GpuDelegate.Options();
-            gpuOptions.setQuantizedModelsAllowed(true); // Optional: je nach Bedarf
+            gpuOptions.setQuantizedModelsAllowed(true);
             gpuOptions.setPrecisionLossAllowed(true);
             gpuOptions.setInferencePreference(GpuDelegateFactory.Options.INFERENCE_PREFERENCE_SUSTAINED_SPEED);
             gpuDelegate = new GpuDelegate(gpuOptions);
@@ -1081,7 +652,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         } catch (Exception e) {
             LimeLog.info("GPU Delegate nicht verfügbar: " + e.getMessage());
             gpuDelegate.close();
-            // 2️⃣ GPU Delegate
             try {
                 nnApiDelegate = new NnApiDelegate();
                 options.addDelegate(nnApiDelegate);
@@ -1091,7 +661,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             } catch (Exception exception) {
                 LimeLog.info("NNAPI Delegate nicht verfügbar: " + e.getMessage());
                 nnApiDelegate.close();
-                // 3️⃣ CPU Fallback
                 try {
                     LimeLog.info("Fallback: CPU");
                     tflite = new Interpreter(loadModelFile(context, AI_MODEL), options);
@@ -1118,16 +687,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             options.setUseNNAPI(true);
             options.setNumThreads(4);
             tflite = new Interpreter(loadModelFile(context, AI_MODEL), options);
-            Log.i("Stereo3DRenderer", "Successfully re-initialized TFLite interpreter on CPU.");
+            LimeLog.info("Successfully re-initialized TFLite interpreter on CPU.");
         } catch (IOException e) {
-            Log.e("Stereo3DRenderer", "Failed to re-initialize TFLite model on CPU.", e);
+            LimeLog.severe("Failed to re-initialize TFLite model on CPU: "  + e.getMessage());
         }
     }
 
-    private final String AI_MODEL = "midas-midas-v2-w8a8.tflite";
-
-    private MappedByteBuffer loadModelFile(Context context, String modelPath) throws
-            IOException {
+    private MappedByteBuffer loadModelFile(Context context, String modelPath) throws IOException {
         AssetFileDescriptor fileDescriptor = context.getAssets().openFd(modelPath);
         FileInputStream inputStream = new FileInputStream(fileDescriptor.getFileDescriptor());
         FileChannel fileChannel = inputStream.getChannel();
@@ -1149,13 +715,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboHandle);
         GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, fboTextureId, 0);
         if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) != GLES20.GL_FRAMEBUFFER_COMPLETE) {
-            Log.e("Stereo3DRenderer", "Framebuffer is not complete.");
+            LimeLog.severe("Framebuffer is not complete.");
         }
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
     }
 
     private void initializeFilterFbo() {
-        // --- FINALE KORREKTUR: Verwende createRgbaTexture, um Kompatibilität sicherzustellen ---
         filteredDepthMapTextureId = createRgbaTexture(modelInputWidth, modelInputHeight);
         int[] fbos = new int[1];
         GLES20.glGenFramebuffers(1, fbos, 0);
@@ -1163,7 +728,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, filterFboHandle);
         GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, filteredDepthMapTextureId, 0);
         if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) != GLES20.GL_FRAMEBUFFER_COMPLETE) {
-            Log.e("Stereo3DRenderer", "Filter Framebuffer is not complete.");
+            LimeLog.severe("Filter Framebuffer is not complete.");
         }
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
     }
@@ -1213,8 +778,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         int[] compiled = new int[1];
         GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compiled, 0);
         if (compiled[0] == 0) {
-            Log.e("Stereo3DRenderer", "Could not compile shader " + type + ":");
-            Log.e("Stereo3DRenderer", GLES20.glGetShaderInfoLog(shader));
+            LimeLog.severe("Could not compile shader " + type + ":");
+            LimeLog.severe(GLES20.glGetShaderInfoLog(shader));
             GLES20.glDeleteShader(shader);
             shader = 0;
         }
@@ -1235,12 +800,323 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             int[] linkStatus = new int[1];
             GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, linkStatus, 0);
             if (linkStatus[0] != GLES20.GL_TRUE) {
-                Log.e("Stereo3DRenderer", "Could not link program: ");
-                Log.e("Stereo3DRenderer", GLES20.glGetProgramInfoLog(program));
+                LimeLog.severe("Could not link program: ");
+                LimeLog.severe(GLES20.glGetProgramInfoLog(program));
                 GLES20.glDeleteProgram(program);
                 program = 0;
             }
         }
         return program;
+    }
+
+    private double hasFrameChangedSignificantlyOCV(ByteBuffer newPixelBuffer, ByteBuffer oldPixelBuffer) {
+        if (newPixelBuffer == null || oldPixelBuffer == null || newPixelBuffer.capacity() != oldPixelBuffer.capacity()) {
+            return 1.0;
+        }
+
+        Mat mat1 = null;
+        Mat mat2 = null;
+        Mat grayMat1 = null;
+        Mat grayMat2 = null;
+        Mat hist1 = null;
+        Mat hist2 = null;
+
+        try {
+            mat1 = new Mat(modelInputHeight, modelInputWidth, CvType.CV_8UC4, newPixelBuffer);
+            mat2 = new Mat(modelInputHeight, modelInputWidth, CvType.CV_8UC4, oldPixelBuffer);
+
+            grayMat1 = new Mat();
+            grayMat2 = new Mat();
+            Imgproc.cvtColor(mat1, grayMat1, Imgproc.COLOR_RGBA2GRAY);
+            Imgproc.cvtColor(mat2, grayMat2, Imgproc.COLOR_RGBA2GRAY);
+
+            hist1 = new Mat();
+            hist2 = new Mat();
+            Imgproc.calcHist(Collections.singletonList(grayMat1), new MatOfInt(0), new Mat(), hist1, new MatOfInt(256), new MatOfFloat(0f, 256f));
+            Imgproc.calcHist(Collections.singletonList(grayMat2), new MatOfInt(0), new Mat(), hist2, new MatOfInt(256), new MatOfFloat(0f, 256f));
+
+            double correlation = Imgproc.compareHist(hist1, hist2, Imgproc.HISTCMP_CORREL);
+
+            return 1.0 - correlation;
+
+        } finally {
+            if (mat1 != null) mat1.release();
+            if (mat2 != null) mat2.release();
+            if (grayMat1 != null) grayMat1.release();
+            if (grayMat2 != null) grayMat2.release();
+            if (hist1 != null) hist1.release();
+            if (hist2 != null) hist2.release();
+        }
+    }
+
+    private boolean hasSceneChangedFast(ByteBuffer currentFrame, ByteBuffer previousFrame) {
+        if (currentFrame == null || previousFrame == null || currentFrame.capacity() != previousFrame.capacity()) {
+            return true;
+        }
+
+        currentFrame.rewind();
+        previousFrame.rewind();
+
+        long totalDifference = 0;
+        int pixelsSampled = 0;
+
+        final int PIXEL_STRIDE = 4;
+        final int PIXEL_SAMPLE_RATE = 32;
+        final int ROW_SAMPLE_RATE = 32;
+        final int SAMPLE_STRIDE = PIXEL_STRIDE * PIXEL_SAMPLE_RATE;
+        final int ROW_STRIDE = modelInputWidth * PIXEL_STRIDE * ROW_SAMPLE_RATE;
+
+        for (int row = 0; row < currentFrame.capacity(); row += ROW_STRIDE) {
+            for (int col = 0; col < modelInputWidth * PIXEL_STRIDE; col += SAMPLE_STRIDE) {
+                int index = row + col;
+                if (index + 2 >= currentFrame.capacity()) break;
+
+                totalDifference += Math.abs((currentFrame.get(index) & 0xFF) - (previousFrame.get(index) & 0xFF));
+                totalDifference += Math.abs((currentFrame.get(index + 1) & 0xFF) - (previousFrame.get(index + 1) & 0xFF));
+                totalDifference += Math.abs((currentFrame.get(index + 2) & 0xFF) - (previousFrame.get(index + 2) & 0xFF));
+                pixelsSampled++;
+            }
+        }
+
+        if (pixelsSampled == 0) return true;
+
+        double averageDifference = (double) totalDifference / pixelsSampled;
+
+        final double CHANGE_THRESHOLD = 15.0;
+
+        return averageDifference > CHANGE_THRESHOLD;
+    }
+
+    private class AiTask implements Runnable {
+        @Override
+        public void run() {
+            ByteBuffer pixelBuffer = null;
+            while (!Thread.currentThread().isInterrupted()) {
+                long startTime = System.nanoTime();
+                long waitTime = System.nanoTime();
+                long aiTime = System.nanoTime();
+                long aiTime_end = System.nanoTime();
+                try {
+                    if (tflite == null) return;
+                    pixelBuffer = inferenceInputQueue.take();
+                    ByteBuffer outputBuffer = freeOutputBuffers.take();
+                    waitTime = System.nanoTime();
+                    outputBuffer.rewind();
+
+                    tfliteInputBuffer.rewind();
+                    pixelBuffer.rewind();
+
+                    convertRgbaToRgb(pixelBuffer, tfliteInputBuffer, modelInputWidth, modelInputHeight);
+
+                    aiTime = System.nanoTime();
+                    ReflectivePaddingInt8Minimal.applyReflectedPadding(tfliteInputBuffer);
+                    tflite.run(tfliteInputBuffer, outputBuffer);
+                    calcThreeDFps++;
+                    aiTime_end = System.nanoTime();
+                    filledOutputBuffers.put(new InferenceResult(pixelBuffer, outputBuffer));
+                    pixelBuffer = null;
+                } catch (InterruptedException e) {
+                    LimeLog.severe("AI inference failed: " + e.getMessage());
+                    Thread.currentThread().interrupt();
+                } catch (Exception e) {
+                    LimeLog.severe("AI inference failed: " + e.getMessage());
+                    gpuDelegateFailed.set(true);
+                } finally {
+                    long duration = (System.nanoTime() - startTime) / 1_000_000;
+                    long waitTimeText = (waitTime - startTime) / 1_000_000;
+                    long aitimeText = (aiTime_end - aiTime) / 1_000_000;
+                    if (pixelBuffer != null) {
+                        freeInputBuffers.offer(pixelBuffer);
+                    }
+                    Log.d("Stereo3DRenderer", "CalculateTime AiDepthMap: " + duration + " ms " + filledOutputBuffers.remainingCapacity() + " " + waitTimeText + " ms" + "aitime: " + aitimeText);
+                }
+            }
+            isAiRunning.set(false);
+        }
+    }
+
+    private class AiResultHandling implements Runnable {
+
+        // --- Constants for AI result processing logic ---
+        private static final double RENDER_THRESHOLD = 6.0;
+        private static final double MINIMUM_THRESHOLD = 2.0;
+        private static final double INSTABILITY_THRESHOLD = 10.0;
+        private static final double INSTABILITY_THRESHOLD_CONTINUOUS = 2.0;
+        private static final double INSTABILITY_THRESHOLD_STRONG = 1.0;
+        private static final double MIN_IMAGE_DIFFERENCE = 1.0;
+        private static final double MIN_CONTINUOUS_IMAGE_DIFFERENCE = 0.002;
+        private static final double IMAGE_DIFFERENCE_MULTIPLIER = 100.0;
+        private static final int MAX_CONTINUOUS_MAP_COUNT = 20;
+
+        // --- Constants for temporal smoothing ---
+        private static final double SMOOTHING_DIVISOR = 10.0;
+        private static final double MAX_SMOOTHING_FACTOR = 0.2;
+        private static final double MIN_SMOOTHING_FACTOR = 0.08;
+
+        // --- Member Fields ---
+        private final byte[] processedDataArray = new byte[modelInputWidth * modelInputHeight];
+        private ByteBuffer previousRawMap = null;
+        private Mat previousSmoothedMat;
+        private double continouesDifferenceImageCount = 0.0f;
+        private double continouesAverageDifference = 0.0f;
+        private double continouesDifferenceDepthMapCount = 0.0f;
+        private int continouesMapCount = 0;
+        private boolean isFirstFrame = true;
+
+        private void resetContinousCounter() {
+            continouesDifferenceImageCount = 0.0f;
+            continouesDifferenceDepthMapCount = 0.0f;
+            continouesMapCount = 0;
+        }
+
+        @Override
+        public void run() {
+            ByteBuffer resultBuffer = createFlatDepthMap();
+            InferenceResult result = null;
+            boolean takeResult = true;
+            boolean takeContinousResult = false;
+
+            while (!Thread.currentThread().isInterrupted()) {
+                long startTime = System.nanoTime();
+                long waitTime = System.nanoTime();
+                Mat rawMat = null;
+                Mat processedMat = null;
+                takeResult = true;
+                takeContinousResult = false;
+                double rawDifference = 0.0;
+
+                try {
+                    result = filledOutputBuffers.take();
+                    resultBuffer = freeSmoothedBuffers.take();
+                    waitTime = System.nanoTime();
+
+                    // Drain the queue to only process the latest result
+                    InferenceResult intermediate;
+                    while ((intermediate = filledOutputBuffers.poll()) != null) {
+                        freeInputBuffers.offer(result.pixelBuffer);
+                        freeOutputBuffers.offer(result.rawDepthBuffer);
+                        result = intermediate;
+                    }
+                    ByteBuffer rawDepthBuffer = result.rawDepthBuffer;
+                    ByteBuffer currentPixelBuffer = result.pixelBuffer;
+
+                    if (previousRawMap != null) {
+                        rawDifference = calculateAverageDifferenceOCV(rawDepthBuffer, previousRawMap, modelInputWidth, modelInputHeight);
+                    }
+
+                    if (previousRawMap == null || previousRawMap.capacity() != rawDepthBuffer.capacity()) {
+                        previousRawMap = ByteBuffer.allocateDirect(rawDepthBuffer.capacity());
+                    }
+                    previousRawMap.rewind();
+                    rawDepthBuffer.rewind();
+                    previousRawMap.put(rawDepthBuffer);
+
+                    if (rawDifference < MINIMUM_THRESHOLD) {
+                        takeResult = false;
+                    }
+
+                    if (takeResult) {
+                        currentPixelBuffer.rewind();
+                        double imageDifference = hasFrameChangedSignificantlyOCV(currentPixelBuffer, previousPixelBuffer) * IMAGE_DIFFERENCE_MULTIPLIER;
+                        continouesMapCount++;
+
+                        if (imageDifference < MIN_IMAGE_DIFFERENCE) {
+                            takeResult = false;
+                        }
+
+                        imageDifference = Math.max(imageDifference, 0);
+                        double instabilityFactor = rawDifference / Math.max(imageDifference, MIN_IMAGE_DIFFERENCE);
+
+                        if (instabilityFactor > INSTABILITY_THRESHOLD_STRONG && imageDifference <= RENDER_THRESHOLD) {
+                            takeResult = false;
+                        } else if (instabilityFactor > INSTABILITY_THRESHOLD && imageDifference > RENDER_THRESHOLD) {
+                            takeResult = false;
+                        }
+
+                        if (takeResult) {
+                            Log.d("Stereo3DRenderer", "New SceneChange Result:" + instabilityFactor +
+                                    " (DepthDiff: " + rawDifference + ", ImageDiff: " + imageDifference + ")");
+                        } else {
+                            takeContinousResult = false;
+                            continouesDifferenceDepthMapCount += rawDifference;
+                            continouesDifferenceImageCount += imageDifference;
+                            continouesAverageDifference = continouesDifferenceImageCount / continouesMapCount;
+                            instabilityFactor = continouesDifferenceDepthMapCount / Math.max(continouesAverageDifference, MIN_IMAGE_DIFFERENCE);
+
+                            if (instabilityFactor > INSTABILITY_THRESHOLD_CONTINUOUS) {
+                                takeContinousResult = true;
+                            }
+                            if (imageDifference < MIN_CONTINUOUS_IMAGE_DIFFERENCE) {
+                                takeContinousResult = false;
+                            }
+                            if (takeContinousResult) {
+                                Log.d("Stereo3DRenderer", "New Continous Result: " + instabilityFactor +
+                                        " (DepthDiff: " + continouesDifferenceDepthMapCount + ", ImageDiff: " + continouesDifferenceImageCount + ")");
+                            }
+                        }
+
+                        if (continouesMapCount > MAX_CONTINUOUS_MAP_COUNT) {
+                            resetContinousCounter();
+                        }
+
+                        if (takeResult || takeContinousResult) {
+                            resetContinousCounter();
+                            rawMat = new Mat(modelInputHeight, modelInputWidth, CvType.CV_8UC1, rawDepthBuffer);
+                            processedMat = new Mat();
+                            Core.normalize(rawMat, processedMat, 0, 255, Core.NORM_MINMAX);
+
+                            if (isFirstFrame) {
+                                previousSmoothedMat = processedMat.clone();
+                                isFirstFrame = false;
+                            }
+
+                            if (takeContinousResult) {
+                                double smoothing = continouesAverageDifference / SMOOTHING_DIVISOR;
+                                smoothing = Math.min(smoothing, MAX_SMOOTHING_FACTOR);
+                                smoothing = Math.max(smoothing, MIN_SMOOTHING_FACTOR);
+                                Core.addWeighted(processedMat, smoothing, previousSmoothedMat, 1.0 - smoothing, 0.0, previousSmoothedMat);
+                            } else {
+                                previousSmoothedMat = processedMat.clone();
+                            }
+
+                            previousSmoothedMat.get(0, 0, processedDataArray);
+                            rawDepthBuffer.rewind();
+                            rawDepthBuffer.put(processedDataArray);
+
+                            rawDepthBuffer.rewind();
+                            resultBuffer.rewind();
+                            resultBuffer.put(rawDepthBuffer);
+
+                            rawDepthBuffer.rewind();
+                            resultBuffer.rewind();
+                            readyToRenderQueue.put(resultBuffer);
+                        }
+                    }
+
+                    previousPixelBuffer.rewind();
+                    previousPixelBuffer.put(currentPixelBuffer);
+                } catch (Exception e) {
+                    LimeLog.severe("AI exception " + e.getMessage());
+                } finally {
+                    if (rawMat != null) {
+                        rawMat.release();
+                    }
+                    if (processedMat != null) {
+                        processedMat.release();
+                    }
+                    if (resultBuffer != null) {
+                        freeSmoothedBuffers.offer(resultBuffer);
+                    }
+                    if (result != null) {
+                        freeInputBuffers.offer(result.pixelBuffer);
+                        freeOutputBuffers.offer(result.rawDepthBuffer);
+                    }
+                    long duration = (System.nanoTime() - startTime) / 1_000_000;
+                    long waitTimeText = (waitTime - startTime) / 1_000_000;
+                    Log.d("Stereo3DRenderer", "CalculateTime AiResult:    " + duration + " ms" + " " + freeOutputBuffers.remainingCapacity() + " " + waitTimeText + " ms " + takeResult);
+                }
+            }
+            isAiResultHandlingRunning.set(false);
+        }
     }
 }
