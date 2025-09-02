@@ -59,15 +59,12 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
         LayoutParams childParams = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
 
-        // View for standard 2D mode for maximum performance
         mSurfaceView = new SurfaceView(context);
         mSurfaceView.getHolder().addCallback(this);
         addView(mSurfaceView, childParams);
 
-        // View for both 3D modes, which require custom OpenGL rendering
         mGLSurfaceView = new GLSurfaceView(context);
         mGLSurfaceView.setEGLContextClientVersion(3);
-        // Pass 'this' as the listener to the renderer.
         mStereoRenderer = new Stereo3DRenderer(mGLSurfaceView, this, context);
         mGLSurfaceView.setRenderer(mStereoRenderer);
         mGLSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
@@ -95,8 +92,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             super.onMeasure(widthMeasureSpec, heightMeasureSpec);
             return;
         }
-
-        // Für den 2D-Modus wird die ursprüngliche Logik zur Beibehaltung des Seitenverhältnisses verwendet.
         if (desiredAspectRatio == 0) {
             super.onMeasure(widthMeasureSpec, heightMeasureSpec);
             return;
@@ -129,8 +124,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         int childHeightMeasureSpec = MeasureSpec.makeMeasureSpec(measuredHeight, MeasureSpec.EXACTLY);
         measureChildren(childWidthMeasureSpec, childHeightMeasureSpec);
     }
-
-    // --- Input Handling Logic ---
 
     public void setInputCallbacks(InputCallbacks callbacks) {
         this.mInputCallbacks = callbacks;
@@ -187,8 +180,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         };
     }
 
-    // --- Surface and Mode Management ---
-
     public void setOnSurfaceAvailable(Runnable callback) {
         this.onSurfaceAvailable = callback;
         if (isSurfaceReady && onSurfaceAvailable != null) {
@@ -210,10 +201,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     }
     public void setRenderMode(int renderMode, boolean isInitializing) {
         setStreamMode(mapIntToStreamMode(renderMode), isInitializing);
-    }
-
-    public boolean is3DEnabled() {
-        return currentMode == StreamMode.MODE_AI_3D;
     }
 
     public void setStreamMode(StreamMode mode, boolean isInitializing) {
@@ -246,7 +233,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         }
     }
 
-    // --- SurfaceHolder.Callback Implementation (for SurfaceView) ---
     @Override
     public void surfaceCreated(SurfaceHolder holder) {}
     @Override
