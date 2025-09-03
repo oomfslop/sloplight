@@ -226,13 +226,6 @@
             android:summary="@string/summary_checkbox_mouse_emulation"
             android:title="@string/title_checkbox_mouse_emulation"
             app:iconSpaceReserved="false" />
-        <CheckBoxPreference
-            android:defaultValue="false"
-            android:key="checkbox_remember_mouse_mode"
-            android:summary="@string/summary_checkbox_remember_mouse_mode"
-            android:title="@string/title_checkbox_remember_mouse_mode"
-            android:dependency="checkbox_mouse_emulation"
-            app:iconSpaceReserved="false" />
         <ListPreference
             android:defaultValue="right"
             android:dependency="checkbox_mouse_emulation"
@@ -327,6 +320,14 @@
             android:key="mouse_mode_list"
             android:summary="@string/summary_touchscreen_mode"
             android:title="@string/title_touchscreen_mode"
+            app:iconSpaceReserved="false" />
+        
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_remember_mouse_mode"
+            android:summary="@string/summary_checkbox_remember_mouse_mode"
+            android:title="@string/title_checkbox_remember_mouse_mode"
+            android:dependency="checkbox_mouse_emulation"
             app:iconSpaceReserved="false" />
 
         <CheckBoxPreference
