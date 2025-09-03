@@ -336,28 +336,27 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
     }
 
-    private void drawBothEyes(int dualBubble3dProgram, float parallaxStrength) {
+    private void drawBothEyes(int dualBubble3dProgram, float parallaxStrength, float convergence) {
         int viewWidth = glSurfaceView.getWidth();
         int viewHeight = glSurfaceView.getHeight();
 
-        float parallax = parallaxStrength * 0.1f;
-
-        LimeLog.info("PArallax Strength " + parallax + " " + parallaxStrength);
+        float parallax = parallaxStrength * 0.065f;
 
         GLES20.glViewport(0, 0, viewWidth / 2, viewHeight);
-        drawEye(dualBubble3dProgram, -parallax);
+        drawEye(dualBubble3dProgram, -parallax, convergence);
 
         GLES20.glViewport(viewWidth / 2, 0, viewWidth / 2, viewHeight);
-        drawEye(dualBubble3dProgram, parallax);
+        drawEye(dualBubble3dProgram, parallax, convergence);
     }
 
-    private void drawEye(int program, float parallax) {
+    private void drawEye(int program, float parallax, float convergence) {
         GLES20.glUseProgram(program);
         int posHandle = GLES20.glGetAttribLocation(program, "a_Position");
         int texHandle = GLES20.glGetAttribLocation(program, "a_TexCoord");
         int colorTexHandle = GLES20.glGetUniformLocation(program, "s_ColorTexture");
         int depthTexHandle = GLES20.glGetUniformLocation(program, "s_DepthTexture");
         int parallaxHandle = GLES20.glGetUniformLocation(program, "u_parallax");
+        int convergenceHandle = GLES20.glGetUniformLocation(program, "u_convergence");
         int debugModeHandle = GLES20.glGetUniformLocation(program, "u_debugMode");
 
         GLES20.glVertexAttribPointer(posHandle, 2, GLES20.GL_FLOAT, false, 0, quadVertexBuffer);
@@ -374,14 +373,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, filteredDepthMapTextureId);
         GLES20.glUniform1i(depthTexHandle, 1);
-
         GLES20.glUniform1f(parallaxHandle, parallax);
+        GLES20.glUniform1f(convergenceHandle, convergence);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
     }
 
     private void drawWithShader() {
         if (prefConf != null) {
-            drawBothEyes(dibr3dProgram, prefConf.parallax_depth);
+            drawBothEyes(dibr3dProgram, prefConf.parallax_depth, prefConf.convergence_ratio);
         }
     }
 
@@ -435,23 +434,19 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             ByteBuffer pixelBufferForAI = freeInputBuffers.poll();
             if (pixelBufferForAI != null) {
                 boolean success = readPixelsForAI_Async(pixelBufferForAI);
-
                 if (success) {
-                    if (System.nanoTime() - lastFrameSnapshot >= 1_000_000) {
-                        double difference = hasSceneChangedFast(pixelBufferForAI, previousFrameForComparison);
-                        lastFrameSnapshot = System.nanoTime();
-                        pixelBufferForAI.rewind();
-                        previousFrameForComparison.rewind();
-                        previousFrameForComparison.put(pixelBufferForAI);
+                    double difference = hasSceneChangedFast(pixelBufferForAI, previousFrameForComparison);
+                    pixelBufferForAI.rewind();
+                    previousFrameForComparison.rewind();
+                    previousFrameForComparison.put(pixelBufferForAI);
 
-                        if (inferenceInputQueue.offer(new RenderResult(pixelBufferForAI, difference))) {
-                            Log.d("AiTask", "Success: The AI will now process this buffer.");
-                        } else {
-                            freeInputBuffers.offer(pixelBufferForAI);
-                        }
+                    if (inferenceInputQueue.offer(new RenderResult(pixelBufferForAI, difference))) {
+                        Log.d("AiTask", "Success: The AI will now process this buffer.");
                     } else {
                         freeInputBuffers.offer(pixelBufferForAI);
                     }
+                } else {
+                    freeInputBuffers.offer(pixelBufferForAI);
                 }
             }
             long endTime = System.nanoTime();
@@ -918,15 +913,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                     waitTime = System.nanoTime();
                     outputBuffer.rewind();
 
-                    tfliteInputBuffer.rewind();
-                    pixelBuffer.rewind();
-
-                    convertRgbaToRgb(pixelBuffer, tfliteInputBuffer, modelInputWidth, modelInputHeight);
-
-                    aiTime = System.nanoTime();
-                    ReflectivePaddingInt8Minimal.applyReflectedPadding(tfliteInputBuffer);
-
                     if (difference > ON_DRAW_CHANGE_TRESHOLD || previousRawMap == null) {
+                        tfliteInputBuffer.rewind();
+                        pixelBuffer.rewind();
+
+                        convertRgbaToRgb(pixelBuffer, tfliteInputBuffer, modelInputWidth, modelInputHeight);
+
+                        aiTime = System.nanoTime();
+                        ReflectivePaddingInt8Minimal.applyReflectedPadding(tfliteInputBuffer);
                         tflite.run(tfliteInputBuffer, outputBuffer);
                         if (previousRawMap == null) {
                             previousRawMap = ByteBuffer.allocateDirect(outputBuffer.capacity());
@@ -969,7 +963,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         private static final double IMAGE_DIFFERENCE_MULTIPLIER = 100.0;
         private static final double MAX_SMOOTHING_FACTOR = 1;
-        private static final double MIN_SMOOTHING_FACTOR = 0.01;
+        private static final double MIN_SMOOTHING_FACTOR = 0.005;
 
         // --- Member Fields ---
         private final byte[] processedDataArray = new byte[modelInputWidth * modelInputHeight];

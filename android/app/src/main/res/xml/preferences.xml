@@ -169,6 +169,15 @@
             app:min="1"
             app:showSeekBarValue="true"
             app:updatesContinuously="true"/>
+        <SeekBarPreference
+            android:key="convergence_ratio"
+            android:title="@string/title_render_mode_convergence_title"
+            android:summary="@string/title_render_mode_convergence_description"
+            android:defaultValue="50"
+            android:max="100"
+            app:min="-50"
+            app:showSeekBarValue="true"
+            app:updatesContinuously="true"/>
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="checkbox_enable_hdr"

@@ -262,6 +262,8 @@ public class PreferenceConfiguration {
     public boolean enablePip;
 
     public float parallax_depth;
+
+    public float convergence_ratio;
     public boolean enablePerfOverlay;
     public boolean enablePerfLogging;
     //简化版性能信息
@@ -377,6 +379,8 @@ public class PreferenceConfiguration {
     private static final String NUMBER_ZOOM_SCALE = "number_zoom_scale";
 
     private static final String PARALLAX_DEPTH = "parallax_depth";
+
+    private static final String CONVERGENCE_RATIO = "convergence_ratio";
     private static final String NUMBER_PAN_OFFSET_X = "number_pan_offset_x";
     private static final String NUMBER_PAN_OFFSET_Y = "number_pan_offset_y";
 
@@ -1010,6 +1014,7 @@ public class PreferenceConfiguration {
         config.panOffsetY = prefs.getFloat(NUMBER_PAN_OFFSET_Y, DEFAULT_PAN_OFFSET);
 
         config.parallax_depth = prefs.getInt(PARALLAX_DEPTH, 50) / 100f;
+        config.convergence_ratio = prefs.getInt(CONVERGENCE_RATIO, 50) / 100f;
 
         return config;
     }

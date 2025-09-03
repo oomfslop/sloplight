@@ -173,8 +173,8 @@ dependencies {
     implementation 'org.tensorflow:tensorflow-lite:2.16.1'
     implementation 'org.tensorflow:tensorflow-lite-gpu:2.16.1'
     implementation 'org.tensorflow:tensorflow-lite-hexagon:2.16.1'
-    implementation 'org.tensorflow:tensorflow-lite-support:0.4.4'
     implementation 'com.google.ai.edge.litert:litert-gpu-api:1.4.0'
+    implementation 'org.tensorflow:tensorflow-lite-support:0.4.4'
     implementation 'org.opencv:opencv:4.9.0'
 
     // Unit test dependencies

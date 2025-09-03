@@ -17,12 +17,13 @@ public class ShaderUtils {
                     "uniform samplerExternalOES s_ColorTexture;\n" +
                     "uniform sampler2D s_DepthTexture;\n" +
                     "uniform float u_parallax;\n" +
+                    "uniform float u_convergence;\n" +
                     "uniform bool u_debugMode;\n" +
 
                     "void main() {\n" +
                     "  float depth = texture2D(s_DepthTexture, v_TexCoord).r;\n" +
                     "  float parallax_magnitude = abs(u_parallax);\n" +
-                    "  float ai_shift = parallax_magnitude * (depth - 0.5) * 1.0 * pow(abs(depth - 0.5)*2.0, 0.7);\n" +
+                    "  float ai_shift = parallax_magnitude * (depth - u_convergence);\n" +
 
 
                     "  // --- Dynamische Vignette nur anhand der Randbereiche ---\n" +
