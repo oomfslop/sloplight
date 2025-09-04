@@ -18,14 +18,12 @@ public class ShaderUtils {
                     "uniform sampler2D s_DepthTexture;\n" +
                     "uniform float u_parallax;\n" +
                     "uniform float u_convergence;\n" +
+                    "uniform float u_shift;\n" +
                     "uniform bool u_debugMode;\n" +
-
                     "void main() {\n" +
                     "  float depth = texture2D(s_DepthTexture, v_TexCoord).r;\n" +
                     "  float parallax_magnitude = abs(u_parallax);\n" +
                     "  float ai_shift = parallax_magnitude * (depth - u_convergence);\n" +
-
-
                     "  // --- Dynamische Vignette nur anhand der Randbereiche ---\n" +
                     "  float edgeWidth = 0.01;\n" +
                     "  float depthLeft  = texture2D(s_DepthTexture, vec2(edgeWidth, 0.5)).r;\n" +
@@ -33,23 +31,37 @@ public class ShaderUtils {
                     "  float ai_shift_left  = u_parallax * (depthLeft  - 0.5);\n" +
                     "  float ai_shift_right = u_parallax * (depthRight - 0.5);\n" +
                     "  float maxEdgeShift = max(abs(ai_shift_left), abs(ai_shift_right));\n" +
-
+                    "  bool isLeftEye = true;\n" +
+                    "  float isLeftEyeIndicator = 1.0;\n" +
                     "  float vignette_start = mix(0.7, 1.0, clamp(maxEdgeShift / 0.5, 0.0, 1.0));\n" +
                     "  const float vignette_end = 1.0;\n" +
-
+                    "  if (u_parallax < 0.0) {\n" +
+                    "      isLeftEye = true;\n" +
+                    "      isLeftEyeIndicator = -1.0;\n" +
+                    "  } else {\n" +
+                    "      isLeftEye = false;\n" +
+                    "      isLeftEyeIndicator = 1.0;\n" +
+                    "  }\n" +
                     "\n" +
-                    "\n" +
-                    "    if (u_parallax > 0.0) {\n" +
-                    "        ai_shift = max(ai_shift, 0.0);\n" +
-                    "    } else if (u_parallax < 0.0) {\n" +
-                    "        ai_shift = min(ai_shift, 0.0);\n" +
+                    "  if ((depth - u_convergence) < (0.0)) {\n" +
+                    "    if (isLeftEye == false) {\n" +
+                    "       ai_shift = ai_shift * (1.0-u_shift);\n" + // rechtes Fern
+                    "    } else {\n" +
+                    "       ai_shift = ai_shift * (u_shift);\n" + // linkes Fern
                     "    }\n" +
+                    "  } else {\n" +
+                    "    if (isLeftEye) {\n" +
+                    "       ai_shift = ai_shift * (1.0-u_shift);\n" + // linkes Nah
+                    "    } else {\n" +
+                    "       ai_shift = ai_shift * (u_shift);\n" + // rechtes Nah
+                    "    }\n" +
+                    "  }\n" +
                     "\n" +
                      "  float h_dist = pow(abs(v_TexCoord.x - 0.5) * 2.0, 1.5);\n" +
                      "  float vignette_factor = 1.0 - smoothstep(vignette_start, vignette_end, h_dist);\n" +
                     "   float final_shift = ai_shift * vignette_factor;\n" +
 
-                    "  vec2 shiftedCoord = vec2(v_TexCoord.x - final_shift, v_TexCoord.y);\n" +
+                    "  vec2 shiftedCoord = vec2(v_TexCoord.x - (final_shift * isLeftEyeIndicator), v_TexCoord.y);\n" +
                     "\n" +
                     "  vec4 originalColor = texture2D(s_ColorTexture, v_TexCoord);\n" +
                     "  vec4 shiftedColor = texture2D(s_ColorTexture, clamp(shiftedCoord, 0.0, 1.0));\n" +
@@ -80,7 +92,7 @@ public class ShaderUtils {
                     "uniform vec2 u_blurDirection;\n" +
 
                     "const float blurRadius = 15.0;\n" +
-                    "const float blurStep = 5.0;\n" +
+                    "const float blurStep = 2.5;\n" +
                     "const float sigma = 22.0;\n" +
 
                     "void main() {\n" +

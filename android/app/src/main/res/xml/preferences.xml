@@ -179,7 +179,18 @@
             android:summary="@string/title_render_mode_convergence_description"
             android:defaultValue="50"
             android:max="100"
-            seekbar:min="-50"
+            seekbar:min="0"
+            seekbar:step="1"
+            app:iconSpaceReserved="false" />
+        <com.limelight.preferences.SeekBarPreference
+            android:key="balance_shift"
+            android:dialogMessage=""
+            android:text="%"
+            android:title="@string/title_render_mode_balance_shift_title"
+            android:summary="@string/title_render_mode_balance_shift_description"
+            android:defaultValue="50"
+            android:max="100"
+            seekbar:min="-0"
             seekbar:step="1"
             app:iconSpaceReserved="false" />
         <CheckBoxPreference

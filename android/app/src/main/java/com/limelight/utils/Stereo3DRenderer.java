@@ -336,20 +336,20 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
     }
 
-    private void drawBothEyes(int dualBubble3dProgram, float parallaxStrength, float convergence) {
+    private void drawBothEyes(int dualBubble3dProgram, float parallaxStrength, float convergence, float shift) {
         int viewWidth = glSurfaceView.getWidth();
         int viewHeight = glSurfaceView.getHeight();
 
-        float parallax = parallaxStrength * 0.055f;
+        float parallax = parallaxStrength * 0.06f;
 
         GLES20.glViewport(0, 0, viewWidth / 2, viewHeight);
-        drawEye(dualBubble3dProgram, -parallax, convergence);
+        drawEye(dualBubble3dProgram, -parallax, convergence, shift);
 
         GLES20.glViewport(viewWidth / 2, 0, viewWidth / 2, viewHeight);
-        drawEye(dualBubble3dProgram, parallax, convergence);
+        drawEye(dualBubble3dProgram, parallax, convergence, shift);
     }
 
-    private void drawEye(int program, float parallax, float convergence) {
+    private void drawEye(int program, float parallax, float convergence, float shift) {
         GLES20.glUseProgram(program);
         int posHandle = GLES20.glGetAttribLocation(program, "a_Position");
         int texHandle = GLES20.glGetAttribLocation(program, "a_TexCoord");
@@ -357,6 +357,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         int depthTexHandle = GLES20.glGetUniformLocation(program, "s_DepthTexture");
         int parallaxHandle = GLES20.glGetUniformLocation(program, "u_parallax");
         int convergenceHandle = GLES20.glGetUniformLocation(program, "u_convergence");
+        int shiftHandle = GLES20.glGetUniformLocation(program, "u_shift");
         int debugModeHandle = GLES20.glGetUniformLocation(program, "u_debugMode");
 
         GLES20.glVertexAttribPointer(posHandle, 2, GLES20.GL_FLOAT, false, 0, quadVertexBuffer);
@@ -375,12 +376,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glUniform1i(depthTexHandle, 1);
         GLES20.glUniform1f(parallaxHandle, parallax);
         GLES20.glUniform1f(convergenceHandle, convergence);
+        GLES20.glUniform1f(shiftHandle, shift);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
     }
 
     private void drawWithShader() {
         if (prefConf != null) {
-            drawBothEyes(dibr3dProgram, prefConf.parallax_depth, prefConf.convergence_ratio);
+            drawBothEyes(dibr3dProgram, prefConf.parallax_depth, prefConf.convergence_ratio, prefConf.balance_shift);
         }
     }
 
