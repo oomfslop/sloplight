@@ -1,18 +1,20 @@
 package com.limelight.ui;
 
 import android.content.Context;
+import android.graphics.PixelFormat;
 import android.opengl.GLSurfaceView;
 import android.util.AttributeSet;
 import android.view.KeyEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
-import android.view.View;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.FrameLayout;
 
+import com.limelight.Game;
+import com.limelight.LimeLog;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.Stereo3DRenderer;
 
@@ -37,13 +39,14 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         MODE_AI_3D_MOVIE
     }
 
-    private final SurfaceView mSurfaceView;
-    private final GLSurfaceView mGLSurfaceView;
-    private final Stereo3DRenderer mStereoRenderer;
+    private Game game;
+    private PreferenceConfiguration prefConfig;
+    private Stereo3DRenderer mStereoRenderer;
 
+    private SurfaceView mSurfaceView;
     private Surface mCurrentSurface;
     private Runnable onSurfaceAvailable;
-    private StreamMode currentMode = StreamMode.MODE_2D;
+    private StreamMode renderMode = null;
     private InputCallbacks mInputCallbacks;
     private boolean commitTextEnabled = false;
 
@@ -57,25 +60,45 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
         setFocusable(true);
         setFocusableInTouchMode(true);
+    }
 
+    public void init(Game game, PreferenceConfiguration prefConfig) {
+        if (this.game != null) {
+            return;
+        }
+
+        this.game = game;
+        this.prefConfig = prefConfig;
+        this.renderMode = mapIntToStreamMode(prefConfig.renderMode);
+
+        Stereo3DRenderer.isMovieMode = renderMode == StreamMode.MODE_AI_3D_MOVIE;
+
+        isSurfaceReady = false;
+        mCurrentSurface = null;
+
+        Context context = getContext();
         LayoutParams childParams = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
 
+        // Always craete a surface view as a Workaround for the sizing issue of GLSurfaceView
         mSurfaceView = new SurfaceView(context);
-        mSurfaceView.getHolder().addCallback(this);
         addView(mSurfaceView, childParams);
 
-        mGLSurfaceView = new GLSurfaceView(context);
-        mGLSurfaceView.setEGLContextClientVersion(3);
-        mStereoRenderer = new Stereo3DRenderer(mGLSurfaceView, this, context);
-        mGLSurfaceView.setRenderer(mStereoRenderer);
-        mGLSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
-        addView(mGLSurfaceView, childParams);
+        if (renderMode != StreamMode.MODE_2D) {
+            GLSurfaceView glSurfaceView = new GLSurfaceView(context);
+            glSurfaceView.setEGLContextClientVersion(3);
+            mStereoRenderer = new Stereo3DRenderer(glSurfaceView, this, context, prefConfig);
+            glSurfaceView.setRenderer(mStereoRenderer);
+            glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
+            mSurfaceView = glSurfaceView;
+            addView(mSurfaceView, childParams);
+        }
+
+        mSurfaceView.getHolder().addCallback(this);
+        if (mSurfaceView.getHolder().getSurface() != null && mSurfaceView.getHolder().getSurface().isValid()) {
+            surfaceChanged(mSurfaceView.getHolder(), PixelFormat.RGBA_8888, mSurfaceView.getWidth(), mSurfaceView.getHeight());
+        }
     }
 
-
-    public void setPrefConfig(PreferenceConfiguration prefConfig) {
-        mStereoRenderer.setPrefConfig(prefConfig);
-    }
     // --- Aspect Ratio and Scaling Logic ---
     public void setDesiredAspectRatio(double aspectRatio) {
         this.desiredAspectRatio = aspectRatio;
@@ -89,7 +112,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        if (currentMode != StreamMode.MODE_2D) {
+        if (renderMode != StreamMode.MODE_2D) {
             super.onMeasure(widthMeasureSpec, heightMeasureSpec);
             return;
         }
@@ -132,9 +155,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     public void setCommitTextEnabled(boolean enabled) {
         this.commitTextEnabled = enabled;
-        if (enabled) {
-            requestFocus();
-        }
     }
 
     @Override
@@ -192,47 +212,16 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         return mCurrentSurface;
     }
 
+    public SurfaceView getSurfaceView() {
+        return mSurfaceView;
+    }
+
     public StreamMode mapIntToStreamMode(int modeIndex) {
         StreamContainer.StreamMode[] modes = StreamContainer.StreamMode.values();
         if (modeIndex >= 0 && modeIndex < modes.length) {
             return modes[modeIndex];
         } else {
             return StreamContainer.StreamMode.MODE_2D;
-        }
-    }
-    public void setRenderMode(int renderMode, boolean isInitializing) {
-        setStreamMode(mapIntToStreamMode(renderMode), isInitializing);
-    }
-
-    public void setStreamMode(StreamMode mode, boolean isInitializing) {
-        if (!isInitializing && currentMode == mode) return;
-        currentMode = mode;
-
-        if(mode == StreamMode.MODE_AI_3D_MOVIE) {
-            Stereo3DRenderer.isMovieMode = true;
-        } else {
-            Stereo3DRenderer.isMovieMode = false;
-        }
-
-        isSurfaceReady = false;
-        mCurrentSurface = null;
-
-        mSurfaceView.setVisibility(View.GONE);
-        mGLSurfaceView.setVisibility(View.GONE);
-
-        switch (mode) {
-            case MODE_2D:
-                mSurfaceView.setVisibility(View.VISIBLE);
-                if (mSurfaceView.getHolder().getSurface() != null && mSurfaceView.getHolder().getSurface().isValid()) {
-                    surfaceChanged(mSurfaceView.getHolder(), 0, mSurfaceView.getWidth(), mSurfaceView.getHeight());
-                }
-                break;
-            case MODE_AI_3D:
-                mGLSurfaceView.setVisibility(View.VISIBLE);
-                break;
-            case MODE_AI_3D_MOVIE:
-                mGLSurfaceView.setVisibility(View.VISIBLE);
-                break;
         }
     }
 
@@ -244,33 +233,41 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     }
 
     @Override
-    public void surfaceCreated(SurfaceHolder holder) {}
+    public void surfaceCreated(SurfaceHolder holder) {
+        game.surfaceCreated(holder);
+    }
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        if (currentMode == StreamMode.MODE_2D && width > 0 && height > 0) {
+        if (renderMode == StreamMode.MODE_2D && width > 0 && height > 0) {
             mCurrentSurface = holder.getSurface();
             notifySurfaceReady();
         }
+
+        game.surfaceChanged(holder, format, width, height);
     }
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
-        if (currentMode == StreamMode.MODE_2D) {
+        if (renderMode == StreamMode.MODE_2D) {
             isSurfaceReady = false;
             mCurrentSurface = null;
-        } else {
+        } else if (mStereoRenderer != null) {
             mStereoRenderer.onSurfaceDestroyed();
         }
+
+        game.surfaceDestroyed(holder);
     }
 
     @Override
-    public void onSurfaceReady(Surface surface) {
-        if (currentMode != StreamMode.MODE_2D) {
+    public void onStereo3DSurfaceReady(Surface surface) {
+        if (renderMode != StreamMode.MODE_2D) {
             mCurrentSurface = surface;
             notifySurfaceReady();
         }
     }
 
     public void onDestroy() {
-        mStereoRenderer.onSurfaceDestroyed();
+        if (mStereoRenderer != null) {
+            mStereoRenderer.onSurfaceDestroyed();
+        }
     }
 }

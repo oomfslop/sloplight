@@ -51,7 +51,6 @@ import com.limelight.utils.PerformanceDataTracker;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
-import com.limelight.utils.Stereo3DRenderer;
 import com.limelight.utils.UiHelper;
 
 import android.annotation.SuppressLint;
@@ -72,7 +71,6 @@ import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Outline;
 import android.graphics.Point;
-import android.graphics.PointF;
 import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
 import android.hardware.input.InputManager;
@@ -397,10 +395,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         boolean shouldInvertDecoderResolution = false;
 
-       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-               && onExternelDisplay
-               && prefConfig.renderMode == 0 // For 3D we want to maintain configured resolution
-       ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && onExternelDisplay
+                && prefConfig.renderMode == 0 // For 3D we want to maintain configured resolution
+        ) {
             Display.Mode currentMode = currentDisplay.getMode();
             displayWidth = currentMode.getPhysicalWidth();
             displayHeight = currentMode.getPhysicalHeight();
@@ -414,6 +412,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             currentOrientation = Configuration.ORIENTATION_LANDSCAPE;
             setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE);
         } else {
+            if (prefConfig.renderMode != 0) {
+                prefConfig.videoScaleMode = PreferenceConfiguration.ScaleMode.STRETCH;
+            }
+
             if (prefConfig.autoOrientation) {
                 currentOrientation = getResources().getConfiguration().orientation;
             } else {
@@ -452,12 +454,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Listen for non-touch events on the game surface
         streamContainer = findViewById(R.id.streamContainer);
-        streamContainer.setPrefConfig(prefConfig);
+        streamContainer.init(this, prefConfig);
         streamContainer.setOnGenericMotionListener(this);
         streamContainer.setOnKeyListener(this);
         streamContainer.setInputCallbacks(this);
         streamContainer.setCommitTextEnabled(prefConfig.enableCommitText);
-        streamContainer.setRenderMode(prefConfig.renderMode, true);
 
         rootView = streamContainer.getParent();
 
@@ -477,6 +478,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         panZoomHandler = new PanZoomHandler(
                 getApplicationContext(),
                 this,
+                streamContainer.getSurfaceView(),
                 streamContainer,
                 prefConfig
         );
@@ -486,7 +488,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             streamContainer.post(() -> panZoomHandler.setInitialZoomAndPan(
                     prefConfig.zoomScale,
                     prefConfig.panOffsetX,
-                    prefConfig.panOffsetY));
+                    prefConfig.panOffsetY
+            ));
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -3747,17 +3750,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         LimeLog.info("surfaceChanged-->"+width+" x "+height + "----"+displayWidth+" x "+displayHeight);
-
-        if (!attemptedConnection) {
-            attemptedConnection = true;
-
-            // Update GameManager state to indicate we're "loading" while connecting
-            UiHelper.notifyStreamConnecting(Game.this);
-
-            decoderRenderer.setRenderTarget(holder.getSurface());
-            conn.start(new AndroidAudioRenderer(Game.this, prefConfig.enableAudioFx),
-                    decoderRenderer, Game.this);
-        }
 
         panZoomHandler.handleSurfaceChange();
 

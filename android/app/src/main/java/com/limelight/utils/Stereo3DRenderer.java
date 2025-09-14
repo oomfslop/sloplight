@@ -121,7 +121,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private BlockingQueue<ByteBuffer> freeOutputBuffers;
     private BlockingQueue<ByteBuffer> freeSmoothedBuffers;
     private BlockingQueue<RenderResult> inferenceInputQueue = new ArrayBlockingQueue<>(1);
-    private PreferenceConfiguration prefConf;
+    private PreferenceConfiguration prefConfig;
     private ByteBuffer previousPixelBuffer;
     private Surface videoSurface;
     private SurfaceTexture videoSurfaceTexture;
@@ -130,7 +130,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
 
     public interface OnSurfaceReadyListener {
-        void onSurfaceReady(Surface surface);
+        void onStereo3DSurfaceReady(Surface surface);
     }
 
     static {
@@ -141,15 +141,20 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
     }
 
-    public Stereo3DRenderer(GLSurfaceView view, OnSurfaceReadyListener listener, Context context) {
+    public Stereo3DRenderer(GLSurfaceView view, OnSurfaceReadyListener listener, Context context, PreferenceConfiguration prefConfig) {
         this.glSurfaceView = view;
         this.onSurfaceReadyListener = listener;
         this.context = context;
+        this.prefConfig = prefConfig;
 
         quadVertexBuffer = ByteBuffer.allocateDirect(QUAD_VERTICES.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
         quadVertexBuffer.put(QUAD_VERTICES).position(0);
         textureVertexBuffer = ByteBuffer.allocateDirect(TEXTURE_VERTICES.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
         textureVertexBuffer.put(TEXTURE_VERTICES).position(0);
+    }
+
+    public void setPrefConfig(PreferenceConfiguration prefConfig) {
+        this.prefConfig = prefConfig;
     }
 
     public void onSurfaceDestroyed() {
@@ -207,16 +212,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         if (filledOutputBuffers != null) filledOutputBuffers.clear();
         previousPixelBuffer = null;
         currentlyRenderingMap = null;
-        prefConf = null;
+        prefConfig = null;
         drawDelay = 0.0f;
         calcFps = 0;
         calcThreeDFps = 0.0f;
         renderer = "CPU";
         isActive = false;
-    }
-
-    public void setPrefConfig(PreferenceConfiguration prefConf) {
-        this.prefConf = prefConf;
     }
 
     public Surface getVideoSurface() {
@@ -270,7 +271,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         executorService = Executors.newFixedThreadPool(2);
 
         if (onSurfaceReadyListener != null) {
-            onSurfaceReadyListener.onSurfaceReady(videoSurface);
+            onSurfaceReadyListener.onStereo3DSurfaceReady(videoSurface);
         }
         if (!isAiResultHandlingRunning.get()) {
             isAiResultHandlingRunning.set(true);
@@ -297,7 +298,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     }
 
     private float getParallax() {
-        return prefConf.parallax_depth * 0.7f;
+        return prefConfig.parallax_depth * 0.7f;
     }
 
     private void applyTwoPassGaussianBlur() {
@@ -344,7 +345,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
     }
 
-    private void drawBothEyes(int dualBubble3dProgram, float parallaxStrength, float convergence, float shift) {
+    private void drawBothEyes(int dualBubble3dProgram, float convergence, float shift) {
         int viewWidth = glSurfaceView.getWidth();
         int viewHeight = glSurfaceView.getHeight();
 
@@ -389,8 +390,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     }
 
     private void drawWithShader() {
-        if (prefConf != null) {
-            drawBothEyes(dibr3dProgram, prefConf.parallax_depth, prefConf.convergence_ratio, prefConf.balance_shift);
+        if (prefConfig != null) {
+            drawBothEyes(dibr3dProgram, prefConfig.convergence_ratio, prefConfig.balance_shift);
         }
     }
 
