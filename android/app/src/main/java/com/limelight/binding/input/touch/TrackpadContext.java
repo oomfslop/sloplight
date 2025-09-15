@@ -317,6 +317,9 @@ public class TrackpadContext implements TouchContext {
             if (swapAxis) {
                 deltaY = rawDeltaX;
                 deltaX = rawDeltaY;
+
+                absDeltaX = Math.abs(rawDeltaY);
+                absDeltaY = Math.abs(rawDeltaX);
             } else {
                 deltaX = rawDeltaX;
                 deltaY = rawDeltaY;
