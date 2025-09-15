@@ -319,8 +319,7 @@ public class TrackpadContext implements TouchContext {
 
             int rawDeltaX = eventX - lastTouchX;
             int rawDeltaY = eventY - lastTouchY;
-            int absDeltaX = Math.abs(rawDeltaX);
-            int absDeltaY = Math.abs(rawDeltaY);
+            int absDeltaX, absDeltaY;
 
             double magnitude = Math.sqrt(rawDeltaX * rawDeltaX + rawDeltaY * rawDeltaY);
             double precisionMultiplier = Math.cbrt(magnitude / ACCELERATION_THRESHOLD);
@@ -335,6 +334,9 @@ public class TrackpadContext implements TouchContext {
             } else {
                 deltaX = rawDeltaX;
                 deltaY = rawDeltaY;
+
+                absDeltaX = Math.abs(rawDeltaX);
+                absDeltaY = Math.abs(rawDeltaY);
             }
 
             deltaX *= precisionMultiplier;
