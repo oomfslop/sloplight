@@ -438,11 +438,11 @@
 
 	<string name="title_render_mode">渲染模式</string>
 	<string name="title_render_mode_convergence_title">3D 會聚</string>
-	<string name="title_render_mode_convergence_description">參考：50 - 平衡／0 - 在螢幕前方／100 - 在螢幕後方</string>
-	<string name="title_render_mode_balance_shift_title">3D 雙眼平衡</string>
-	<string name="title_render_mode_balance_shift_description">參考：50 - 雙眼各分攤 50% 遠/彈出深度效果／0 - 左眼（100% 彈出）右眼（100% 遠）／100 - 左眼遠、右眼彈出 // 設為 100 或 0 可獲得最佳銳利度，因為總有一個像素在另一眼保持不位移</string>
+	<string name="title_render_mode_convergence_description">參考值：50 - 平衡 / 0 - 螢幕前 / 100 - 螢幕後</string>
+	<string name="title_render_mode_balance_shift_title">3D 視覺平衡</string>
+	<string name="title_render_mode_balance_shift_description">參考值：50 - 雙眼各分擔 50% 的深度效果；0：左眼（100% 凸出）- 右眼（100% 不變）；100：左眼不變、右眼凸出。將數值設為 0 或 100 可獲得更清晰的成像，因為總有一側像素保持未偏移</string>
 	<string name="title_render_mode_strength_title">3D 效果強度</string>
-	<string name="title_render_mode_strength_description">參考：50 - 值越高效果越強，但可能造成眼睛疲勞且不自然；值越低較輕鬆、體驗更順暢。</string>
+	<string name="title_render_mode_strength_description">參考值：50。數值越高效果越強，但可能造成眼睛疲勞且不自然；值越低更護眼，體驗更柔和。</string>
 
 	<string name="title_touchscreen_mode">觸控螢幕模式</string>
 	<string name="summary_render_mode">預設為 2D 或 SBS 3D。3D 會自動加倍寬度並套用效果，無需設定。支援 AI 2D 轉 3D。</string>
@@ -458,7 +458,7 @@
 	<string name="summary_checkbox_onscreen_style_official">若偏好舊版官方虛擬手把按鈕樣式，可選擇此項。\n若選擇底部虛擬按鈕，按鍵外形可為方形【一般按鍵預設為方形】</string>
 
 	<string name="title_checkbox_enable_perf_overlay_lite">啟用精簡模式</string>
-	<string name="summary_checkbox_enable_perf_overlay_lite">顯示簡化的效能資訊：網路速度／延遲／解碼／封包遺失率／FPS</string>
+	<string name="summary_checkbox_enable_perf_overlay_lite">顯示簡化的效能資訊：網路速度 / 延遲 / 解碼 / 封包遺失率 / FPS</string>
 
 	<string name="title_checkbox_enable_perf_logging">啟用效能記錄</string>
 	<string name="summary_checkbox_enable_perf_logging">「離線時」依組態儲存效能資料。</string>
@@ -786,8 +786,8 @@
 	<string name="rename">重新命名</string>
 	<string name="save">儲存</string>
 
-	<string name="title_low_latency_frame_balance">LFR（實驗性）</string>
-	<string name="summary_low_latency_frame_balance">透過丟棄佇列中的影格來最小化延遲。</string>
+	<string name="title_low_latency_frame_balance">低延遲隊列（實驗性）</string>
+	<string name="summary_low_latency_frame_balance">透過丟棄緩衝幀以最小化延遲。</string>
 	<string name="category_perf_monitor_settings">效能監視器</string>
 
 	<string name="title_checkbox_full_screen">啟用全螢幕</string>
