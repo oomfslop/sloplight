@@ -50,6 +50,12 @@ jobs:
         with:
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
+      - name: Cache cargo (macOS)
+        if: runner.os == 'macOS'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sloplight
+
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -129,4 +135,27 @@ jobs:
           path: |
             build/installer-*/*.dsym/*
             build/symbols-*/*.pdb
+          if-no-files-found: error
+
+      - name: Build Sloplight.app (macOS)
+        if: runner.os == 'macOS'
+        working-directory: sloplight
+        run: HELPER_SRC=../build/build-Release/app/Moonlight.app ./scripts/bundle-macos.sh
+        env:
+          # gpui needs macOS 12+, the helper declares 13.0 in its Info.plist.
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+      - name: Package Sloplight (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ditto -c -k --keepParent sloplight/target/Sloplight.app "Sloplight-macos-arm64.zip"
+          shasum -a 256 "Sloplight-macos-arm64.zip" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo 'The app is ad-hoc signed and not notarized: after unzipping, run `xattr -dr com.apple.quarantine Sloplight.app` or right-click → Open the first time.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Sloplight (macOS)
+        uses: actions/upload-artifact@v6
+        if: runner.os == 'macOS'
+        with:
+          name: Sloplight-macos-arm64
+          path: Sloplight-macos-arm64.zip
           if-no-files-found: error
