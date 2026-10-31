@@ -16,7 +16,7 @@ use crate::ui::{InputKind, TextInput, TextInputEvent, ToastKind};
 
 actions!(
     sloplight,
-    [Quit, OpenSettings, AddHost, Refresh, FocusFilter, ToggleInspector, CopyHostAddress, ToggleHiddenApps, QuickLaunch, LaunchOnHost, Back, CloseWindow, SetupGuide, Troubleshooting, Discord, About]
+    [Quit, OpenSettings, AddHost, Refresh, FocusFilter, ToggleInspector, CopyHostAddress, ToggleHiddenApps, QuickLaunch, LaunchOnHost, ShowHostWindows, Back, CloseWindow, SetupGuide, Troubleshooting, Discord, About]
 );
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -160,6 +160,7 @@ pub struct Root {
     /// The app launcher's list of the host it was opened for
     pub launchables: crate::launcher::LaunchablesState,
     pub launcher: Option<crate::views::launcher::LauncherState>,
+    pub window_picker: Option<crate::views::window_picker::WindowPickerState>,
     pub desk_stream: Option<crate::appwindows::DeskStream>,
     pub desk_opening: Option<crate::appwindows::DeskOpening>,
     /// A launch from the launcher waiting for its window (the loader card)
@@ -167,6 +168,19 @@ pub struct Root {
     pub windows_tx: crate::appwindows::WindowsSender,
     /// Stops the "new host windows" watcher that runs while windows are streamed
     pub window_watch_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// The host kept ready for window streaming (its card in the app grid),
+    /// until Sloplight quits
+    pub standby: Option<String>,
+    /// Standing by for windows: when to try again after the desk stream failed
+    pub standby_retry_at: Option<Instant>,
+    pub standby_failures: u32,
+    /// A regular stream waiting for the standby desk stream to end
+    pub after_standby: Option<(String, i32)>,
+    /// The system-wide launcher shortcut, as registered
+    pub hotkeys: [Option<crate::hotkey::HotKey>; 2],
+    pub hotkey_bindings: [String; 2],
+    /// Settings: the next keystroke becomes the launcher shortcut
+    pub recording_hotkey: Option<crate::views::panel::PanelKind>,
     pub cache_dir: PathBuf,
     pub pending_launch: Option<PendingLaunch>,
     pub box_art_requested: HashSet<(String, i32)>,
@@ -184,6 +198,8 @@ pub struct Root {
     pub pending_add_host: bool,
     /// Open the app launcher of this host at the next render (needs the window)
     pub pending_launcher: Option<String>,
+    /// Open the window picker of this host at the next render
+    pub pending_window_picker: Option<String>,
     /// `SLOPLIGHT_DEBUG_STATE`: open a UI state right after the first poll (for screenshots)
     pub debug_state: Option<String>,
     pub debug_state_applied: bool,
@@ -242,11 +258,19 @@ impl Root {
             windows: Default::default(),
             launchables: Default::default(),
             launcher: None,
+            window_picker: None,
             desk_stream: None,
             desk_opening: None,
             launch_pending: None,
             windows_tx,
             window_watch_stop: None,
+            standby: None,
+            standby_retry_at: None,
+            standby_failures: 0,
+            after_standby: None,
+            hotkeys: [None, None],
+            hotkey_bindings: [String::new(), String::new()],
+            recording_hotkey: None,
             cache_dir: cache_dir_copy,
             helper_path,
             window_active: true,
@@ -261,10 +285,24 @@ impl Root {
             grid_columns: 5,
             pending_add_host: false,
             pending_launcher: None,
+            pending_window_picker: None,
             debug_state: None,
             debug_state_applied: false,
         };
         root.spawn_event_pumps(rx, stream_rx, cx);
+        // The system-wide launcher shortcut
+        let (hotkey_tx, mut hotkey_rx) = futures::channel::mpsc::unbounded();
+        crate::hotkey::listen(hotkey_tx);
+        cx.spawn(async move |this, cx| {
+            while let Some(id) = hotkey_rx.next().await {
+                let Some(kind) = crate::views::panel::PanelKind::from_index(id) else { continue };
+                if this.update(cx, |root, cx| crate::views::panel::toggle(root, kind, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        root.sync_hotkey(cx);
         cx.spawn(async move |this, cx| {
             let mut windows_rx = windows_rx;
             while let Some(event) = windows_rx.next().await {
@@ -329,6 +367,8 @@ impl Root {
     }
 
     fn tick(&mut self, cx: &mut Context<Self>) {
+        self.ensure_standby(cx);
+        self.sync_hotkey(cx);
         let before = self.waking.len();
         self.waking.retain(|_, t| t.elapsed() < Duration::from_secs(60));
         if self.waking.len() != before {
@@ -341,6 +381,38 @@ impl Root {
                 self.inactivity_deadline = None;
                 cx.notify();
             }
+    }
+
+    /// Registers the system-wide shortcuts the settings name (none while one
+    /// is being recorded, so pressing a current one records it)
+    pub fn sync_hotkey(&mut self, cx: &mut Context<Self>) {
+        for kind in crate::views::panel::PanelKind::ALL {
+            let i = kind.index();
+            let wanted = if self.recording_hotkey.is_some() { String::new() } else { kind.binding(&self.settings).clone() };
+            if wanted == self.hotkey_bindings[i] {
+                continue;
+            }
+            self.hotkeys[i] = None;
+            self.hotkey_bindings[i] = wanted.clone();
+            if wanted.is_empty() {
+                continue;
+            }
+            match crate::hotkey::HotKey::register(&wanted, i as u32) {
+                Ok(h) => self.hotkeys[i] = Some(h),
+                Err(e) => self.toast(ToastKind::Warning, format!("Couldn't use {} as the {} shortcut: {e}", crate::hotkey::display(&wanted), kind.name()), cx),
+            }
+        }
+    }
+
+    /// Polls hosts again (paused while the window was in the background)
+    pub fn resume_polling(&mut self) {
+        if self.polling_paused {
+            self.polling_paused = false;
+            self.manager.start_polling();
+        }
+        if !self.window_active {
+            self.inactivity_deadline = Some(Instant::now() + Duration::from_secs(5 * 60));
+        }
     }
 
     fn update_polling(&mut self, cx: &mut Context<Self>) {
@@ -634,7 +706,11 @@ impl Root {
         self.start_stream(&host, app_id, cx);
     }
 
-    fn start_stream(&mut self, host: &Host, app_id: i32, cx: &mut Context<Self>) {
+    pub(crate) fn start_stream(&mut self, host: &Host, app_id: i32, cx: &mut Context<Self>) {
+        // The standby desk stream gives way first
+        if self.end_standby_for(&host.uuid, app_id, cx) {
+            return;
+        }
         let Some(app) = host.apps.iter().find(|a| a.id == app_id).cloned() else { return };
         let helper = self.helper_path.clone().or_else(|| stream::find_helper(&self.settings));
         let Some(helper) = helper else {
@@ -1133,6 +1209,38 @@ impl Root {
         let key = ks.key.as_str();
         let cmd = ks.modifiers.platform;
 
+        // Settings: recording a system-wide shortcut (Esc: as it was, Delete: none)
+        if let Some(kind) = self.recording_hotkey {
+            let no_modifiers = !(ks.modifiers.platform || ks.modifiers.control || ks.modifiers.alt || ks.modifiers.shift);
+            match key {
+                "escape" if no_modifiers => self.recording_hotkey = None,
+                "backspace" | "delete" if no_modifiers => {
+                    self.recording_hotkey = None;
+                    kind.binding_mut(&mut self.settings).clear();
+                    self.save_settings();
+                }
+                _ => match crate::hotkey::binding_of(ks) {
+                    Some(binding) => {
+                        self.recording_hotkey = None;
+                        // (one shortcut opens one thing)
+                        for other in crate::views::panel::PanelKind::ALL {
+                            if other != kind && *other.binding(&self.settings) == binding {
+                                other.binding_mut(&mut self.settings).clear();
+                            }
+                        }
+                        *kind.binding_mut(&mut self.settings) = binding;
+                        self.save_settings();
+                    }
+                    // (needs Command, Control or Option: keep listening)
+                    None => {}
+                },
+            }
+            self.sync_hotkey(cx);
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+
         // Text inputs handle their own keys
         if let Some(focused) = window.focused(cx)
             && focused != self.focus_handle {
@@ -1163,8 +1271,13 @@ impl Root {
             return;
         }
 
-        if self.launcher.is_some() {
+        if self.launcher.as_ref().is_some_and(|l| l.panel.is_none()) {
             crate::views::launcher::handle_key(self, event, window, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if self.window_picker.as_ref().is_some_and(|p| p.panel.is_none()) {
+            crate::views::window_picker::handle_key(self, event, window, cx);
             cx.stop_propagation();
             return;
         }
@@ -1437,7 +1550,7 @@ impl Root {
         }
     }
 
-    /// Development aid: `SLOPLIGHT_DEBUG_STATE=settings|settings:N|dropdown:res|dropdown:fps|inspector|pairing|otp|add-host|error|confirm|palette|launcher|host-menu|app-menu|toast`.
+    /// Development aid: `SLOPLIGHT_DEBUG_STATE=settings|settings:N|dropdown:res|dropdown:fps|inspector|pairing|otp|add-host|error|confirm|palette|launcher|windows|host-menu|app-menu|toast`.
     pub fn apply_debug_state(&mut self, state: &str, window: &mut Window, cx: &mut Context<Self>) {
         let uuid = self.selected_host.clone().unwrap_or_default();
         match state.split(':').next().unwrap_or("") {
@@ -1485,6 +1598,7 @@ impl Root {
             "confirm" => self.confirm_quit_app(&uuid, cx),
             "palette" => crate::views::palette::open(self, window, cx),
             "launcher" => self.pending_launcher = Some(uuid.clone()),
+            "windows" => self.pending_window_picker = Some(uuid.clone()),
             "host-menu" => self.popup = Some(Popup { kind: PopupKind::HostMenu(uuid.clone()), position: gpui::point(gpui::px(120.), gpui::px(120.)), highlighted: Some(0) }),
             "app-menu" => {
                 let app_id = self.visible_apps().first().map(|a| a.id).unwrap_or(0);
@@ -1597,8 +1711,10 @@ impl Root {
     pub fn action_back(&mut self, _: &Back, _window: &mut Window, cx: &mut Context<Self>) {
         if self.popup.is_some() {
             self.popup = None;
-        } else if self.launcher.is_some() {
+        } else if self.launcher.as_ref().is_some_and(|l| l.panel.is_none()) {
             self.launcher = None;
+        } else if self.window_picker.as_ref().is_some_and(|p| p.panel.is_none()) {
+            self.window_picker = None;
         } else if self.palette.is_some() {
             self.palette = None;
         } else if self.dialog.is_some() {
@@ -1635,6 +1751,10 @@ impl Root {
 
     pub fn action_launch_on_host(&mut self, _: &LaunchOnHost, window: &mut Window, cx: &mut Context<Self>) {
         crate::views::launcher::open(self, None, window, cx);
+    }
+
+    pub fn action_show_host_windows(&mut self, _: &ShowHostWindows, window: &mut Window, cx: &mut Context<Self>) {
+        crate::views::window_picker::open(self, None, window, cx);
     }
 
 }

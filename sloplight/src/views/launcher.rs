@@ -1,6 +1,7 @@
 //! App launcher (`Cmd+O`): search what the host can launch, like the Start
 //! menu's search: its apps (with their icons), the programs on the host's
 //! PATH, or the command line as typed. The window it opens is streamed.
+//! The system-wide shortcut shows it as a panel of its own over every app.
 
 use gpui::{AnyElement, Context, IntoElement, KeyDownEvent, ParentElement, Styled, Window, div, prelude::*, px};
 
@@ -17,6 +18,8 @@ pub struct LauncherState {
     pub selected: usize,
     /// Rows that fit in the window at the last render
     pub visible: usize,
+    /// Shown in a panel of its own (the system-wide shortcut), not over the main window
+    pub panel: Option<gpui::AnyWindowHandle>,
 }
 
 #[derive(Clone)]
@@ -33,12 +36,23 @@ struct Item {
     kind: Kind,
 }
 
-const SHOWN: usize = 12;
+const SHOWN: usize = crate::views::panel::SHOWN;
 
 /// Opens the launcher for a host (the selected one when `uuid` is None)
 pub fn open(root: &mut Root, uuid: Option<String>, window: &mut Window, cx: &mut Context<Root>) {
     if root.view == ViewMode::Settings || root.dialog.is_some() {
         return;
+    }
+    open_in(root, uuid, None, window, cx);
+}
+
+fn open_in(root: &mut Root, uuid: Option<String>, panel: Option<gpui::AnyWindowHandle>, window: &mut Window, cx: &mut Context<Root>) {
+    // (one palette at a time: a panel goes when this opens elsewhere)
+    if root.launcher.as_ref().is_some_and(|l| l.panel.is_some() && l.panel != panel) {
+        close(root, cx);
+    }
+    if root.window_picker.is_some() {
+        crate::views::window_picker::close(root, cx);
     }
     let Some(host) = uuid.and_then(|u| root.host_by_uuid(&u).cloned()).or_else(|| root.selected().cloned()) else { return };
     if !(host.is_online() && host.is_paired() && Root::host_supports_windows(&host)) {
@@ -80,16 +94,26 @@ pub fn open(root: &mut Root, uuid: Option<String>, window: &mut Window, cx: &mut
     if stale {
         root.refresh_launchables(&host.uuid, false, cx);
     }
-    root.launcher = Some(LauncherState { host_uuid: host.uuid.clone(), input, query: String::new(), selected: 0, visible: SHOWN });
+    root.launcher = Some(LauncherState { host_uuid: host.uuid.clone(), input, query: String::new(), selected: 0, visible: SHOWN, panel });
     root.palette = None;
     root.popup = None;
     cx.notify();
 }
 
-fn close(root: &mut Root, cx: &mut Context<Root>) {
-    root.launcher = None;
-    root.focus_main(cx);
+pub fn close(root: &mut Root, cx: &mut Context<Root>) {
+    match root.launcher.take().and_then(|l| l.panel) {
+        Some(panel) => crate::views::panel::remove(panel, cx),
+        None => root.focus_main(cx),
+    }
 }
+
+/// Opens the launcher in a panel window (see `panel`)
+pub fn open_panel(root: &mut Root, uuid: String, panel: gpui::AnyWindowHandle, window: &mut Window, cx: &mut Context<Root>) {
+    open_in(root, Some(uuid), Some(panel), window, cx);
+}
+
+/// Height of a row
+pub const ROW: f32 = 36.;
 
 pub fn handle_key(root: &mut Root, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Root>) {
     if event.keystroke.key == "escape" {
@@ -103,7 +127,13 @@ fn launch_selected(root: &mut Root, cx: &mut Context<Root>) {
     let Some(item) = list.into_iter().nth(l.selected) else { return };
     let uuid = l.host_uuid.clone();
     let query = l.query.trim().to_string();
+    let from_panel = l.panel.is_some();
     close(root, cx);
+    if from_panel {
+        // Active, so the stream can be handed the activation when its window
+        // shows (macOS lets only the active app give it away)
+        cx.activate(true);
+    }
     let target = match item.kind {
         Kind::App { id, .. } => {
             root.settings.launcher_recent.retain(|r| r != &id);
@@ -169,10 +199,12 @@ fn items(root: &Root) -> Vec<Item> {
 }
 
 pub fn render(root: &mut Root, theme: &Theme, window: &mut Window, cx: &mut Context<Root>) -> Option<AnyElement> {
-    // As many rows as fit under the search field in this window
+    // As many rows as fit under the search field in this window (the panel
+    // is made to fit them all)
+    let panel = root.launcher.as_ref().is_some_and(|l| l.panel.is_some());
     let height = f32::from(window.bounds().size.height);
-    let top = (height * 0.12).min(110.);
-    let fit = ((height - top - 44. - 28. - 8. - 24.) / 36.).floor().max(3.) as usize;
+    let top = if panel { 0. } else { (height * 0.12).min(110.) };
+    let fit = if panel { SHOWN } else { ((height - top - 44. - 28. - 8. - 24.) / 36.).floor().max(3.) as usize };
     let mut list = items(root);
     list.truncate(fit);
     if let Some(l) = &mut root.launcher {
@@ -267,33 +299,48 @@ pub fn render(root: &mut Root, theme: &Theme, window: &mut Window, cx: &mut Cont
         .child(div().flex().items_center().gap(px(4.)).child(kbd(theme, "⏎")).child("launch and stream"))
         .child(div().flex().items_center().gap(px(4.)).child(kbd(theme, "↑↓")).child("choose"))
         .child(div().flex().items_center().gap(px(4.)).child(kbd(theme, "esc")).child("close"));
-    Some(
-        div()
-            .id("launcher-scrim")
-            .absolute()
-            .inset_0()
-            .bg(theme.scrim)
-            .occlude()
-            .flex()
-            .justify_center()
-            .items_start()
-            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| close(this, cx)))
-            .child(
-                div()
-                    .id("launcher")
-                    .mt(px(top))
-                    .w(px(600.))
-                    .rounded(px(10.))
-                    .bg(theme.elevated)
-                    .border_1()
-                    .border_color(theme.border)
-                    .shadow(vec![gpui::BoxShadow { color: theme.shadow, offset: gpui::point(px(0.), px(6.)), blur_radius: px(24.), spread_radius: px(0.), inset: false }])
-                    .overflow_hidden()
-                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(header)
-                    .child(rows)
-                    .child(footer),
-            )
-            .into_any_element(),
-    )
+    if panel {
+        return Some(card("launcher", theme, header, rows, footer).shadow(card_shadow(theme)).into_any_element());
+    }
+    Some(frame("launcher", theme, top, header, rows, footer, close, cx))
+}
+
+pub fn card_shadow(theme: &Theme) -> Vec<gpui::BoxShadow> {
+    vec![gpui::BoxShadow { color: theme.shadow, offset: gpui::point(px(0.), px(6.)), blur_radius: px(24.), spread_radius: px(0.), inset: false }]
+}
+
+/// The card of a launcher-style palette
+pub fn card(id: &'static str, theme: &Theme, header: impl IntoElement, rows: impl IntoElement, footer: impl IntoElement) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .w(px(600.))
+        .rounded(px(10.))
+        .bg(theme.elevated)
+        .border_1()
+        .border_color(theme.border)
+        .overflow_hidden()
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(header)
+        .child(rows)
+        .child(footer)
+}
+
+/// The card of a launcher-style palette over a scrim; a click outside closes it
+pub fn frame(id: &'static str, theme: &Theme, top: f32, header: impl IntoElement, rows: impl IntoElement, footer: impl IntoElement, close: fn(&mut Root, &mut Context<Root>), cx: &mut Context<Root>) -> AnyElement {
+    div()
+        .id(gpui::ElementId::Name(format!("{id}-scrim").into()))
+        .absolute()
+        .inset_0()
+        .bg(theme.scrim)
+        .occlude()
+        .flex()
+        .justify_center()
+        .items_start()
+        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| close(this, cx)))
+        .child(
+            card(id, theme, header, rows, footer)
+                .mt(px(top))
+                .shadow(card_shadow(theme)),
+        )
+        .into_any_element()
 }

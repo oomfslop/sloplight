@@ -248,6 +248,7 @@ void Launcher::execute()
         info.dpi = aw.value("dpi").toInt(96);
         info.pointsPerPx = aw.value("points_per_px").toDouble(0);
         info.desk = aw.value("desk").toBool(true);
+        info.standby = aw.value("standby").toBool(false);
         if (!info.desk) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "app_window.desk=false is no longer supported; app windows are desk sessions");
         }

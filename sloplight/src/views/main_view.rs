@@ -257,8 +257,8 @@ impl Root {
             let hover_bg = theme.element_hover;
             let open_bg = theme.selection_unfocused;
             let uuid = host.uuid.clone();
-            // App-window streaming: a "Windows" picker next to the host name
-            // (opens the host popover, whose Windows section lists them).
+            // App-window streaming: a "Windows" button next to the host name
+            // opens the window picker.
             let windows_button = if host.is_paired() && host.is_online() && Self::host_supports_windows(&host) {
                 let n = match &self.desk_stream {
                     Some(ds) if ds.host_uuid == host.uuid => {
@@ -272,12 +272,24 @@ impl Root {
                     }
                     _ => 0,
                 };
-                let label = if n > 0 { format!("Windows · {n} streaming") } else { "Windows".to_string() };
+                let ready = self.desk_stream.as_ref().is_some_and(|ds| ds.host_uuid == host.uuid && ds.connected);
+                let label = if n > 0 {
+                    format!("Windows · {n} streaming")
+                } else if ready {
+                    "Windows · ready".to_string()
+                } else {
+                    "Windows".to_string()
+                };
+                let picker_uuid = host.uuid.clone();
                 Some(
                     button("host-windows", label)
                         .ghost()
                         .icon(icon::APP_WINDOW)
-                        .on_click(cx.listener(|this, _, _, cx| this.open_host_info(cx))),
+                        .kbd("⇧⌘O")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.pending_window_picker = Some(picker_uuid.clone());
+                            cx.notify();
+                        })),
                 )
             } else {
                 None
@@ -431,6 +443,10 @@ impl Root {
             tiles.push(self.render_tile(theme, &uuid, app, i, tile_w, tile_h, selected && focused, host.current_game_id == app.id, launching == Some(app.id), cx));
         }
         let hidden_tiles: Vec<AnyElement> = tiles.split_off(split);
+        // Window streaming: keep the host ready (after the visible apps)
+        if host.is_paired() && host.is_online() && Self::host_supports_windows(host) {
+            tiles.push(self.render_standby_tile(theme, host, tile_w, tile_h, cx));
+        }
         let wrap = move |tiles: Vec<AnyElement>| div().flex().flex_wrap().gap_x(px(l.gap_x)).gap_y(px(l.gap_y)).children(tiles);
         let mut column = div().flex().flex_col().px(px(l.pad)).pt(px(l.pad_top)).pb(px(l.pad));
         if !tiles.is_empty() {
@@ -485,6 +501,71 @@ impl Root {
             .child(div().invisible().group_hover("hh", |s| s.visible()).child(kbd(theme, "⇧⌘H")))
             .on_click(cx.listener(|this, _, w, cx| this.action_toggle_hidden(&crate::app::ToggleHiddenApps, w, cx)))
             .into_any_element()
+    }
+
+    /// "Keep windows ready": a card among the apps that keeps an empty
+    /// window stream to the host open (until Sloplight quits), so windows
+    /// and launched apps show up at once
+    fn render_standby_tile(&mut self, theme: &Theme, host: &Host, tile_w: f32, tile_h: f32, cx: &mut Context<Self>) -> AnyElement {
+        let on = self.standby.as_deref() == Some(host.uuid.as_str());
+        let ready = on && self.desk_stream.as_ref().is_some_and(|ds| ds.host_uuid == host.uuid && ds.connected);
+        let status = if !on {
+            "Off"
+        } else if ready {
+            "Ready"
+        } else if self.standby_retry_at.is_some() {
+            "Retrying soon"
+        } else {
+            "Connecting…"
+        };
+        let large = tile_w >= LARGE_TILE_W;
+        let (radius, icon_size, caption_gap) = if large { (8., 32., 8.) } else { (6., 24., 6.) };
+        let hover_overlay = theme.text.alpha(0.06);
+        let uuid = host.uuid.clone();
+        let art = div()
+            .w(px(tile_w))
+            .h(px(tile_h))
+            .rounded(px(radius))
+            .bg(theme.surface)
+            .border_1()
+            .border_color(theme.text.alpha(0.06))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(6.))
+            .child(icon_el(icon::APP_WINDOW, icon_size, if on { theme.accent } else { theme.text_muted }))
+            .child(div().text_size(type_scale::SM).text_color(if ready { theme.accent } else { theme.text_muted }).child(status));
+        let card = div()
+            .id("standby-tile")
+            .group("standby")
+            .flex()
+            .flex_col()
+            .gap(px(caption_gap))
+            .w(px(tile_w))
+            .cursor_pointer()
+            .child(
+                div()
+                    .relative()
+                    .w(px(tile_w))
+                    .h(px(tile_h))
+                    .child(art)
+                    .child(div().absolute().inset_0().rounded(px(radius)).invisible().group_hover("standby", move |s| s.visible().bg(hover_overlay)))
+                    .when(on, |d| d.child(div().absolute().top(px(-4.)).left(px(-4.)).right(px(-4.)).bottom(px(-4.)).rounded(px(radius + 4.)).border_2().border_color(theme.accent))),
+            )
+            .child(
+                div()
+                    .px(px(2.))
+                    .text_size(if large { type_scale::BASE } else { type_scale::SM })
+                    .line_height(if large { type_scale::LH_BASE } else { type_scale::LH_SM })
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .text_color(theme.text)
+                    .child("Keep windows ready"),
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_standby(&uuid, cx)));
+        with_tooltip(card, "Keeps a connection to the host open with nothing streamed, so windows and launched apps show up almost at once. Sends next to no data while idle. Stays on until you quit Sloplight.", None).into_any_element()
     }
 
     #[allow(clippy::too_many_arguments)]

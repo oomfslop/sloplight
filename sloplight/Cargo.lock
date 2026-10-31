@@ -4902,6 +4902,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "percent-encoding",
  "rand 0.8.8",
+ "raw-window-handle",
  "rcgen",
  "roxmltree 0.21.1",
  "rsa",

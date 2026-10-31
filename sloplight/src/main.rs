@@ -4,6 +4,7 @@ mod launcher;
 mod assets;
 mod backend;
 mod display;
+mod hotkey;
 mod settings;
 mod stream;
 mod theme;
@@ -14,7 +15,7 @@ use std::path::PathBuf;
 
 use gpui::{App, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBounds, WindowOptions, point, prelude::*, px, size};
 
-use app::{AddHost, Back, CloseWindow, FocusFilter, LaunchOnHost, OpenSettings, QuickLaunch, Quit, Refresh, Root, ToggleHiddenApps, ToggleInspector, CopyHostAddress};
+use app::{AddHost, Back, CloseWindow, FocusFilter, LaunchOnHost, OpenSettings, ShowHostWindows, QuickLaunch, Quit, Refresh, Root, ToggleHiddenApps, ToggleInspector, CopyHostAddress};
 
 fn config_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("SLOPLIGHT_CONFIG_DIR") {
@@ -197,7 +198,9 @@ fn stream_cli(host_q: &str, app_q: &str, seconds: u64) -> i32 {
     // App-window test mode: SLOPLIGHT_WINDOW_HANDLE=0x... opens the host's desk,
     // streams it and adopts that window onto it (the helper follows the desk's
     // layout itself; SLOPLIGHT_ADOPT_MORE=0x..,0x.. adopts more windows).
+    // "standby": the desk with no window, standing by.
     let window_hwnd = std::env::var("SLOPLIGHT_WINDOW_HANDLE").ok().filter(|v| !v.is_empty());
+    let standby = window_hwnd.as_deref() == Some("standby");
     let http = {
         let addr = host.active_address.clone().or_else(|| host.unique_addresses().into_iter().next()).expect("host address");
         backend::http::NvHttp::new(addr, host.active_https_port, host.server_cert(), !host.is_nvidia_server_software, identity.clone())
@@ -206,7 +209,7 @@ fn stream_cli(host_q: &str, app_q: &str, seconds: u64) -> i32 {
     // Desk mode: open the host's desk for a screen like this Mac's, stream it,
     // and adopt the window onto it.
     let screen = display::displays().first().map(|d| [0, 0, d.points.0, d.points.1]).unwrap_or([0, 0, 1728, 1117]);
-    let window = if let Some(hwnd) = &window_hwnd {
+    let window = 'window: { if let Some(hwnd) = &window_hwnd {
         let windows = match http.get_host_windows() {
             Ok(w) => w,
             Err(e) => {
@@ -214,11 +217,12 @@ fn stream_cli(host_q: &str, app_q: &str, seconds: u64) -> i32 {
                 return 1;
             }
         };
-        let Some(w) = windows.iter().find(|w| w.hwnd.eq_ignore_ascii_case(hwnd)) else {
+        let w = windows.iter().find(|w| w.hwnd.eq_ignore_ascii_case(hwnd));
+        if w.is_none() && !standby {
             eprintln!("Window {hwnd} not found on the host; known: {:?}", windows.iter().map(|w| format!("{} {}", w.hwnd, w.title)).collect::<Vec<_>>());
             return 2;
-        };
-        let icon = http.get_window_icon(&w.hwnd).unwrap_or_default();
+        }
+        let icon = w.map(|w| http.get_window_icon(&w.hwnd).unwrap_or_default()).unwrap_or_default();
         let plan = appwindows::desk_plan(&settings, (screen[2], screen[3]), app::Root::screen_backing_scale());
         let k = 1.0 / plan.points_per_px;
         let dpi = std::env::var("SLOPLIGHT_DESK_DPI").ok().and_then(|v| v.parse().ok()).unwrap_or(plan.dpi);
@@ -236,7 +240,11 @@ fn stream_cli(host_q: &str, app_q: &str, seconds: u64) -> i32 {
         settings.fps = desk.fps;
         settings.window_mode = settings::WindowMode::Windowed;
         settings.hide_host_cursor = true;
-        let cfg = stream::AppWindowConfig { icon_png_base64: stream::base64_encode(&icon), dpi: desk.dpi, points_per_px: plan.points_per_px as f64, desk: true, screen };
+        let cfg = stream::AppWindowConfig { icon_png_base64: stream::base64_encode(&icon), dpi: desk.dpi, points_per_px: plan.points_per_px as f64, desk: true, screen, standby };
+        let Some(w) = w else {
+            log::info!("[stream-cli] desk {}x{} standing by", settings.width, settings.height);
+            break 'window Some((appwindows::DESK_STREAM_ID.to_string(), cfg));
+        };
         let (sw, sh) = ((screen[2] as f32 * k) as i32, (screen[3] as f32 * k) as i32);
         let kw = dpi as f32 / w.dpi.max(48) as f32;
         let (ww, wh) = ((w.rect[2] as f32 * kw) as i32, (w.rect[3] as f32 * kw) as i32);
@@ -254,7 +262,7 @@ fn stream_cli(host_q: &str, app_q: &str, seconds: u64) -> i32 {
         Some((appwindows::DESK_STREAM_ID.to_string(), cfg))
     } else {
         None
-    };
+    } };
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     let process = match stream::start_with_window(&helper, &identity, host, app, &settings, None, tx, window.clone()) {
         Ok(p) => p,
@@ -377,6 +385,7 @@ fn main() {
             KeyBinding::new("cmd-shift-h", ToggleHiddenApps, None),
             KeyBinding::new("cmd-k", QuickLaunch, None),
             KeyBinding::new("cmd-o", LaunchOnHost, None),
+            KeyBinding::new("cmd-shift-o", ShowHostWindows, None),
             KeyBinding::new("cmd-w", CloseWindow, None),
         ]);
         cx.on_action(|_: &CloseWindow, cx| cx.hide());
@@ -391,7 +400,7 @@ fn main() {
                     MenuItem::action("Quit", Quit),
                 ],
             },
-            Menu { name: "File".into(), disabled: false, items: vec![MenuItem::action("Add Host…", AddHost), MenuItem::action("Launch App on Host…", LaunchOnHost), MenuItem::action("Refresh", Refresh)] },
+            Menu { name: "File".into(), disabled: false, items: vec![MenuItem::action("Add Host…", AddHost), MenuItem::action("Launch App on Host…", LaunchOnHost), MenuItem::action("Stream Host Window…", ShowHostWindows), MenuItem::action("Refresh", Refresh)] },
             Menu {
                 name: "View".into(),
                 disabled: false,
@@ -416,6 +425,8 @@ fn main() {
                 titlebar: Some(TitlebarOptions { title: Some("Moonlight".into()), appears_transparent: true, traffic_light_position: Some(point(px(9.), px(11.))) }),
                 window_min_size: Some(size(px(680.), px(440.))),
                 app_id: Some("com.sloplight.moonlight".into()),
+                // In the background only spinners animate: a few frames a second do
+                inactive_frame_interval: Some(std::time::Duration::from_millis(100)),
                 ..Default::default()
             },
             move |window, cx| cx.new(|cx| Root::new(window, cx, config_dir, cache_dir, settings, identity)),

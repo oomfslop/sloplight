@@ -18,9 +18,15 @@ impl Root {
         if let Some(palette) = crate::views::palette::render(self, &theme, window, cx) {
             out.push(palette);
         }
-        if let Some(launcher) = crate::views::launcher::render(self, &theme, window, cx) {
-            out.push(launcher);
-        }
+        // (the system-wide shortcut's launcher is a panel of its own)
+        if self.launcher.as_ref().is_some_and(|l| l.panel.is_none())
+            && let Some(launcher) = crate::views::launcher::render(self, &theme, window, cx) {
+                out.push(launcher);
+            }
+        if self.window_picker.as_ref().is_some_and(|p| p.panel.is_none())
+            && let Some(picker) = crate::views::window_picker::render(self, &theme, window, cx) {
+                out.push(picker);
+            }
         if let Some(popup) = self.render_popup(&theme, window, cx) {
             out.push(popup);
         }

@@ -141,6 +141,7 @@ public:
         int dpi = 96;             // host DPI of the desk
         double pointsPerPx = 0;   // Mac points per desk pixel (0: from dpi, 96 dpi to the point)
         bool desk = true;         // accepted from the config; app windows are always desk sessions
+        bool standby = false;     // an empty desk keeps the stream: standing by for windows
         QRect screenPts;
     };
     void setAppWindow(const AppWindowInfo& info) { m_AppWindow = info; m_IsAppWindow = true; }
@@ -369,6 +370,9 @@ private:
     QVector<DeskWin> m_DeskWindows;
     QSet<QString> m_DeskIconsRequested;
     std::shared_ptr<std::atomic<bool>> m_DeskPollStop;
+    // Standing by: the stream stays when the desk has no windows (the
+    // "standby" command changes it)
+    std::shared_ptr<std::atomic<bool>> m_DeskStandby = std::make_shared<std::atomic<bool>>(false);
     // Window ops go out in order on one thread; moves and resizes of a window
     // coalesce (only the latest is sent) so a drag never queues up.
     struct DeskSender {

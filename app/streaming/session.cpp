@@ -1832,6 +1832,10 @@ void Session::handleAppWindowCommand(const QJsonObject& cmd)
         deskwm_command(QJsonDocument(cmd).toJson(QJsonDocument::Compact).constData());
         return;
     }
+    if (kind == "standby") {
+        m_DeskStandby->store(cmd.value("on").toBool());
+        return;
+    }
     if (!m_Window) {
         return;
     }
@@ -2060,13 +2064,16 @@ void Session::startDeskPoller()
 {
     m_DeskPollStop = std::make_shared<std::atomic<bool>>(false);
     auto stop = m_DeskPollStop;
+    m_DeskStandby->store(m_AppWindow.standby);
+    auto standby = m_DeskStandby;
     NvComputer* computer = m_Computer;
     // A QThread, not a std::thread: NvHTTP is Qt networking and needs a thread
     // Qt owns (an event loop per request, timers, the access manager).
-    QThread* poller = QThread::create([stop, computer]() {
+    QThread* poller = QThread::create([stop, standby, computer]() {
         quint64 etag = 0;
         int failures = 0;
         bool hadWindows = false;
+        bool empty = true;
         qint64 emptySince = 0;
         NvHTTP http(computer);
         // The connection stays open between polls: the next poll is waiting
@@ -2076,7 +2083,9 @@ void Session::startDeskPoller()
         while (!stop->load()) {
             QString body;
             try {
-                body = http.deskLayout(etag, 1000);
+                // An empty desk (standing by) changes when a window comes:
+                // the host answers then, so the poll can wait long
+                body = http.deskLayout(etag, empty && standby->load() ? 25000 : 1000);
                 failures = 0;
             } catch (const GfeHttpResponseException& e) {
                 SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Desk layout: %s", qPrintable(e.toQString()));
@@ -2103,8 +2112,12 @@ void Session::startDeskPoller()
             }
             QJsonObject layout = doc.object();
             // Every window gone (closed on the host or here): the stream is over
-            if (!layout.value("windows").toArray().isEmpty()) {
+            empty = layout.value("windows").toArray().isEmpty();
+            if (!empty) {
                 hadWindows = true;
+                emptySince = 0;
+            }
+            else if (standby->load()) {
                 emptySince = 0;
             }
             else if (hadWindows) {

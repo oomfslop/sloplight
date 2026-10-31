@@ -13,6 +13,8 @@ pub enum PaletteAction {
     LaunchApp { uuid: String, app_id: i32 },
     /// The app launcher of a host (window streaming)
     OpenLauncher { uuid: String },
+    /// The window picker of a host (window streaming)
+    OpenWindowPicker { uuid: String },
     HostPrimary { uuid: String },
     HostDetails { uuid: String },
     AddHost,
@@ -95,6 +97,7 @@ fn run_selected(root: &mut Root, cx: &mut Context<Root>) {
             root.launch(&uuid, app_id, cx);
         }
         PaletteAction::OpenLauncher { uuid } => root.pending_launcher = Some(uuid),
+        PaletteAction::OpenWindowPicker { uuid } => root.pending_window_picker = Some(uuid),
         PaletteAction::HostPrimary { uuid } => root.activate_host(&uuid, cx),
         PaletteAction::HostDetails { uuid } => {
             root.select_host(Some(uuid), cx);
@@ -151,6 +154,7 @@ pub fn items(root: &Root) -> Vec<PaletteItem> {
         push(1, PaletteItem { label: format!("{} {}", if verb == "Open" { "Go to" } else { verb }, host.name), detail: String::new(), icon: if verb == "Wake" { icon::POWER } else { icon::MONITOR }, running: false, action: PaletteAction::HostPrimary { uuid: host.uuid.clone() } });
         if host.is_online() && host.is_paired() && Root::host_supports_windows(host) {
             push(1, PaletteItem { label: format!("Launch an app on {}", host.name), detail: "⌘O".into(), icon: icon::APP_WINDOW, running: false, action: PaletteAction::OpenLauncher { uuid: host.uuid.clone() } });
+            push(1, PaletteItem { label: format!("Stream a window from {}", host.name), detail: "⇧⌘O".into(), icon: icon::APP_WINDOW, running: false, action: PaletteAction::OpenWindowPicker { uuid: host.uuid.clone() } });
         }
         push(1, PaletteItem { label: format!("{} info", host.name), detail: String::new(), icon: icon::INFO, running: false, action: PaletteAction::HostDetails { uuid: host.uuid.clone() } });
     }

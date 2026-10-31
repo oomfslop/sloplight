@@ -45,6 +45,8 @@ pub struct DeskStream {
     pub points_per_px: f32,
     /// A window to focus once the helper is connected (a launched app)
     pub focus_on_connect: Option<String>,
+    /// The helper keeps the stream while the desk is empty (standing by)
+    pub standby: bool,
 }
 
 /// The desk being opened on the host (in the background: a slow link takes
@@ -347,6 +349,7 @@ impl Root {
                 // Waits in the helper until the window shows up there
                 self.focus_streamed_window(&w.hwnd);
             }
+            self.ensure_window_watch(&host);
             let tx = self.windows_tx.clone();
             std::thread::spawn(move || {
                 if let Err(e) = http.window_action(&w.hwnd, "adopt", x, y, 0, 0) {
@@ -364,9 +367,18 @@ impl Root {
             self.toast(ToastKind::Error, "The host lists no apps; can't start a window stream", cx);
             return;
         }
+        self.open_desk(&host, vec![(w, focus)], cx);
+    }
+
+    /// Opens the host's desk for this screen in the background and starts
+    /// its stream with these windows (none: standing by)
+    fn open_desk(&mut self, host: &Host, windows: Vec<(HostWindow, bool)>, cx: &mut Context<Self>) {
+        let Some(http) = host.http(self.identity.clone()) else { return };
         // The desk mirrors the screen the launcher is on, at the host window's DPI
         let Some(display) = cx.primary_display() else {
-            self.toast(ToastKind::Error, "No display to mirror", cx);
+            if !windows.is_empty() {
+                self.toast(ToastKind::Error, "No display to mirror", cx);
+            }
             return;
         };
         let b = display.bounds();
@@ -374,7 +386,7 @@ impl Root {
         let plan = desk_plan(&self.settings, (screen[2], screen[3]), Self::screen_backing_scale());
         let fps = self.settings.fps.max(30);
         let options = desk_options(&self.settings, &plan);
-        self.desk_opening = Some(DeskOpening { host_uuid: host.uuid.clone(), windows: vec![(w, focus)] });
+        self.desk_opening = Some(DeskOpening { host_uuid: host.uuid.clone(), windows });
         // A round trip or more to the host: not on the UI thread
         let tx = self.windows_tx.clone();
         let host_uuid = host.uuid.clone();
@@ -402,24 +414,35 @@ impl Root {
         };
         let Some(host) = self.host_by_uuid(&host_uuid).cloned() else { return };
         let Some(http) = host.http(self.identity.clone()) else { return };
+        let standing_by = opening.windows.is_empty();
         let desk = match result {
             Ok(d) => d,
             Err(e) => {
                 self.launch_pending = None;
-                self.toast(ToastKind::Error, format!("Couldn't open the desk on the host: {e}"), cx);
+                if standing_by {
+                    log::warn!("standby: couldn't open the desk: {e}");
+                    self.standby_failed();
+                } else {
+                    self.toast(ToastKind::Error, format!("Couldn't open the desk on the host: {e}"), cx);
+                }
                 return;
             }
         };
         let mut windows = opening.windows.into_iter();
-        let Some((w, focus)) = windows.next() else { return };
-        log::info!("desk {} {:?} @{} {} dpi for a {}x{} pt screen ({}x{} px wanted)", desk.display, desk.rect, desk.fps, desk.dpi, screen[2], screen[3], plan.size.0, plan.size.1);
+        let first = windows.next();
+        log::info!("desk {} {:?} @{} {} dpi for a {}x{} pt screen ({}x{} px wanted){}", desk.display, desk.rect, desk.fps, desk.dpi, screen[2], screen[3], plan.size.0, plan.size.1, if standing_by { ", standing by" } else { "" });
         let fail = |this: &mut Self, message: String, cx: &mut Context<Self>| {
             let http = http.clone();
             std::thread::spawn(move || {
                 let _ = http.close_desk();
             });
             this.launch_pending = None;
-            this.toast(ToastKind::Error, message, cx);
+            if standing_by {
+                log::warn!("standby: {message}");
+                this.standby_failed();
+            } else {
+                this.toast(ToastKind::Error, message, cx);
+            }
         };
         let helper = self.helper_path.clone().or_else(|| stream::find_helper(&self.settings));
         let Some(helper) = helper else {
@@ -432,7 +455,7 @@ impl Root {
             fail(self, "The host lists no apps; can't start a window stream".into(), cx);
             return;
         };
-        let icon_png = self.windows.icons.get(&w.icon).and_then(|p| std::fs::read(p).ok()).unwrap_or_default();
+        let icon_png = first.as_ref().and_then(|(w, _)| self.windows.icons.get(&w.icon)).and_then(|p| std::fs::read(p).ok()).unwrap_or_default();
         let mut settings = self.settings.clone();
         settings.bitrate_kbps = settings.app_window_bitrate_kbps.clamp(2000, 150000);
         (settings.width, settings.height) = desk.stream_size();
@@ -441,38 +464,45 @@ impl Root {
         settings.hide_host_cursor = true;
         settings.enable_vsync = false;
         settings.frame_pacing = false;
-        let cfg = AppWindowConfig { icon_png_base64: stream::base64_encode(&icon_png), dpi: desk.dpi, points_per_px: plan.points_per_px as f64, desk: true, screen };
+        let standby = self.standby.as_deref() == Some(host.uuid.as_str());
+        let cfg = AppWindowConfig { icon_png_base64: stream::base64_encode(&icon_png), dpi: desk.dpi, points_per_px: plan.points_per_px as f64, desk: true, screen, standby };
         match stream::start_with_window(&helper, &self.identity, &host, &app, &settings, None, self.stream_tx.clone(), Some((DESK_STREAM_ID.to_string(), cfg))) {
             Ok(process) => {
                 let points_per_px = plan.points_per_px;
-                let (x, y) = Self::adopt_position(&w, points_per_px, desk.dpi, cx);
-                let adopt_http = http.clone();
-                let hwnd_s = w.hwnd.clone();
-                std::thread::spawn(move || {
-                    if let Err(e) = adopt_http.window_action(&hwnd_s, "adopt", x, y, 0, 0) {
-                        log::warn!("adopt {hwnd_s}: {e}");
-                    }
-                    if focus {
-                        let _ = adopt_http.window_action(&hwnd_s, "activate", 0, 0, 0, 0);
-                    }
-                });
+                if let Some((w, focus)) = &first {
+                    let (x, y) = Self::adopt_position(w, points_per_px, desk.dpi, cx);
+                    let adopt_http = http.clone();
+                    let hwnd_s = w.hwnd.clone();
+                    let focus = *focus;
+                    std::thread::spawn(move || {
+                        if let Err(e) = adopt_http.window_action(&hwnd_s, "adopt", x, y, 0, 0) {
+                            log::warn!("adopt {hwnd_s}: {e}");
+                        }
+                        if focus {
+                            let _ = adopt_http.window_action(&hwnd_s, "activate", 0, 0, 0, 0);
+                        }
+                    });
+                }
                 self.desk_stream = Some(DeskStream {
                     host_uuid: host.uuid.clone(),
                     desk,
                     process,
                     connected: false,
                     error_lines: Vec::new(),
-                    adopted: vec![w.hwnd.to_ascii_lowercase()],
+                    adopted: first.iter().map(|(w, _)| w.hwnd.to_ascii_lowercase()).collect(),
                     points_per_px,
-                    focus_on_connect: focus.then(|| w.hwnd.clone()),
+                    focus_on_connect: first.as_ref().filter(|(_, focus)| *focus).map(|(w, _)| w.hwnd.clone()),
+                    standby,
                 });
-                self.ensure_window_watch(&host);
+                if first.is_some() {
+                    self.ensure_window_watch(&host);
+                }
                 // The ones asked for while the desk was opening
                 for (w, focus) in windows {
                     self.stream_window(&host_uuid, w, focus, cx);
                 }
             }
-            Err(e) => fail(self, format!("Couldn't stream {}: {e}", w.title), cx),
+            Err(e) => fail(self, format!("Couldn't stream {}: {e}", first.as_ref().map(|(w, _)| w.title.as_str()).unwrap_or("the desk")), cx),
         }
         cx.notify();
     }
@@ -510,7 +540,7 @@ impl Root {
     }
 
     /// Stops streaming one window: it goes back to where it was on the host.
-    /// The desk stream ends with its last window.
+    /// The desk stream ends with its last window, unless it stands by.
     pub fn close_window_stream(&mut self, hwnd: &str, cx: &mut Context<Self>) {
         let Some(ds) = &mut self.desk_stream else { return };
         let host_uuid = ds.host_uuid.clone();
@@ -520,7 +550,11 @@ impl Root {
         let others_on_desk = self.windows.windows.iter().any(|w| {
             !w.hwnd.eq_ignore_ascii_case(hwnd) && w.monitor.eq_ignore_ascii_case(&desk_display) && w.state != "minimized"
         });
-        let last = adopted_left == 0 && !others_on_desk;
+        let empty = adopted_left == 0 && !others_on_desk;
+        let last = empty && !ds.standby;
+        if adopted_left == 0 {
+            self.stop_window_watch();
+        }
         let Some(host) = self.host_by_uuid(&host_uuid).cloned() else { return };
         let Some(ds) = &mut self.desk_stream else { return };
         if let Some(http) = host.http(self.identity.clone()) {
@@ -558,6 +592,7 @@ impl Root {
         match event.event {
             HelperEvent::ConnectionStarted => {
                 ds.connected = true;
+                self.standby_failures = 0;
                 if let Some(hwnd) = ds.focus_on_connect.take() {
                     self.focus_streamed_window(&hwnd);
                 }
@@ -576,6 +611,9 @@ impl Root {
                 } else if kind == "close" {
                     if let Some(h) = hwnd {
                         ds.adopted.retain(|a| !a.eq_ignore_ascii_case(&h));
+                        if ds.adopted.is_empty() {
+                            self.stop_window_watch();
+                        }
                     } else {
                         // The hidden key window was closed: end the desk
                         self.close_desk_stream(cx);
@@ -586,7 +624,11 @@ impl Root {
             HelperEvent::Exited { code, .. } => {
                 let ds = self.desk_stream.take().unwrap();
                 self.launch_pending = None;
-                if !ds.connected && code != Some(0) {
+                if ds.standby && ds.adopted.is_empty() && self.after_standby.is_none() {
+                    // (stood by and lost the host: asleep, restarted, offline)
+                    log::info!("standby: desk stream ended ({code:?}); trying again later");
+                    self.standby_failed();
+                } else if !ds.connected && code != Some(0) {
                     let why = if ds.error_lines.is_empty() { format!("helper exited with code {code:?}") } else { ds.error_lines.join(" ") };
                     self.toast(ToastKind::Error, format!("Couldn't stream the desk: {why}"), cx);
                 }
@@ -596,9 +638,83 @@ impl Root {
                     });
                 }
                 self.stop_window_watch();
+                // A regular stream was waiting for this one to end
+                if let Some((uuid, app_id)) = self.after_standby.take()
+                    && let Some(host) = self.host_by_uuid(&uuid).cloned() {
+                        self.start_stream(&host, app_id, cx);
+                    }
             }
             _ => {}
         }
         cx.notify();
+    }
+
+    /// The host kept ready for window streaming, if any
+    pub fn standby_host(&self) -> Option<Host> {
+        self.host_by_uuid(self.standby.as_deref()?).filter(|h| h.is_paired() && Self::host_supports_windows(h)).cloned()
+    }
+
+    /// The host's "Keep windows ready" card: on until Sloplight quits, or off
+    pub fn toggle_standby(&mut self, uuid: &str, cx: &mut Context<Self>) {
+        if self.standby.as_deref() == Some(uuid) {
+            self.standby = None;
+        } else {
+            self.standby = Some(uuid.to_string());
+            self.standby_retry_at = None;
+            self.standby_failures = 0;
+        }
+        self.ensure_standby(cx);
+        cx.notify();
+    }
+
+    fn standby_failed(&mut self) {
+        self.standby_failures += 1;
+        // 5 s, 10 s, 20 s, ... at most 5 minutes apart
+        let wait = Duration::from_secs(5 << self.standby_failures.min(6).saturating_sub(1)).min(Duration::from_secs(300));
+        self.standby_retry_at = Some(Instant::now() + wait);
+    }
+
+    /// Standing by (`standby`): keeps a desk stream to the host open, with
+    /// nothing on it while no window is streamed, so the first window or
+    /// launched app shows up at once. Runs every second.
+    pub fn ensure_standby(&mut self, cx: &mut Context<Self>) {
+        if let Some(ds) = &mut self.desk_stream {
+            let wanted = self.standby.as_deref() == Some(ds.host_uuid.as_str());
+            // The setting changed: the helper's own copy too
+            if ds.standby != wanted {
+                ds.standby = wanted;
+                ds.process.send_command(&serde_json::json!({ "cmd": "standby", "on": wanted }));
+                if !wanted && ds.adopted.is_empty() {
+                    self.close_desk_stream(cx);
+                }
+            }
+            return;
+        }
+        if self.standby.is_none() || self.desk_opening.is_some() || self.stream.is_some() || self.after_standby.is_some() {
+            return;
+        }
+        if self.standby_retry_at.is_some_and(|t| Instant::now() < t) {
+            return;
+        }
+        let Some(host) = self.standby_host() else { return };
+        if !host.is_online() || host.apps.iter().all(|a| a.id == 0) {
+            return;
+        }
+        log::info!("standby: opening the desk on {}", host.name);
+        self.standby_retry_at = None;
+        self.open_desk(&host, Vec::new(), cx);
+    }
+
+    /// Before a regular stream: ends the standby desk stream when nothing is
+    /// on it. True: the stream starts once it has ended.
+    pub fn end_standby_for(&mut self, uuid: &str, app_id: i32, cx: &mut Context<Self>) -> bool {
+        match &self.desk_stream {
+            Some(ds) if ds.adopted.is_empty() => {
+                self.after_standby = Some((uuid.to_string(), app_id));
+                self.close_desk_stream(cx);
+                true
+            }
+            _ => false,
+        }
     }
 }

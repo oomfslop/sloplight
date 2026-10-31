@@ -4,6 +4,7 @@ use gpui::{AnyElement, Context, Entity, IntoElement, KeyDownEvent, ParentElement
 
 use crate::app::{Popup, PopupKind, Root};
 use crate::assets::icon;
+use crate::views::panel::PanelKind;
 use crate::settings::{self, AudioConfig, BackgroundQuality, CaptureSysKeys, LANGUAGES, Renderer, Settings, SystemPreset, UiDisplayMode, VideoCodec, VideoDecoder, WindowDensity, WindowMode};
 use crate::theme::{Theme, type_scale};
 use crate::ui::*;
@@ -32,7 +33,7 @@ pub const SECTIONS: [Section; 9] = [
 pub fn section_rows(id: &str) -> Vec<&'static str> {
     match id {
         "stream" => vec!["Preset", "Resolution", "Frame rate", "Video bitrate", "Display mode", "V-Sync", "Frame pacing", "HDR", "Performance stats overlay"],
-        "apollo" => vec!["Stream from a virtual display", "Host render scale", "App window size", "App window density", "App window bitrate", "Background window frame rate", "Background window quality", "Efficient encoding", "Quiet when idle", "Skip covered windows", "Stream new windows automatically", "Sync clipboard"],
+        "apollo" => vec!["Stream from a virtual display", "Host render scale", "App window size", "App window density", "App window bitrate", "Background window frame rate", "Background window quality", "Efficient encoding", "Quiet when idle", "Skip covered windows", "Launcher shortcut", "Window picker shortcut", "Stream new windows automatically", "Sync clipboard"],
         "audio" => vec!["Audio channels", "Mute host speakers while streaming", "Mute when Moonlight isn't focused"],
         "input" => vec!["Remote desktop mouse mode", "Capture system shortcuts", "Touchscreen as trackpad", "Swap left and right mouse buttons", "Reverse scroll direction"],
         "gamepad" => vec!["Swap A/B and X/Y", "Always connect gamepad 1", "Mouse control by holding Start", "Gamepad input in background"],
@@ -715,6 +716,38 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
             rows.push(toggle_row(root, cx, theme, "tg-aw-quiet", "Quiet when idle", "While nothing on the screen changes, the host sends a frame a second instead of repeating the picture many times a second, and its text cursor stops blinking (it stays visible). Saves most of the data an idle stream uses.", |s| s.app_window_quiet_idle, |s, v| s.app_window_quiet_idle = v, None));
             rows.push(toggle_row(root, cx, theme, "tg-aw-efficient", "Efficient encoding", "The host's encoder takes more time per frame (a slower preset and a pre-pass) and stops refining still areas once they look right: noticeably less data for the same picture, a few milliseconds more latency.", |s| s.app_window_efficient_encoding, |s, v| s.app_window_efficient_encoding = v, None));
             rows.push(toggle_row(root, cx, theme, "tg-aw-covered", "Skip covered windows", "Windows completely hidden behind others are not sent at all. The Mac shows their last frame until they are visible again.", |s| s.app_window_skip_covered, |s, v| s.app_window_skip_covered = v, None));
+            for (kind, label, help) in [
+                (PanelKind::Launcher, "Launcher shortcut", "Opens the app launcher from any app, over everything."),
+                (PanelKind::Windows, "Window picker shortcut", "Opens the window picker from any app, over everything."),
+            ] {
+                let binding = kind.binding(&s).clone();
+                let recording = root.recording_hotkey == Some(kind);
+                let shortcut = if recording {
+                    "Press a shortcut…".to_string()
+                } else if binding.is_empty() {
+                    "Off".to_string()
+                } else {
+                    crate::hotkey::display(&binding)
+                };
+                rows.push(Row {
+                    label,
+                    help: format!("{help} Click and press a shortcut with ⌘, ⌃ or ⌥ (Esc keeps the old one, Delete turns it off)."),
+                    modified: !binding.is_empty(),
+                    disabled_reason: None,
+                    badge: None,
+                    control: button(gpui::ElementId::NamedInteger("hotkey-record".into(), kind.index() as u64), shortcut)
+                        .when(recording, |b| b.primary())
+                        .on_click(cx.listener(move |this: &mut Root, _, window, cx| {
+                            this.recording_hotkey = if this.recording_hotkey == Some(kind) { None } else { Some(kind) };
+                            window.focus(&this.focus_handle, cx);
+                            this.sync_hotkey(cx);
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                    extra: None,
+                    reset: Some(Box::new(move |s| kind.binding_mut(s).clear())),
+                });
+            }
             rows.push(toggle_row(root, cx, theme, "tg-aw-follow", "Stream new windows automatically", "While a window is streamed, windows that newly appear on the host (opened from it, or dialogs grabbing focus) get a Mac window too.", |s| s.app_window_follow_new, |s, v| s.app_window_follow_new = v, None));
             rows.push(toggle_row(root, cx, theme, "tg-vrr", "Capture on present", "Vibeshine/Vibepollo run the virtual display at 1000 Hz and grab each frame right after the game presents it, instead of on the display's refresh grid.", |s| s.vrr_capture, |s, v| s.vrr_capture = v, None));
             rows.push(Row {

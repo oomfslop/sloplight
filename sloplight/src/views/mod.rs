@@ -2,6 +2,8 @@ pub mod dialogs;
 pub mod host_info;
 pub mod host_state;
 pub mod launcher;
+pub mod panel;
+pub mod window_picker;
 pub mod main_view;
 pub mod overlays;
 pub mod palette;
@@ -35,6 +37,11 @@ impl gpui::Render for Root {
                 self.pending_launcher = None;
                 crate::views::launcher::open(self, Some(uuid), window, cx);
             }
+        if let Some(uuid) = self.pending_window_picker.clone()
+            && self.host_by_uuid(&uuid).is_some_and(|h| h.is_online() && h.is_paired() && Self::host_supports_windows(h)) {
+                self.pending_window_picker = None;
+                crate::views::window_picker::open(self, Some(uuid), window, cx);
+            }
         if let Some(state) = self.debug_state.take() {
             self.apply_debug_state(&state, window, cx);
         }
@@ -58,6 +65,7 @@ impl gpui::Render for Root {
             .on_action(cx.listener(Self::action_quit))
             .on_action(cx.listener(Self::action_quick_launch))
             .on_action(cx.listener(Self::action_launch_on_host))
+            .on_action(cx.listener(Self::action_show_host_windows))
             .relative()
             .flex()
             .flex_col()

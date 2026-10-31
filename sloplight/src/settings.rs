@@ -333,6 +333,13 @@ pub struct Settings {
     /// instead of repeating the picture, and its text cursor stops blinking
     #[serde(default)]
     pub app_window_quiet_idle: bool,
+    /// Opens the app launcher from anywhere in the system (a key binding like
+    /// "alt-space"); empty: off
+    #[serde(default)]
+    pub launcher_hotkey: String,
+    /// Opens the window picker from anywhere in the system; empty: off
+    #[serde(default)]
+    pub windows_hotkey: String,
     pub resolution_scale_factor: i32,
     pub clipboard_sync: bool,
     /// Draw only the Mac cursor; the host leaves its cursor out of the
@@ -421,6 +428,8 @@ impl Default for Settings {
             app_window_background_quality: BackgroundQuality::Full,
             app_window_efficient_encoding: false,
             app_window_quiet_idle: false,
+            launcher_hotkey: String::new(),
+            windows_hotkey: String::new(),
             resolution_scale_factor: 100,
             clipboard_sync: false,
             hide_host_cursor: false,

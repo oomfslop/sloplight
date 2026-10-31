@@ -9,7 +9,9 @@ Sloplight replaces Moonlight's Qt interface on macOS, handling hosts, apps, pair
 - Hosts are discovered on the local network or added manually with `⌘N`. Tailscale addresses are used when the host is not on the LAN.
 - Pair with a PIN, or with a one-time password on Apollo-style hosts.
 - Pick an app and press Enter to stream it. `⌘K` finds an app on any host.
-- With vibeshine-server, the **Windows** button streams separate host windows as Mac windows, and `⌘O` launches a host app straight into one.
+- With vibeshine-server, the **Windows** button (`⇧⌘O`) lists the host's windows and streams any of them as a Mac window, and `⌘O` launches a host app straight into one.
+- The **Keep windows ready** card in a host's app grid keeps an idle connection open until you quit, so windows and launched apps show up almost at once. It sends next to no data while nothing is streamed.
+- The launcher and the window picker can also get system-wide shortcuts in Settings → App windows. They then open as a panel over any app.
 
 ### Keyboard
 
@@ -17,6 +19,7 @@ Sloplight replaces Moonlight's Qt interface on macOS, handling hosts, apps, pair
 | --- | --- |
 | `⌘K` | Quick launch |
 | `⌘O` | Launch an app on the host |
+| `⇧⌘O` | Stream a host window |
 | `⌘,` | Settings |
 | `⌘N` | Add host |
 | `⌘R` | Refresh |

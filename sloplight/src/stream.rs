@@ -53,6 +53,9 @@ pub struct AppWindowConfig {
     pub desk: bool,
     #[serde(default)]
     pub screen: [i32; 4],
+    /// Standing by: the stream stays while the desk has no windows
+    #[serde(default)]
+    pub standby: bool,
 }
 
 #[derive(Serialize)]

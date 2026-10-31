@@ -51,3 +51,39 @@ pub fn yield_activation_to(pid: u32) {
     #[cfg(not(target_os = "macos"))]
     let _ = pid;
 }
+
+/// Where the pointer is, in global points from the top-left of the main
+/// screen (GPUI's display coordinates)
+pub fn mouse_location() -> Option<(f32, f32)> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSEvent, NSScreen};
+        let mtm = objc2::MainThreadMarker::new()?;
+        let p = NSEvent::mouseLocation();
+        let main = NSScreen::screens(mtm).firstObject()?;
+        Some((p.x as f32, (main.frame().size.height - p.y) as f32))
+    }
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
+/// No window-server shadow for this window (a transparent panel draws its own
+/// around what it shows, not around its whole frame)
+pub fn hide_window_shadow(window: &gpui::Window) {
+    #[cfg(target_os = "macos")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let Ok(handle) = HasWindowHandle::window_handle(window) else { return };
+        let RawWindowHandle::AppKit(h) = handle.as_raw() else { return };
+        // SAFETY: the view is the window's own content view, alive while the window is
+        unsafe {
+            let view = h.ns_view.as_ptr().cast::<objc2::runtime::AnyObject>();
+            let ns_window: *mut objc2::runtime::AnyObject = objc2::msg_send![view, window];
+            if !ns_window.is_null() {
+                let _: () = objc2::msg_send![ns_window, setHasShadow: false];
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
