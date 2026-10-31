@@ -624,7 +624,7 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
             });
             rows.push(Row {
                 label: "Preset",
-                help: "Full quality is for home Wi-Fi and wired networks; Data saver for phone hotspots and slow links. Choosing one sets the settings it covers (resolution, frame rate, bitrates, codec and the app window ones); change any of them freely, and keep the result as a preset of your own if you like.".into(),
+                help: "Full quality is for home Wi-Fi and wired networks, Efficient for other networks, like hotels, offices, cafés and phone hotspots. Choosing one sets the settings it covers (resolution, frame rate, bitrates, codec and the app window ones). You can change any of them freely and keep the result as a preset of your own if you like.".into(),
                 modified: s.preset_modified(),
                 disabled_reason: None,
                 badge: None,
@@ -714,7 +714,7 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
             rows.push(segmented_row(root, cx, theme, "seg-aw-bgquality", "Background window quality", "Windows other than the one you work in are encoded coarser, so their changes cost fewer bits. The window you click becomes sharp as soon as it has the focus.", BackgroundQuality::ALL, &["Full", "Lower", "Low"], |s| s.app_window_background_quality, |s, v| s.app_window_background_quality = v, None));
             rows.push(toggle_row(root, cx, theme, "tg-aw-quiet", "Quiet when idle", "While nothing on the screen changes, the host sends a frame a second instead of repeating the picture many times a second, and its text cursor stops blinking (it stays visible). Saves most of the data an idle stream uses.", |s| s.app_window_quiet_idle, |s, v| s.app_window_quiet_idle = v, None));
             rows.push(toggle_row(root, cx, theme, "tg-aw-efficient", "Efficient encoding", "The host's encoder takes more time per frame (a slower preset and a pre-pass) and stops refining still areas once they look right: noticeably less data for the same picture, a few milliseconds more latency.", |s| s.app_window_efficient_encoding, |s, v| s.app_window_efficient_encoding = v, None));
-            rows.push(toggle_row(root, cx, theme, "tg-aw-covered", "Skip covered windows", "Windows that other windows cover completely are left out of the stream; the Mac keeps their last picture until they show again.", |s| s.app_window_skip_covered, |s, v| s.app_window_skip_covered = v, None));
+            rows.push(toggle_row(root, cx, theme, "tg-aw-covered", "Skip covered windows", "Windows completely hidden behind others are not sent at all. The Mac shows their last frame until they are visible again.", |s| s.app_window_skip_covered, |s, v| s.app_window_skip_covered = v, None));
             rows.push(toggle_row(root, cx, theme, "tg-aw-follow", "Stream new windows automatically", "While a window is streamed, windows that newly appear on the host (opened from it, or dialogs grabbing focus) get a Mac window too.", |s| s.app_window_follow_new, |s, v| s.app_window_follow_new = v, None));
             rows.push(toggle_row(root, cx, theme, "tg-vrr", "Capture on present", "Vibeshine/Vibepollo run the virtual display at 1000 Hz and grab each frame right after the game presents it, instead of on the display's refresh grid.", |s| s.vrr_capture, |s, v| s.vrr_capture = v, None));
             rows.push(Row {

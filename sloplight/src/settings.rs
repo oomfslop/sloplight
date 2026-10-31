@@ -161,12 +161,12 @@ impl Preset {
         }
     }
 
-    /// Data saver (a phone's hotspot, slow or metered links: a few Mbps to a
-    /// few tens, latency that varies, some loss): half the screen's pixels
+    /// Efficient (networks other than home: hotels, offices, cafés, a phone's
+    /// hotspot; a few Mbps to a few tens, latency that varies, some loss): half the screen's pixels
     /// each way (sharp enough, 4x less to encode and send), 60 fps for smooth
     /// scrolling, HEVC; background windows at an eighth of the rate and lower
     /// quality; the host's encoder in its efficient mode, quiet when idle
-    pub fn data_saver(screen_pts: (i32, i32)) -> Preset {
+    pub fn efficient(screen_pts: (i32, i32)) -> Preset {
         let (width, height) = (screen_pts.0 & !1, screen_pts.1 & !1);
         Preset {
             width,
@@ -193,23 +193,23 @@ impl Preset {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemPreset {
     FullQuality,
-    DataSaver,
+    Efficient,
 }
 
 impl SystemPreset {
-    pub const ALL: [SystemPreset; 2] = [SystemPreset::FullQuality, SystemPreset::DataSaver];
+    pub const ALL: [SystemPreset; 2] = [SystemPreset::FullQuality, SystemPreset::Efficient];
 
     pub fn id(self) -> &'static str {
         match self {
             SystemPreset::FullQuality => "full-quality",
-            SystemPreset::DataSaver => "data-saver",
+            SystemPreset::Efficient => "efficient",
         }
     }
 
     pub fn name(self) -> &'static str {
         match self {
             SystemPreset::FullQuality => "Full quality",
-            SystemPreset::DataSaver => "Data saver",
+            SystemPreset::Efficient => "Efficient",
         }
     }
 
@@ -221,7 +221,7 @@ impl SystemPreset {
         let hz = d.as_ref().map(|d| d.refresh_hz).filter(|h| *h > 0).unwrap_or(60);
         match self {
             SystemPreset::FullQuality => Preset::full_quality(px, hz),
-            SystemPreset::DataSaver => Preset::data_saver(pts),
+            SystemPreset::Efficient => Preset::efficient(pts),
         }
     }
 }
@@ -515,6 +515,10 @@ impl Settings {
             Ok(bytes) => match serde_json::from_slice::<Settings>(&bytes) {
                 Ok(mut s) => {
                     s.sanitize();
+                    // Efficient was called Data saver before
+                    if s.active_preset == "data-saver" {
+                        s.active_preset = SystemPreset::Efficient.id().to_string();
+                    }
                     // No preset chosen yet: the one the settings are, if any
                     if s.active_preset.is_empty() {
                         let now = Preset::of(&s);
@@ -691,7 +695,7 @@ mod tests {
     #[test]
     fn presets_apply_save_delete() {
         let mut s = Settings::default();
-        let saver = Preset::data_saver((1512, 982));
+        let saver = Preset::efficient((1512, 982));
         // (system presets read the screen; a custom one stands in here)
         s.custom_presets.push(CustomPreset { name: "Saver".into(), values: saver.clone() });
         s.apply_preset("custom:Saver");
@@ -711,6 +715,6 @@ mod tests {
         assert_eq!(s.app_window_bitrate_kbps, 8000);
         s.delete_custom_preset("Train");
         assert!(s.active_preset.is_empty() && s.custom_presets.len() == 1);
-        assert_eq!(Settings::preset_name("data-saver"), "Data saver");
+        assert_eq!(Settings::preset_name("efficient"), "Efficient");
     }
 }

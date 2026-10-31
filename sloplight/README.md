@@ -1,105 +1,84 @@
-# sloplight
+# Sloplight
 
-A compact, keyboard-first launcher for Apollo / Sunshine / GeForce Experience
-hosts, written in Rust with [GPUI](https://www.gpui.rs) (Zed's UI framework).
-It replaces the Qt/QML UI of this Moonlight fork; the video stream itself is
-still rendered by the C++ core, which runs as a helper process
-(`moonlight stream-helper`).
+A keyboard-first launcher for game streaming hosts, written in Rust with [GPUI](https://www.gpui.rs).
 
-Colors come from your Zed theme: the app reads `~/.config/zed/settings.json`,
-finds the dark theme named there in `~/.config/zed/themes/*.json` (or the
-installed Zed extensions) and derives every color role from it. The buffer
-font from Zed is used for monospace text. Without Zed it falls back to the
-built-in `gruvbox-poly` values.
+Sloplight replaces Moonlight's Qt interface on macOS, handling hosts, apps, pairing and settings. Streaming is still done by Moonlight's C++ client, which Sloplight runs as a helper process (`moonlight stream-helper`).
 
-## Layout
+## Use
 
-```
-sloplight/
-  src/main.rs          app entry: window, key bindings, native menus
-  src/app.rs           Root state: hosts, selection, dialogs, stream lifecycle, keyboard
-  src/theme.rs         Zed theme loader + color/typography tokens
-  src/settings.rs      stream settings (same fields as StreamingPreferences), JSON on disk
-  src/stream.rs        spawns `moonlight stream-helper`, relays its JSON events
-  src/backend/         Rust port of app/backend: HTTP(S) client with pinned certs,
-                       pairing (PIN + Apollo OTP), host polling, mDNS, Wake-on-LAN, box art
-  src/ui/              hand-built widgets (button, toggle, segmented, menu, text input, ...)
-  src/views/           shell (sidebar + content), host state panel, info popover, dialogs, overlays, settings, quick launch palette
-  DESIGN.md            first design spec; DESIGN-v2.md is the simplification pass the UI now follows
-  assets/icons/        Lucide icons (SVG)
-```
+- Hosts are discovered on the local network or added manually with `⌘N`. Tailscale addresses are used when the host is not on the LAN.
+- Pair with a PIN, or with a one-time password on Apollo-style hosts.
+- Pick an app and press Enter to stream it. `⌘K` finds an app on any host.
+- With vibeshine-server, the **Windows** button streams separate host windows as Mac windows, and `⌘O` launches a host app straight into one.
 
-Data lives in `~/Library/Application Support/sloplight` on macOS
-(`$XDG_CONFIG_HOME/sloplight` on Linux): `identity.json` (client certificate),
-`hosts.json`, `settings.json`. Box art is cached under the user cache dir.
-`SLOPLIGHT_CONFIG_DIR` overrides the config directory.
+### Keyboard
+
+| Key | Action |
+| --- | --- |
+| `⌘K` | Quick launch |
+| `⌘O` | Launch an app on the host |
+| `⌘,` | Settings |
+| `⌘N` | Add host |
+| `⌘R` | Refresh |
+| `⌘F` | Filter apps |
+| `⌘I` | Host info |
+| `⇧⌘C` | Copy host address |
+| `⇧⌘H` | Show hidden apps |
+| `⌘1`…`⌘9`, `⌘[`, `⌘]` | Switch hosts |
+| `F2` | Rename |
+| `⌘⌫` | Remove host or quit app |
+
+Arrows and Enter move around the app grid, and typing filters it.
+
+### Presets
+
+Settings are grouped into presets: **Full quality** and **Efficient** are built in, and custom ones can be saved on top.
+
+- **Full quality** is for home Wi-Fi and wired networks. It streams at the screen's native resolution and refresh rate.
+- **Efficient** is for other networks, like hotels, offices, cafés and phone hotspots. It streams HEVC at 12 Mbps, 60 fps and the screen's size in points. For app windows, background windows update at an eighth of the frame rate and are encoded at lower quality, and the host encoder uses its slower, more efficient mode.
+
+## Theme
+
+Colors come from your Zed theme. Sloplight reads `~/.config/zed/settings.json`, finds the dark theme named there among your themes and installed extensions, and builds its palette on top of Zed's One Dark. The monospace font is Zed's buffer font. Without Zed, the built-in colors are used.
 
 ## Building
 
 ```sh
-cd sloplight
-cargo build --release        # needs the Rust nightly toolchain from rust-toolchain / rustup
-./target/release/sloplight
+cargo build --release
 ```
 
-GPUI is built with its `runtime_shaders` feature so the Metal shader compiler
-(`xcrun metal`) is not needed at build time.
+The streaming helper is the Moonlight app from the repository root, built with `nix build '.?submodules=1'`. `./scripts/bundle-macos.sh` builds `target/Sloplight.app` with the helper inside.
 
-The streaming helper is the Moonlight binary from this repository with the
-`stream-helper` action. It is looked up in this order: the `helper_path`
-setting (Settings > Advanced > Streaming helper), `$SLOPLIGHT_HELPER`, next to
-the executable, `../../../result/...` (the `nix build` output when running
-from `sloplight/target`), `/Applications/Moonlight.app`, then `moonlight` on
-`$PATH`. Build it with `nix build '.?submodules=1'` in the repository root.
+Outside the bundle, the helper is looked up in this order:
 
-### CI builds
+1. the path set in Settings → Advanced
+2. `$SLOPLIGHT_HELPER`
+3. next to its own binary
+4. the Nix `result` link in the repository root
+5. `/Applications/Moonlight.app`
+6. `moonlight` on `$PATH`
 
-`.github/workflows/sloplight-macos.yml` builds `Sloplight.app` for Apple Silicon on
-the macOS 14, 15 and 26 GitHub runners (Nix for the helper, cargo for the
-launcher). It is slow (15-25 minutes per runner), so it runs only for `sloplight-v*` tags,
-where it attaches a zip per runner to the GitHub release, or when started by hand
-from the Actions tab ("Run workflow", optionally with a ref), where the zips are
-workflow artifacts. The app is ad-hoc signed, not
-notarized, so after unzipping run `xattr -dr com.apple.quarantine Sloplight.app`
-or right-click → Open once.
+CI builds `Sloplight.app` for Apple Silicon on `sloplight-v*` tags. The builds aren't notarized, so remove the quarantine flag after unzipping:
 
-## Helper protocol
+```sh
+xattr -dr com.apple.quarantine Sloplight.app
+```
 
-`moonlight stream-helper` reads one JSON document on stdin (identity, host,
-app, settings, optional display origin) and prints one JSON object per line on
-stdout: `warnings`, `stage_starting`, `stage_failed`, `connection_started`,
-`launch_error`, `quit_starting`, `session_finished`. See `src/stream.rs` and
-`app/cli/streamhelper.cpp`.
+## Files
 
-## Keyboard
+Config is stored in `~/Library/Application Support/sloplight` (`hosts.json`, `settings.json`, `identity.json`). `SLOPLIGHT_CONFIG_DIR` overrides it.
 
-`⌘K` quick launch · `⌘,` settings · `⌘N` add host · `⌘R` refresh · `⌘F` filter ·
-`⌘I` host info · `⇧⌘C` copy address · `⇧⌘H` hidden apps · `⌘1…9` select host · `⌘[` `⌘]` previous/next host ·
-arrows/Enter in the grid · typing filters the grid · `F2` rename · `⌘⌫` remove host / quit app ·
-`Esc` back.
+`SLOPLIGHT_DEBUG_STATE=settings|info|pairing|add-host|palette|launcher|...` opens Sloplight directly on that screen, for UI work without a host.
 
-`SLOPLIGHT_DEBUG_STATE=settings|info|pairing|otp|add-host|error|confirm|palette|host-menu|app-menu|toast`
-opens that state right after startup, for screenshots without a host.
+## Permissions
 
-## Not yet ported
+macOS asks for Local Network access on first launch. Without it, LAN hosts are unreachable and fail with "No route to host". When Sloplight is started from a terminal, the permission applies to the terminal app.
 
-Network test (needs moonlight-common-c), STUN external-address lookup, Discord
-rich presence, the CLI `pair`/`stream`/`quit` actions (still available in the
-Moonlight binary itself), and gamepad navigation of the launcher.
+## License
 
-## Credits and licenses
+GPL-3.0-or-later, like Moonlight. It uses code and assets from:
 
-Sloplight is part of this moonlight-qt fork and is licensed under the
-[GPL-3.0](../LICENSE), like Moonlight itself. It builds on:
-
-- [Moonlight](https://github.com/moonlight-stream/moonlight-qt) and
-  [moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c)
-  by the Moonlight Game Streaming Project (GPL-3.0), which run the stream.
-- [Apollo](https://github.com/ClassicOldSong/Apollo) host extensions, re-implemented
-  from [Artemis Qt](https://github.com/wjbeckett/artemis).
-- [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), the UI
-  framework from the Zed editor (Apache-2.0).
-- `assets/zed-one.json`, the "One Dark" theme from
-  [Zed](https://github.com/zed-industries/zed) (GPL-3.0), used as the base
-  that your own Zed theme is layered over.
-- `assets/icons/`, from [Lucide](https://lucide.dev) (ISC).
+- [Moonlight](https://github.com/moonlight-stream/moonlight-qt) and [moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c) (GPL-3.0)
+- [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) (Apache-2.0)
+- the One Dark theme from [Zed](https://github.com/zed-industries/zed) (GPL-3.0)
+- icons from [Lucide](https://lucide.dev) (ISC)
