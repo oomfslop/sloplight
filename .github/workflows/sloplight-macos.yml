@@ -21,14 +21,8 @@ concurrency:
 
 jobs:
   build:
-    name: macOS arm64 on ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # All Apple Silicon runners: one build per macOS generation it was made
-        # and tested on. macos-14 is deprecated on GitHub's side and may go away.
-        os: [macos-14, macos-15, macos-26]
-    runs-on: ${{ matrix.os }}
+    name: macOS arm64
+    runs-on: macos-26
     env:
       # gpui needs macOS 12+, the helper declares 13.0 in its Info.plist.
       MACOSX_DEPLOYMENT_TARGET: "13.0"
@@ -69,19 +63,19 @@ jobs:
 
       - name: Package
         run: |
-          ditto -c -k --keepParent sloplight/target/Sloplight.app "Sloplight-${{ matrix.os }}-arm64.zip"
-          shasum -a 256 "Sloplight-${{ matrix.os }}-arm64.zip" | tee -a "$GITHUB_STEP_SUMMARY"
+          ditto -c -k --keepParent sloplight/target/Sloplight.app "Sloplight-macos-arm64.zip"
+          shasum -a 256 "Sloplight-macos-arm64.zip" | tee -a "$GITHUB_STEP_SUMMARY"
           echo 'The app is ad-hoc signed and not notarized: after unzipping, run `xattr -dr com.apple.quarantine Sloplight.app` or right-click → Open the first time.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Sloplight-${{ matrix.os }}-arm64
-          path: Sloplight-${{ matrix.os }}-arm64.zip
+          name: Sloplight-macos-arm64
+          path: Sloplight-macos-arm64.zip
           if-no-files-found: error
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/sloplight-v')
         uses: softprops/action-gh-release@v2
         with:
-          files: Sloplight-${{ matrix.os }}-arm64.zip
+          files: Sloplight-macos-arm64.zip
