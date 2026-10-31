@@ -1,7 +1,5 @@
 name: Sloplight (macOS)
 
-# Builds take 15-25 minutes per runner (the helper is compiled from source
-# with Nix).
 on:
   push:
     branches: [master]
@@ -40,32 +38,34 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
           submodules: recursive
-          # The flake is fetched as `.?submodules=1`, which wants a full git history.
-          fetch-depth: 0
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
+      - name: Install create-dmg
+        run: npm install --global create-dmg
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
         with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-            accept-flake-config = true
-
-      - name: Build the streaming helper (moonlight stream-helper) with Nix
-        run: |
-          nix build '.?submodules=1' --print-build-logs
-          test -x result/Applications/Moonlight.app/Contents/MacOS/Moonlight
+          cache: true
+          version: 6.11.2
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@073e34d7c2ab4ae6961ed7cca690b3abd5ba5a7e'
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: sloplight
 
+      # Self-contained (macdeployqt): a Nix build only runs where its store paths exist
+      - name: Build the streaming helper
+        run: bash scripts/generate-dmg.sh Release
+
       - name: Build and bundle Sloplight.app
         working-directory: sloplight
-        run: ./scripts/bundle-macos.sh
+        run: HELPER_SRC=../build/build-Release/app/Moonlight.app ./scripts/bundle-macos.sh
 
       - name: Package
         run: |

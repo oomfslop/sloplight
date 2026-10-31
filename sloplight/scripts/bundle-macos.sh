@@ -32,7 +32,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
-HELPER_SRC=../result/Applications/Moonlight.app
+HELPER_SRC=${HELPER_SRC:-../result/Applications/Moonlight.app}
 if [ -d "$HELPER_SRC" ]; then
   # Dereference the Nix store symlinks so the bundle is self-contained
   cp -RL "$HELPER_SRC" "$APP/Contents/Helpers/Moonlight.app"
