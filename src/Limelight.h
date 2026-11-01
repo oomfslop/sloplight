@@ -100,6 +100,15 @@ typedef struct _STREAM_CONFIGURATION {
     // in /launch and /resume requests.
     char remoteInputAesKey[16];
     char remoteInputAesIv[16];
+
+    // Routed client wired-link speed in Mbps, used by PyroWave host pacing.
+    // Zero means unknown; other codecs do not advertise this value.
+    int pyrowaveLinkMbps;
+
+    // Frame pace in Mbps the client's link can take without loss. The host paces
+    // PyroWave frames at this rate instead of its default link headroom.
+    // Zero keeps the host default; only sent for PyroWave.
+    int pyrowavePaceMbps;
 } STREAM_CONFIGURATION, *PSTREAM_CONFIGURATION;
 
 // Use this function to zero the stream configuration when allocated on the stack or heap
