@@ -1353,6 +1353,7 @@ public:
         int err;
 
         m_Window = params->window;
+        m_FramePacing = params->enableFramePacing;
         m_FrameRateRange = CAFrameRateRangeMake(params->frameRate, params->frameRate, params->frameRate);
 
         id<MTLDevice> device = getMetalDevice();
@@ -1525,7 +1526,10 @@ public:
     void startDisplayLink()
     {
         if (@available(macOS 14, *)) {
-            if (m_MetalDisplayLink != nullptr || !m_MetalLayer.displaySyncEnabled || !isAppleSilicon()) {
+            // The display link paces frames but holds each one for a display-link
+            // callback and a frame of latency; V-Sync alone only needs the
+            // present to land on a vblank, which displaySyncEnabled does
+            if (m_MetalDisplayLink != nullptr || !m_FramePacing || !m_MetalLayer.displaySyncEnabled || !isAppleSilicon()) {
                 return;
             }
 
@@ -1663,6 +1667,7 @@ private:
     CAMetalLayer* m_MetalLayer;
     CAMetalDisplayLink* m_MetalDisplayLink API_AVAILABLE(macos(14.0));
     CAFrameRateRange m_FrameRateRange;
+    bool m_FramePacing = false;
     AVFrame* m_LatestUnrenderedFrame;
     SDL_mutex* m_FrameLock;
     SDL_cond* m_FrameReady;
