@@ -421,16 +421,21 @@ macx {
         streaming/video/ffmpeg-renderers/vt_avsamplelayer.mm \
         streaming/video/ffmpeg-renderers/vt_metal.mm \
         streaming/appwindow_mac.mm \
-        streaming/keyboardlanguage_mac.mm
+        streaming/keyboardlanguage_mac.mm \
+        streaming/audio/renderers/coreaudio.cpp
 
     HEADERS += \
         streaming/video/ffmpeg-renderers/vt.h \
+        streaming/audio/renderers/coreaudio.h \
         deskwm/deskwm.h
 
     # Desk windows (Rust, app/deskwm): built by cargo, or handed in by nix
     isEmpty(DESKWM_LIB): DESKWM_LIB = $$PWD/deskwm/target/release/libdeskwm.a
     LIBS += $$DESKWM_LIB
     PRE_TARGETDEPS += $$DESKWM_LIB
+
+    DEFINES += HAVE_COREAUDIO
+    LIBS += -framework AudioToolbox -framework CoreAudio
 
     DEFINES += HAVE_PYROWAVE
     SOURCES += streaming/video/pyrowave.mm
