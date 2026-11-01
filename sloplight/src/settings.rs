@@ -32,7 +32,7 @@ macro_rules! enum_setting {
 }
 
 enum_setting!(AudioConfig { Stereo = 0 => "Stereo", Surround51 = 1 => "5.1", Surround71 = 2 => "7.1" });
-enum_setting!(VideoCodec { Auto = 0 => "Auto", H264 = 1 => "H.264", Hevc = 2 => "HEVC", Av1 = 4 => "AV1" });
+enum_setting!(VideoCodec { Auto = 0 => "Auto", H264 = 1 => "H.264", Hevc = 2 => "HEVC", Av1 = 4 => "AV1", PyroWave = 5 => "PyroWave" });
 enum_setting!(VideoDecoder { Auto = 0 => "Auto", Hardware = 1 => "Hardware", Software = 2 => "Software" });
 enum_setting!(Renderer { Auto = 0 => "Automatic", Vulkan = 1 => "Vulkan", Metal = 2 => "Metal", AvSampleBufferDisplayLayer = 3 => "AVSampleBufferDisplayLayer" });
 enum_setting!(WindowMode { Fullscreen = 0 => "Fullscreen", Borderless = 1 => "Borderless", Windowed = 2 => "Windowed" });

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <QQueue>
 #include <set>
 
@@ -12,6 +13,10 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 }
+
+#ifdef HAVE_PYROWAVE
+class PyroWaveMetalDecoder;
+#endif
 
 class FFmpegVideoDecoder : public IVideoDecoder {
 public:
@@ -102,6 +107,14 @@ private:
 
     void decoderThreadProc();
 
+    bool initializeAVCodecContext(const AVCodec* decoder, enum AVPixelFormat requiredFormat, PDECODER_PARAMETERS params, TestMode testMode);
+
+#ifdef HAVE_PYROWAVE
+    bool initializePyroWave(PDECODER_PARAMETERS params);
+#endif
+
+    int receiveFrame(AVFrame* frame);
+
     static int decoderThreadProcThunk(void* context);
 
     AVPacket* m_Pkt;
@@ -120,6 +133,10 @@ private:
     std::set<IFFmpegRenderer::RendererType> m_FailedRenderers;
 
     bool m_LoggedReorderDepth = false;
+#ifdef HAVE_PYROWAVE
+    std::unique_ptr<PyroWaveMetalDecoder> m_PyroWave;
+    AVFrame* m_PyroWaveFrame = nullptr;
+#endif
     int m_FramesIn;
     int m_FramesOut;
 

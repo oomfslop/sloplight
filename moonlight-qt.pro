@@ -11,6 +11,10 @@ win32:!winrt {
     SUBDIRS += AntiHooking
     app.depends += AntiHooking
 }
+macx {
+    SUBDIRS += pyrowave
+    app.depends += pyrowave
+}
 
 # Support debug and release builds from command line for CI
 CONFIG += debug_and_release

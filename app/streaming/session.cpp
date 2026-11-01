@@ -1,5 +1,8 @@
 #include "session.h"
 #include "keyboardlanguage.h"
+#ifdef HAVE_PYROWAVE
+#include "video/pyrowave.h"
+#endif
 #include "appwindow.h"
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -864,6 +867,13 @@ bool Session::initialize(QQuickWindow* qtWindow)
         // straight to H.264 if the user asked for AV1 and the host doesn't support it.
         m_SupportedVideoFormats.removeByMask(~(VIDEO_FORMAT_MASK_AV1 | VIDEO_FORMAT_MASK_H265));
         break;
+    case StreamingPreferences::VCC_FORCE_PYROWAVE:
+        // HEVC remains for hosts without PyroWave
+        m_SupportedVideoFormats.removeByMask(~VIDEO_FORMAT_MASK_H265);
+#ifdef HAVE_PYROWAVE
+        m_SupportedVideoFormats.prepend(VIDEO_FORMAT_PYROWAVE);
+#endif
+        break;
     }
 
     // NB: Since deprioritization puts codecs in reverse order (at the bottom of the list),
@@ -983,6 +993,12 @@ bool Session::validateLaunch(SDL_Window* testWindow)
 
     if (m_Preferences->videoDecoderSelection == StreamingPreferences::VDS_FORCE_SOFTWARE) {
         emitLaunchWarning(tr("Your settings selection to force software decoding may cause poor streaming performance."));
+    }
+
+    if ((m_SupportedVideoFormats & VIDEO_FORMAT_MASK_PYROWAVE) &&
+            !(m_Computer->serverCodecModeSupport & SCM_PYROWAVE)) {
+        emitLaunchWarning(tr("Your host software or GPU doesn't support encoding PyroWave."));
+        m_SupportedVideoFormats.removeByMask(VIDEO_FORMAT_MASK_PYROWAVE);
     }
 
     if (m_SupportedVideoFormats & VIDEO_FORMAT_MASK_AV1) {
@@ -1774,6 +1790,13 @@ bool Session::startConnectionAsync()
                                                                          m_StreamConfig.fps,
                                                                          false);
     }
+
+#ifdef HAVE_PYROWAVE
+    if (m_StreamConfig.supportedVideoFormats & VIDEO_FORMAT_MASK_PYROWAVE) {
+        m_StreamConfig.pyrowaveLinkMbps = getRoutedWiredLinkMbps(hostnameStr.constData());
+        m_StreamConfig.pyrowavePaceMbps = m_StreamConfig.pyrowaveLinkMbps * 95 / 100;
+    }
+#endif
 
     int err = LiStartConnection(&hostInfo, &m_StreamConfig, &k_ConnCallbacks,
                                 &m_VideoCallbacks, &m_AudioCallbacks,

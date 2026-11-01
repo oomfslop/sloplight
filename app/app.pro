@@ -431,6 +431,13 @@ macx {
     isEmpty(DESKWM_LIB): DESKWM_LIB = $$PWD/deskwm/target/release/libdeskwm.a
     LIBS += $$DESKWM_LIB
     PRE_TARGETDEPS += $$DESKWM_LIB
+
+    DEFINES += HAVE_PYROWAVE
+    SOURCES += streaming/video/pyrowave.mm
+    HEADERS += streaming/video/pyrowave.h
+    INCLUDEPATH += $$PWD/../pyrowave/pyrowave/metal
+    LIBS += -L$$OUT_PWD/../pyrowave/ -lpyrowave -framework IOSurface -framework SystemConfiguration
+    PRE_TARGETDEPS += $$OUT_PWD/../pyrowave/libpyrowave.a
 }
 discord-rpc {
     message(Discord integration enabled)

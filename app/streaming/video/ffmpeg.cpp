@@ -51,6 +51,10 @@ extern "C" {
 #endif
 
 // This is gross but it allows us to use sizeof()
+#ifdef HAVE_PYROWAVE
+#include "pyrowave.h"
+#endif
+
 #include "ffmpeg_videosamples.cpp"
 
 #define MAX_DECODER_PASS 2
@@ -61,6 +65,11 @@ extern "C" {
 
 bool FFmpegVideoDecoder::isHardwareAccelerated()
 {
+#ifdef HAVE_PYROWAVE
+    if (m_PyroWave) {
+        return true;
+    }
+#endif
     return m_HwDecodeCfg != nullptr ||
             (getAVCodecCapabilities(m_VideoDecoderCtx->codec) & AV_CODEC_CAP_HARDWARE) != 0;
 }
@@ -112,7 +121,7 @@ int FFmpegVideoDecoder::getDecoderCapabilities()
             // Enable AV1 RFI when using the libdav1d software decoder
             capabilities |= CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1;
         }
-        else if (m_HwDecodeCfg == nullptr) {
+        else if (m_HwDecodeCfg == nullptr && m_VideoDecoderCtx != nullptr) {
             // Note: This is NOT an exhaustive list of all decoders
             // that Moonlight could pick. It will pick any working
             // decoder that matches the codec ID and outputs one of
@@ -287,6 +296,11 @@ void FFmpegVideoDecoder::reset()
     // since the codec context may be referencing objects that we
     // need to delete in the renderer destructor.
     avcodec_free_context(&m_VideoDecoderCtx);
+
+#ifdef HAVE_PYROWAVE
+    av_frame_free(&m_PyroWaveFrame);
+    m_PyroWave.reset();
+#endif
 
     if (m_CurrentTestMode != TestMode::TestFrameOnly) {
         Session::get()->getOverlayManager().setOverlayRenderer(nullptr);
@@ -503,213 +517,8 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
         }
     }
 
-    m_VideoDecoderCtx = avcodec_alloc_context3(decoder);
-    if (!m_VideoDecoderCtx) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "Unable to allocate video decoder context");
+    if (decoder != nullptr && !initializeAVCodecContext(decoder, requiredFormat, params, testMode)) {
         return false;
-    }
-
-    // Always request low delay decoding
-    m_VideoDecoderCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
-
-    // Allow display of corrupt frames and frames missing references
-    m_VideoDecoderCtx->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
-    m_VideoDecoderCtx->flags2 |= AV_CODEC_FLAG2_SHOW_ALL;
-
-    // Report decoding errors to allow us to request a key frame
-    //
-    // With HEVC streams, FFmpeg can drop a frame (hwaccel->start_frame() fails)
-    // without telling us. Since we have an infinite GOP length, this causes artifacts
-    // on screen that persist for a long time. It's easy to cause this condition
-    // by using NVDEC and delaying 100 ms randomly in the render path so the decoder
-    // runs out of output buffers.
-    m_VideoDecoderCtx->err_recognition = AV_EF_EXPLODE;
-
-    // Enable slice multi-threading for software decoding
-    if (!isHardwareAccelerated()) {
-        m_VideoDecoderCtx->thread_type = FF_THREAD_SLICE;
-        m_VideoDecoderCtx->thread_count = qMin(MAX_SLICES, SDL_GetCPUCount());
-    }
-    else {
-        // No threading for HW decode
-        m_VideoDecoderCtx->thread_count = 1;
-    }
-
-    // Setup decoding parameters
-    m_VideoDecoderCtx->width = params->width;
-    m_VideoDecoderCtx->height = params->height;
-    m_VideoDecoderCtx->get_format = ffGetFormat;
-    m_VideoDecoderCtx->pkt_timebase.num = 1;
-    m_VideoDecoderCtx->pkt_timebase.den = 90000;
-
-    // Allocate enough extra frames for Pacer to avoid stalling the decoder
-    m_VideoDecoderCtx->extra_hw_frames = PACER_MAX_OUTSTANDING_FRAMES;
-
-    // For non-hwaccel decoders, set the pix_fmt to hint to the decoder which
-    // format should be used. This is necessary for certain decoders like the
-    // out-of-tree nvv4l2dec decoders for L4T platforms. We do not do this
-    // for hwaccel decoders because it causes the AV1 Vulkan video decoder in
-    // FFmpeg 7.0-8.0 to incorrectly believe ff_get_format() was called.
-    // See #1511.
-    if (m_HwDecodeCfg == nullptr) {
-        m_VideoDecoderCtx->pix_fmt = (requiredFormat != AV_PIX_FMT_NONE) ?
-            requiredFormat : m_FrontendRenderer->getPreferredPixelFormat(params->videoFormat);
-    }
-
-    AVDictionary* options = nullptr;
-
-    // Allow the backend renderer to attach data to this decoder
-    if (!m_BackendRenderer->prepareDecoderContext(m_VideoDecoderCtx, &options)) {
-        return false;
-    }
-
-    QString optionVarName = QString("%1_AVOPTIONS").arg(decoder->name).toUpper();
-    QByteArray optionVarValue = qgetenv(optionVarName.toUtf8());
-    if (!optionVarValue.isNull()) {
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Applying FFmpeg option overrides for %s: %s",
-                    decoder->name,
-                    optionVarValue.constData());
-        av_dict_parse_string(&options, optionVarValue, "=", ":", 0);
-    }
-
-    // Nobody must override our ffGetFormat
-    SDL_assert(m_VideoDecoderCtx->get_format == ffGetFormat);
-
-    // Stash a pointer to this object in the context
-    SDL_assert(m_VideoDecoderCtx->opaque == nullptr);
-    m_VideoDecoderCtx->opaque = this;
-
-    int err = avcodec_open2(m_VideoDecoderCtx, decoder, &options);
-    av_dict_free(&options);
-    if (err < 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "Unable to open decoder for format: %x",
-                     params->videoFormat);
-        return false;
-    }
-
-    // FFMpeg doesn't completely initialize the codec until the codec
-    // config data comes in. This would be too late for us to change
-    // our minds on the selected video codec, so we'll do a trial run
-    // now to see if things will actually work when the video stream
-    // comes in.
-    if (testMode != TestMode::NoTesting) {
-        switch (params->videoFormat) {
-        case VIDEO_FORMAT_H264:
-            m_Pkt->data = (uint8_t*)k_H264TestFrame;
-            m_Pkt->size = sizeof(k_H264TestFrame);
-            break;
-        case VIDEO_FORMAT_H265:
-            m_Pkt->data = (uint8_t*)k_HEVCMainTestFrame;
-            m_Pkt->size = sizeof(k_HEVCMainTestFrame);
-            break;
-        case VIDEO_FORMAT_H265_MAIN10:
-            m_Pkt->data = (uint8_t*)k_HEVCMain10TestFrame;
-            m_Pkt->size = sizeof(k_HEVCMain10TestFrame);
-            break;
-        case VIDEO_FORMAT_AV1_MAIN8:
-            m_Pkt->data = (uint8_t*)k_AV1Main8TestFrame;
-            m_Pkt->size = sizeof(k_AV1Main8TestFrame);
-            break;
-        case VIDEO_FORMAT_AV1_MAIN10:
-            m_Pkt->data = (uint8_t*)k_AV1Main10TestFrame;
-            m_Pkt->size = sizeof(k_AV1Main10TestFrame);
-            break;
-        case VIDEO_FORMAT_H264_HIGH8_444:
-            m_Pkt->data = (uint8_t*)k_h264High_444TestFrame;
-            m_Pkt->size = sizeof(k_h264High_444TestFrame);
-            break;
-        case VIDEO_FORMAT_H265_REXT8_444:
-            m_Pkt->data = (uint8_t*)k_HEVCRExt8_444TestFrame;
-            m_Pkt->size = sizeof(k_HEVCRExt8_444TestFrame);
-            break;
-        case VIDEO_FORMAT_H265_REXT10_444:
-            m_Pkt->data = (uint8_t*)k_HEVCRExt10_444TestFrame;
-            m_Pkt->size = sizeof(k_HEVCRExt10_444TestFrame);
-            break;
-        case VIDEO_FORMAT_AV1_HIGH8_444:
-            m_Pkt->data = (uint8_t*)k_AV1High8_444TestFrame;
-            m_Pkt->size = sizeof(k_AV1High8_444TestFrame);
-            break;
-        case VIDEO_FORMAT_AV1_HIGH10_444:
-            m_Pkt->data = (uint8_t*)k_AV1High10_444TestFrame;
-            m_Pkt->size = sizeof(k_AV1High10_444TestFrame);
-            break;
-        default:
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "No test frame for format: %x",
-                         params->videoFormat);
-            return false;
-        }
-
-        AVFrame* frame = av_frame_alloc();
-        if (!frame) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "Failed to allocate frame");
-            return false;
-        }
-
-        // Some decoders won't output on the first frame, so we'll submit
-        // a few test frames if we get an EAGAIN error.
-        for (int retries = 0; retries < 5; retries++) {
-            // Most FFmpeg decoders process input using a "push" model.
-            // We'll see those fail here if the format is not supported.
-            err = avcodec_send_packet(m_VideoDecoderCtx, m_Pkt);
-            if (err < 0) {
-                av_frame_free(&frame);
-                char errorstring[512];
-                av_strerror(err, errorstring, sizeof(errorstring));
-                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                            "Test decode failed (avcodec_send_packet): %s", errorstring);
-                return false;
-            }
-
-            // A few FFmpeg decoders (h264_mmal) process here using a "pull" model.
-            // Those decoders will fail here if the format is not supported.
-#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(62, 28, 100)
-            err = avcodec_receive_frame_flags(m_VideoDecoderCtx, frame,
-                                              AV_CODEC_RECEIVE_FRAME_FLAG_SYNCHRONOUS);
-#else
-            err = avcodec_receive_frame(m_VideoDecoderCtx, frame);
-#endif
-            if (err == AVERROR(EAGAIN)) {
-                // Wait a little while to let the hardware work
-                SDL_Delay(100);
-            }
-            else {
-                // Done!
-                break;
-            }
-        }
-
-        if (err < 0) {
-            char errorstring[512];
-            av_strerror(err, errorstring, sizeof(errorstring));
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "Test decode failed (avcodec_receive_frame): %s", errorstring);
-            av_frame_free(&frame);
-            return false;
-        }
-
-        // Allow the renderer to do any validation it wants on this frame
-        if (!m_FrontendRenderer->testRenderFrame(frame)) {
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "Test decode failed (testRenderFrame)");
-            av_frame_free(&frame);
-            return false;
-        }
-
-        av_frame_free(&frame);
-
-        // Flush the codec to prepare for the real stream if we're
-        // going to use this decoder instance for streaming later
-        if (testMode == TestMode::TestFrame) {
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "Test decode successful");
-            avcodec_flush_buffers(m_VideoDecoderCtx);
-        }
     }
 
     if (testMode != TestMode::TestFrameOnly) {
@@ -818,6 +627,10 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
         codecString = "H.264";
         break;
 
+    case VIDEO_FORMAT_PYROWAVE:
+        codecString = "PyroWave";
+        break;
+
     case VIDEO_FORMAT_H264_HIGH8_444:
         codecString = "H.264 4:4:4";
         break;
@@ -881,37 +694,35 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
     }
 
     if (stats.receivedFps > 0) {
-        if (m_VideoDecoderCtx != nullptr) {
 #ifdef DISPLAY_BITRATE
-            double avgVideoMbps = m_BwTracker.GetAverageMbps();
-            double peakVideoMbps = m_BwTracker.GetPeakMbps();
+        double avgVideoMbps = m_BwTracker.GetAverageMbps();
+        double peakVideoMbps = m_BwTracker.GetPeakMbps();
 #endif
 
-            ret = snprintf(&output[offset],
-                           length - offset,
-                           "Video stream: %dx%d %.2f FPS (Codec: %s)\n"
+        ret = snprintf(&output[offset],
+                       length - offset,
+                       "Video stream: %dx%d %.2f FPS (Codec: %s)\n"
 #ifdef DISPLAY_BITRATE
-                           "Bitrate: %.1f Mbps, Peak (%us): %.1f\n"
+                       "Bitrate: %.1f Mbps, Peak (%us): %.1f\n"
 #endif
-                           ,
-                           m_VideoDecoderCtx->width,
-                           m_VideoDecoderCtx->height,
-                           stats.totalFps,
-                           codecString
+                       ,
+                       m_VideoDecoderCtx != nullptr ? m_VideoDecoderCtx->width : m_OriginalVideoWidth,
+                       m_VideoDecoderCtx != nullptr ? m_VideoDecoderCtx->height : m_OriginalVideoHeight,
+                       stats.totalFps,
+                       codecString
 #ifdef DISPLAY_BITRATE
-                           ,
-                           avgVideoMbps,
-                           m_BwTracker.GetWindowSeconds(),
-                           peakVideoMbps
+                       ,
+                       avgVideoMbps,
+                       m_BwTracker.GetWindowSeconds(),
+                       peakVideoMbps
 #endif
-                           );
-            if (ret < 0 || ret >= length - offset) {
-                SDL_assert(false);
-                return;
-            }
-
-            offset += ret;
+                       );
+        if (ret < 0 || ret >= length - offset) {
+            SDL_assert(false);
+            return;
         }
+
+        offset += ret;
 
         ret = snprintf(&output[offset],
                        length - offset,
@@ -1629,8 +1440,260 @@ bool FFmpegVideoDecoder::tryInitializeNonHwAccelDecoder(PDECODER_PARAMETERS para
     return false;
 }
 
+bool FFmpegVideoDecoder::initializeAVCodecContext(const AVCodec* decoder, enum AVPixelFormat requiredFormat, PDECODER_PARAMETERS params, TestMode testMode)
+{
+    m_VideoDecoderCtx = avcodec_alloc_context3(decoder);
+    if (!m_VideoDecoderCtx) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Unable to allocate video decoder context");
+        return false;
+    }
+
+    // Always request low delay decoding
+    m_VideoDecoderCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
+
+    // Allow display of corrupt frames and frames missing references
+    m_VideoDecoderCtx->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
+    m_VideoDecoderCtx->flags2 |= AV_CODEC_FLAG2_SHOW_ALL;
+
+    // Report decoding errors to allow us to request a key frame
+    //
+    // With HEVC streams, FFmpeg can drop a frame (hwaccel->start_frame() fails)
+    // without telling us. Since we have an infinite GOP length, this causes artifacts
+    // on screen that persist for a long time. It's easy to cause this condition
+    // by using NVDEC and delaying 100 ms randomly in the render path so the decoder
+    // runs out of output buffers.
+    m_VideoDecoderCtx->err_recognition = AV_EF_EXPLODE;
+
+    // Enable slice multi-threading for software decoding
+    if (!isHardwareAccelerated()) {
+        m_VideoDecoderCtx->thread_type = FF_THREAD_SLICE;
+        m_VideoDecoderCtx->thread_count = qMin(MAX_SLICES, SDL_GetCPUCount());
+    }
+    else {
+        // No threading for HW decode
+        m_VideoDecoderCtx->thread_count = 1;
+    }
+
+    // Setup decoding parameters
+    m_VideoDecoderCtx->width = params->width;
+    m_VideoDecoderCtx->height = params->height;
+    m_VideoDecoderCtx->get_format = ffGetFormat;
+    m_VideoDecoderCtx->pkt_timebase.num = 1;
+    m_VideoDecoderCtx->pkt_timebase.den = 90000;
+
+    // Allocate enough extra frames for Pacer to avoid stalling the decoder
+    m_VideoDecoderCtx->extra_hw_frames = PACER_MAX_OUTSTANDING_FRAMES;
+
+    // For non-hwaccel decoders, set the pix_fmt to hint to the decoder which
+    // format should be used. This is necessary for certain decoders like the
+    // out-of-tree nvv4l2dec decoders for L4T platforms. We do not do this
+    // for hwaccel decoders because it causes the AV1 Vulkan video decoder in
+    // FFmpeg 7.0-8.0 to incorrectly believe ff_get_format() was called.
+    // See #1511.
+    if (m_HwDecodeCfg == nullptr) {
+        m_VideoDecoderCtx->pix_fmt = (requiredFormat != AV_PIX_FMT_NONE) ?
+            requiredFormat : m_FrontendRenderer->getPreferredPixelFormat(params->videoFormat);
+    }
+
+    AVDictionary* options = nullptr;
+
+    // Allow the backend renderer to attach data to this decoder
+    if (!m_BackendRenderer->prepareDecoderContext(m_VideoDecoderCtx, &options)) {
+        return false;
+    }
+
+    QString optionVarName = QString("%1_AVOPTIONS").arg(decoder->name).toUpper();
+    QByteArray optionVarValue = qgetenv(optionVarName.toUtf8());
+    if (!optionVarValue.isNull()) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Applying FFmpeg option overrides for %s: %s",
+                    decoder->name,
+                    optionVarValue.constData());
+        av_dict_parse_string(&options, optionVarValue, "=", ":", 0);
+    }
+
+    // Nobody must override our ffGetFormat
+    SDL_assert(m_VideoDecoderCtx->get_format == ffGetFormat);
+
+    // Stash a pointer to this object in the context
+    SDL_assert(m_VideoDecoderCtx->opaque == nullptr);
+    m_VideoDecoderCtx->opaque = this;
+
+    int err = avcodec_open2(m_VideoDecoderCtx, decoder, &options);
+    av_dict_free(&options);
+    if (err < 0) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Unable to open decoder for format: %x",
+                     params->videoFormat);
+        return false;
+    }
+
+    // FFMpeg doesn't completely initialize the codec until the codec
+    // config data comes in. This would be too late for us to change
+    // our minds on the selected video codec, so we'll do a trial run
+    // now to see if things will actually work when the video stream
+    // comes in.
+    if (testMode != TestMode::NoTesting) {
+        switch (params->videoFormat) {
+        case VIDEO_FORMAT_H264:
+            m_Pkt->data = (uint8_t*)k_H264TestFrame;
+            m_Pkt->size = sizeof(k_H264TestFrame);
+            break;
+        case VIDEO_FORMAT_H265:
+            m_Pkt->data = (uint8_t*)k_HEVCMainTestFrame;
+            m_Pkt->size = sizeof(k_HEVCMainTestFrame);
+            break;
+        case VIDEO_FORMAT_H265_MAIN10:
+            m_Pkt->data = (uint8_t*)k_HEVCMain10TestFrame;
+            m_Pkt->size = sizeof(k_HEVCMain10TestFrame);
+            break;
+        case VIDEO_FORMAT_AV1_MAIN8:
+            m_Pkt->data = (uint8_t*)k_AV1Main8TestFrame;
+            m_Pkt->size = sizeof(k_AV1Main8TestFrame);
+            break;
+        case VIDEO_FORMAT_AV1_MAIN10:
+            m_Pkt->data = (uint8_t*)k_AV1Main10TestFrame;
+            m_Pkt->size = sizeof(k_AV1Main10TestFrame);
+            break;
+        case VIDEO_FORMAT_H264_HIGH8_444:
+            m_Pkt->data = (uint8_t*)k_h264High_444TestFrame;
+            m_Pkt->size = sizeof(k_h264High_444TestFrame);
+            break;
+        case VIDEO_FORMAT_H265_REXT8_444:
+            m_Pkt->data = (uint8_t*)k_HEVCRExt8_444TestFrame;
+            m_Pkt->size = sizeof(k_HEVCRExt8_444TestFrame);
+            break;
+        case VIDEO_FORMAT_H265_REXT10_444:
+            m_Pkt->data = (uint8_t*)k_HEVCRExt10_444TestFrame;
+            m_Pkt->size = sizeof(k_HEVCRExt10_444TestFrame);
+            break;
+        case VIDEO_FORMAT_AV1_HIGH8_444:
+            m_Pkt->data = (uint8_t*)k_AV1High8_444TestFrame;
+            m_Pkt->size = sizeof(k_AV1High8_444TestFrame);
+            break;
+        case VIDEO_FORMAT_AV1_HIGH10_444:
+            m_Pkt->data = (uint8_t*)k_AV1High10_444TestFrame;
+            m_Pkt->size = sizeof(k_AV1High10_444TestFrame);
+            break;
+        default:
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "No test frame for format: %x",
+                         params->videoFormat);
+            return false;
+        }
+
+        AVFrame* frame = av_frame_alloc();
+        if (!frame) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "Failed to allocate frame");
+            return false;
+        }
+
+        // Some decoders won't output on the first frame, so we'll submit
+        // a few test frames if we get an EAGAIN error.
+        for (int retries = 0; retries < 5; retries++) {
+            // Most FFmpeg decoders process input using a "push" model.
+            // We'll see those fail here if the format is not supported.
+            err = avcodec_send_packet(m_VideoDecoderCtx, m_Pkt);
+            if (err < 0) {
+                av_frame_free(&frame);
+                char errorstring[512];
+                av_strerror(err, errorstring, sizeof(errorstring));
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                            "Test decode failed (avcodec_send_packet): %s", errorstring);
+                return false;
+            }
+
+            // A few FFmpeg decoders (h264_mmal) process here using a "pull" model.
+            // Those decoders will fail here if the format is not supported.
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(62, 28, 100)
+            err = avcodec_receive_frame_flags(m_VideoDecoderCtx, frame,
+                                              AV_CODEC_RECEIVE_FRAME_FLAG_SYNCHRONOUS);
+#else
+            err = avcodec_receive_frame(m_VideoDecoderCtx, frame);
+#endif
+            if (err == AVERROR(EAGAIN)) {
+                // Wait a little while to let the hardware work
+                SDL_Delay(100);
+            }
+            else {
+                // Done!
+                break;
+            }
+        }
+
+        if (err < 0) {
+            char errorstring[512];
+            av_strerror(err, errorstring, sizeof(errorstring));
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Test decode failed (avcodec_receive_frame): %s", errorstring);
+            av_frame_free(&frame);
+            return false;
+        }
+
+        // Allow the renderer to do any validation it wants on this frame
+        if (!m_FrontendRenderer->testRenderFrame(frame)) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Test decode failed (testRenderFrame)");
+            av_frame_free(&frame);
+            return false;
+        }
+
+        av_frame_free(&frame);
+
+        // Flush the codec to prepare for the real stream if we're
+        // going to use this decoder instance for streaming later
+        if (testMode == TestMode::TestFrame) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Test decode successful");
+            avcodec_flush_buffers(m_VideoDecoderCtx);
+        }
+    }
+
+    return true;
+}
+
+#ifdef HAVE_PYROWAVE
+bool FFmpegVideoDecoder::initializePyroWave(PDECODER_PARAMETERS params)
+{
+    m_BackendRenderer = VTMetalRendererFactory::createRenderer(false);
+    m_PyroWave = std::make_unique<PyroWaveMetalDecoder>();
+    if (!initializeRendererInternal(m_BackendRenderer, params) ||
+            !m_PyroWave->initialize(params->width, params->height) ||
+            !completeInitialization(nullptr, AV_PIX_FMT_NONE, params,
+                                    m_TestOnly ? TestMode::TestFrameOnly : TestMode::NoTesting, false)) {
+        reset();
+        return false;
+    }
+
+    return true;
+}
+#endif
+
+int FFmpegVideoDecoder::receiveFrame(AVFrame* frame)
+{
+#ifdef HAVE_PYROWAVE
+    if (m_PyroWave) {
+        if (m_PyroWaveFrame == nullptr) {
+            return AVERROR(EAGAIN);
+        }
+        av_frame_move_ref(frame, m_PyroWaveFrame);
+        av_frame_free(&m_PyroWaveFrame);
+        return 0;
+    }
+#endif
+    return avcodec_receive_frame(m_VideoDecoderCtx, frame);
+}
+
 bool FFmpegVideoDecoder::initialize(PDECODER_PARAMETERS params)
 {
+#ifdef HAVE_PYROWAVE
+    if (params->videoFormat & VIDEO_FORMAT_MASK_PYROWAVE) {
+        return initializePyroWave(params);
+    }
+#endif
+
     // Increase log level until the first frame is decoded
     av_log_set_level(AV_LOG_DEBUG);
 
@@ -1895,7 +1958,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
 
             int err;
             do {
-                err = avcodec_receive_frame(m_VideoDecoderCtx, frame);
+                err = receiveFrame(frame);
                 if (err == 0) {
                     SDL_assert(m_FrameInfoQueue.size() == m_FramesIn - m_FramesOut);
                     m_FramesOut++;
@@ -2037,7 +2100,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
                     // Capture a frame timestamp to measuring pacing delay
                     frame->pkt_dts = LiGetMicroseconds();
 
-                    if (!m_LoggedReorderDepth) {
+                    if (!m_LoggedReorderDepth && m_VideoDecoderCtx != nullptr) {
                         m_LoggedReorderDepth = true;
                         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                                     "Decoder reorder depth (has_b_frames): %d",
@@ -2203,6 +2266,28 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
     }
 
     m_ActiveWndVideoStats.totalReassemblyTimeUs += (du->enqueueTimeUs - du->receiveTimeUs);
+
+#ifdef HAVE_PYROWAVE
+    if (m_PyroWave) {
+        uint64_t decodeStartUs = LiGetMicroseconds();
+        AVFrame* frame = av_frame_alloc();
+        if (frame == nullptr || !m_PyroWave->decode(reinterpret_cast<const uint8_t*>(m_DecodeBuffer.data()), offset, frame)) {
+            av_frame_free(&frame);
+            // Frames are independent, so the next one simply replaces this one
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "PyroWave dropped frame %d",
+                        du->frameNumber);
+            return DR_OK;
+        }
+        m_ActiveWndVideoStats.totalSubmitTimeUs += LiGetMicroseconds() - decodeStartUs;
+
+        av_frame_free(&m_PyroWaveFrame);
+        m_PyroWaveFrame = frame;
+        m_FrameInfoQueue.enqueue(*du);
+        m_FramesIn++;
+        return DR_OK;
+    }
+#endif
 
     uint64_t submitStartUs = LiGetMicroseconds();
     err = avcodec_send_packet(m_VideoDecoderCtx, m_Pkt);

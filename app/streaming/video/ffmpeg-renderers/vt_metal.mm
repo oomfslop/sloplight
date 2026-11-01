@@ -597,6 +597,10 @@ public:
                 fmt = (i == 0) ? MTLPixelFormatR16Unorm : MTLPixelFormatRG16Unorm;
                 break;
 
+            case kCVPixelFormatType_420YpCbCr8Planar:
+                fmt = MTLPixelFormatR8Unorm;
+                break;
+
             default:
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                              "Unknown pixel format: %x",

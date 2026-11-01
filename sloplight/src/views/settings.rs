@@ -807,7 +807,7 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
         }
         "advanced" => {
             rows.push(segmented_row(root, cx, theme, "seg-decoder", "Video decoder", "Forcing software decoding may hurt performance.", VideoDecoder::ALL, &["Auto", "Hardware", "Software"], |s| s.video_decoder_selection, |s, v| s.video_decoder_selection = v, None));
-            rows.push(segmented_row(root, cx, theme, "seg-codec", "Video codec", "", VideoCodec::ALL, &["Auto", "H.264", "HEVC", "AV1"], |s| s.video_codec_config, |s, v| s.video_codec_config = v, None));
+            rows.push(segmented_row(root, cx, theme, "seg-codec", "Video codec", "", VideoCodec::ALL, &["Auto", "H.264", "HEVC", "AV1", "PyroWave"], |s| s.video_codec_config, |s, v| s.video_codec_config = v, None));
             if is_macos {
                 rows.push(Row {
                     label: "Renderer",
