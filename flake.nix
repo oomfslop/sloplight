@@ -29,7 +29,11 @@
         };
         # Reuse the nixpkgs derivation (qmake + pkg-config, CONFIG+=disable-prebuilts)
         # but build this tree, including the modified moonlight-common-c submodule.
-        moonlight-qt = pkgs.moonlight-qt.overrideAttrs (old: {
+        moonlight-qt = (pkgs.moonlight-qt.override (pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+          # Upstream's prebuilt FFmpeg carries the same patch: VideoToolbox decodes into
+          # OpenGL-compatible buffers otherwise, ~3 ms more per 4K frame on Apple silicon
+          ffmpeg_8 = pkgs.ffmpeg_8.overrideAttrs (o: { patches = (o.patches or [ ]) ++ [ ./nix/ffmpeg_metal_vt.patch ]; });
+        })).overrideAttrs (old: {
           version = "6.1.0-apollo";
           src = ./.;
           # Upstream master already contains the fix that nixpkgs patches in

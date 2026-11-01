@@ -1,0 +1,23 @@
+commit 88d39e4ea7b682872579f55e096464bad4450a72
+Author: Cameron Gutman <aicommander@gmail.com>
+Date:   Sat Feb 17 13:43:20 2024 -0600
+
+    Request Metal compatibility for CVPixelBuffers
+
+diff --git a/libavcodec/videotoolbox.c b/libavcodec/videotoolbox.c
+index 43fd2e3fea..abbebbe32a 100644
+--- a/libavcodec/videotoolbox.c
++++ b/libavcodec/videotoolbox.c
+@@ -783,11 +783,7 @@ static CFDictionaryRef videotoolbox_buffer_attributes_create(int width,
+     CFDictionarySetValue(buffer_attributes, kCVPixelBufferIOSurfacePropertiesKey, io_surface_properties);
+     CFDictionarySetValue(buffer_attributes, kCVPixelBufferWidthKey, w);
+     CFDictionarySetValue(buffer_attributes, kCVPixelBufferHeightKey, h);
+-#if TARGET_OS_IPHONE
+-    CFDictionarySetValue(buffer_attributes, kCVPixelBufferOpenGLESCompatibilityKey, kCFBooleanTrue);
+-#else
+-    CFDictionarySetValue(buffer_attributes, kCVPixelBufferIOSurfaceOpenGLTextureCompatibilityKey, kCFBooleanTrue);
+-#endif
++    CFDictionarySetValue(buffer_attributes, kCVPixelBufferMetalCompatibilityKey, kCFBooleanTrue);
+ 
+     CFRelease(io_surface_properties);
+     CFRelease(cv_pix_fmt);
