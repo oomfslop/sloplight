@@ -1,0 +1,420 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+
+import { getConfigSelectOptions } from '../configs/configSelectOptions.ts';
+import { getConfigSelectOptions as getLegacyConfigSelectOptions } from '../../web-legacy/configs/configSelectOptions.ts';
+import {
+  matchesPlatform,
+  settingsFields,
+  optionsForPlatform,
+  encoderFamilyFor,
+  fieldForPlatform,
+  captureOptionsForPlatform,
+  frameGenerationOptionsForPlatform,
+  gamepadOptionsForPlatform,
+  settingsCategories,
+  settingsDefaults,
+  type SettingsField,
+} from '../configs/settingsSchema.ts';
+import {
+  displayFieldVisibility,
+  downsampleHostHistory,
+  hostHistoryPeaks,
+  normalizeCommandRows,
+  preserveHiddenDisplayValues,
+  serializeCommandRows,
+} from '../utils/v2Parity.ts';
+
+test('AMD speed default agrees across backend, settings UI and legacy fallbacks', () => {
+  for (const path of [
+    '../configs/settingsSchema.ts',
+    '../../web-legacy/stores/config.ts',
+  ]) {
+    assert.match(readFileSync(new URL(path, import.meta.url), 'utf8'), /amd_quality:\s*'speed'/);
+  }
+  const backend = readFileSync(new URL('../../../../../src/config.cpp', import.meta.url), 'utf8');
+  for (const codec of ['h264', 'hevc', 'av1']) {
+    assert.ok(backend.includes(`amd::quality_${codec}_e::speed,  // quality (${codec})`));
+  }
+});
+
+test('final restore removal defaults to retention and is Windows-only', () => {
+  assert.equal(settingsDefaults.dd_remove_virtual_display_after_restore, false);
+  const field = settingsCategories.flatMap((category) =>
+    category.groups.flatMap((group) => group.fields),
+  ).find((candidate) => candidate.key === 'dd_remove_virtual_display_after_restore');
+  assert.ok(field);
+  assert.equal(field.kind, 'boolean');
+  assert.equal(matchesPlatform(field, 'windows'), true);
+  assert.equal(matchesPlatform(field, 'linux'), false);
+  assert.equal(matchesPlatform(field, 'macos'), false);
+});
+
+test('capture options follow the host platform', () => {
+  assert.deepEqual(
+    captureOptionsForPlatform('linux').map((option) => option.value),
+    ['', 'kms', 'kwin', 'gamescope', 'portal', 'wlr', 'x11', 'nvfbc'],
+  );
+  assert.deepEqual(
+    captureOptionsForPlatform('windows').map((option) => option.value),
+    ['', 'wgc', 'wgcc', 'ddx'],
+  );
+  assert.deepEqual(
+    captureOptionsForPlatform('macos').map((option) => option.value),
+    [''],
+  );
+});
+
+test('gamepad options follow the host platform', () => {
+  assert.deepEqual(
+    gamepadOptionsForPlatform('linux').map((option) => option.value),
+    ['auto', 'xone', 'ds4', 'ds5', 'switch'],
+  );
+  assert.deepEqual(
+    gamepadOptionsForPlatform('windows').map((option) => option.value),
+    [
+      'auto',
+      'x360',
+      'ds4',
+      'vhf',
+      'vhf_xbox',
+      'vhf_xbox_one',
+      'vhf_ds4',
+      'vhf_ds5',
+      'usbip_ds5',
+      'vhf_switch',
+    ],
+  );
+  const context = { t: (key: string) => key, platform: 'linux' };
+  for (const getOptions of [getConfigSelectOptions, getLegacyConfigSelectOptions]) {
+    assert.deepEqual(
+      getOptions('gamepad', context).map((option) => option.value),
+      ['auto', 'xone', 'ds4', 'ds5', 'switch'],
+    );
+  }
+  assert.deepEqual(settingsFields.get('ds4_back_as_touchpad_click')?.platform, ['windows', 'linux']);
+});
+
+test('both production settings models offer the composite DualSense only on Windows and preserve saved values', () => {
+  for (const getOptions of [getConfigSelectOptions, getLegacyConfigSelectOptions]) {
+    const context = { t: (key: string) => key, platform: 'windows' };
+    const option = getOptions('gamepad', context).find(
+      (candidate) => candidate.value === 'usbip_ds5',
+    );
+    assert.equal(option?.label, 'usbip_ds5', 'an untranslated label retains a usable fallback');
+
+    const translated = getOptions('gamepad', {
+      ...context,
+      t: (key: string) =>
+        key === 'config.gamepad_usbip_ds5' ? 'DualSense with waveform haptics' : key,
+    }).find((candidate) => candidate.value === 'usbip_ds5');
+    assert.equal(translated?.label, 'DualSense with waveform haptics');
+
+    for (const platform of ['linux', 'macos']) {
+      assert.equal(
+        getOptions('gamepad', { ...context, platform }).some(
+          (candidate) => candidate.value === 'usbip_ds5',
+        ),
+        false,
+        `${platform} must not offer the Windows USB/IP driver`,
+      );
+    }
+    assert.deepEqual(
+      getOptions('gamepad', { ...context, platform: 'linux' }).map((candidate) => candidate.value),
+      ['auto', 'xone', 'ds4', 'ds5', 'switch'],
+    );
+    assert.ok(
+      getOptions('gamepad', { ...context, currentValue: 'future_controller' }).some(
+        (candidate) => candidate.value === 'future_controller',
+      ),
+      'loading a saved controller selection must not silently change it',
+    );
+  }
+});
+
+test('Linux keeps common virtual-display policy and hides Windows display internals', () => {
+  const fields = settingsCategories.flatMap((category) =>
+    category.groups.flatMap((group) => group.fields),
+  );
+  const commonKeys = new Set([
+    'virtual_display_mode',
+    'virtual_display_layout',
+    'dd_resolution_option',
+    'dd_refresh_rate_option',
+    'dd_hdr_option',
+    'dd_hdr_request_override',
+  ]);
+  const windowsOnlyKeys = new Set([
+    'dd_use_sunshine_virtual_display_driver',
+    'dd_activate_virtual_display',
+    'dd_virtual_display_permanent_count',
+    'dd_display_helper_engine',
+    'vulkan_hdr_layer',
+    'dd_wa_dummy_plug_hdr10',
+    'dd_always_restore_from_golden',
+    'dd_snapshot_restore_hotkey',
+    'dd_snapshot_restore_hotkey_modifiers',
+    'wgc_pacing_smoothing',
+    'always_send_scancodes',
+    'native_pen_touch',
+    'install_steam_audio_drivers',
+  ]);
+
+  for (const field of fields.filter((candidate) => commonKeys.has(candidate.key))) {
+    assert.equal(field.platform, undefined, `${field.key} must remain cross-platform`);
+  }
+  for (const field of fields.filter((candidate) => windowsOnlyKeys.has(candidate.key))) {
+    assert.equal(field.platform, 'windows', `${field.key} must remain Windows-only`);
+  }
+  for (const key of [
+    'gamepad',
+    'ds4_back_as_touchpad_click',
+    'dd_virtual_display_scale',
+    'dd_config_revert_delay',
+    'dd_config_revert_on_disconnect',
+    'dd_paused_virtual_display_timeout_secs',
+  ]) {
+    const field = fields.find((candidate) => candidate.key === key);
+    assert.deepEqual(field?.platform, ['windows', 'linux'], `${key} must support Linux cleanup`);
+  }
+
+  const waylandHdrCompatibility = fields.find(
+    (candidate) => candidate.key === 'wayland_hdr_compatibility',
+  );
+  assert.equal(
+    waylandHdrCompatibility?.platform,
+    'linux',
+    'Wayland HDR compatibility must remain Linux-only',
+  );
+  assert.equal(settingsDefaults.wayland_hdr_compatibility, false);
+});
+
+test('Linux exposes Remote Monitor behavior controls', () => {
+  const remoteMonitor = settingsCategories
+    .flatMap((category) => category.groups)
+    .find((group) => group.id === 'display_remote_monitor');
+  assert.ok(remoteMonitor);
+
+  for (const key of [
+    'remote_monitor_mute_audio',
+    'remote_monitor_disconnect_on_stream_end',
+    'remote_monitor_disconnect_on_client_disconnect',
+    'remote_monitor_terminate_on_first_request',
+  ]) {
+    const field: SettingsField | undefined = remoteMonitor.fields.find(
+      (candidate) => candidate.key === key,
+    );
+    assert.deepEqual(field?.platform, ['windows', 'linux'], `${key} must support Linux`);
+  }
+});
+
+test('Everyday keeps impactful stream choices together and detailed tuning in categories', () => {
+  const everyday = settingsCategories.find((category) => category.id === 'everyday')!;
+  const groups = everyday.groups.filter((group) => matchesPlatform(group, 'linux'));
+  assert.deepEqual(
+    groups.map((group) => group.id),
+    [
+      'everyday_display',
+      'everyday_smoothness',
+      'everyday_pyrowave',
+      'everyday_remote_monitor',
+      'everyday_integrations',
+      'everyday_compatibility',
+      'everyday_resolution',
+      'everyday_encoding',
+      'everyday_recovery',
+      'everyday_automation',
+    ],
+  );
+  assert.deepEqual(
+    groups.filter((group) => !group.collapsed).map((group) => group.id),
+    ['everyday_display', 'everyday_smoothness', 'everyday_pyrowave'],
+  );
+  const keys = groups.flatMap((group) =>
+    group.fields.filter((field) => matchesPlatform(field, 'linux')).map((field) => field.key),
+  );
+  for (const key of [
+    'virtual_display_mode',
+    'virtual_display_layout',
+    'dd_resolution_option',
+    'dd_refresh_rate_option',
+    'dd_virtual_display_scale',
+    'dd_hdr_request_override',
+    'capture',
+    'encoder',
+    'nvenc_preset',
+    'fec_percentage',
+    'dd_config_revert_on_disconnect',
+    'dd_paused_virtual_display_timeout_secs',
+    'frame_limiter_auto_virtual_framegen',
+    'frame_limiter_provider',
+    'mangohud_preset',
+    'pyrowave',
+    'virtual_display_max_clients',
+    'remote_monitor_mute_audio',
+    'dd_mode_remapping',
+    'global_prep_cmd',
+  ])
+    assert.ok(keys.includes(key));
+  for (const key of [
+    'stream_audio',
+    'dd_configuration_option',
+    'controller',
+    'nvenc_twopass',
+    'rtss_install_path',
+    'lossless_scaling_path',
+  ])
+    assert.ok(!keys.includes(key));
+});
+
+test('Linux virtual-display pacing uses Linux-specific copy', () => {
+  assert.deepEqual(
+    frameGenerationOptionsForPlatform('linux').map((option) => option.labelKey),
+    [
+      'ui.settings.options.frame_generation.automatic_linux',
+      'ui.settings.options.frame_generation.compatibility_linux',
+      'ui.settings.options.frame_generation.off_linux',
+    ],
+  );
+
+  const messages = JSON.parse(
+    readFileSync(new URL('../public/assets/locale/ui/en.json', import.meta.url), 'utf8'),
+  );
+  const linuxCopy = [
+    messages.ui.settings.fields.frame_limiter_auto_virtual_framegen.description_linux,
+    messages.ui.settings.groups.everyday_remote_monitor.description,
+    messages.ui.settings.groups.everyday_smoothness.description_linux,
+    messages.ui.settings.options.frame_generation.automatic_linux,
+    messages.ui.settings.options.frame_generation.compatibility_linux,
+    messages.ui.settings.options.frame_generation.off_linux,
+    messages.ui.settings.summary.automatic_pacing_linux,
+    messages.ui.settings.summary.automatic_pacing_limiter_off_linux,
+    messages.ui.settings.summary.compatibility_pacing_linux,
+    messages.ui.settings.summary.compatibility_pacing_limiter_off_linux,
+  ];
+  for (const copy of linuxCopy) {
+    assert.equal(typeof copy, 'string');
+    assert.doesNotMatch(copy, /\b(?:WGC|Windows)\b/i);
+  }
+});
+
+test('Linux Proton and MangoHUD limiter choices stay aligned with legacy UI', () => {
+  assert.equal(settingsDefaults.frame_limiter_provider, 'auto');
+  assert.equal(settingsDefaults.mangohud_limiter_method, 'late');
+
+  const fields = settingsCategories.flatMap((category) =>
+    category.groups.flatMap((group) => group.fields),
+  );
+  const method = fields.find((field) => field.key === 'mangohud_limiter_method');
+  assert.deepEqual(method?.platform, 'linux');
+  assert.deepEqual(method?.visibleWhen, {
+    key: 'frame_limiter_provider',
+    equals: 'mangohud',
+  });
+  assert.deepEqual(
+    method?.options?.map((option) => option.value),
+    ['early', 'late'],
+  );
+
+  const messages = JSON.parse(
+    readFileSync(new URL('../public/assets/locale/ui/en.json', import.meta.url), 'utf8'),
+  );
+  assert.match(messages.ui.integrations.mangohud.providerAuto, /Proton.*MangoHUD/i);
+  assert.match(messages.ui.integrations.mangohud.limiterMethodDescription, /latency/i);
+  assert.match(messages.ui.integrations.mangohud.limiterMethodDescription, /frame generation/i);
+
+  const context = { t: (key: string) => key, platform: 'linux' };
+  assert.deepEqual(
+    getLegacyConfigSelectOptions('frame_limiter_provider', context).map((option) => option.value),
+    ['auto', 'mangohud-proton', 'proton', 'mangohud', 'none'],
+  );
+  assert.deepEqual(
+    getLegacyConfigSelectOptions('mangohud_limiter_method', context).map((option) => option.value),
+    ['early', 'late'],
+  );
+});
+
+test('Settings notices are translated for unavailable host metadata and displays', () => {
+  const messages = JSON.parse(
+    readFileSync(new URL('../public/assets/locale/ui/en.json', import.meta.url), 'utf8'),
+  );
+  assert.equal(typeof messages.ui.settings.metadata_unavailable.description, 'string');
+  assert.equal(typeof messages.ui.settings.virtual_display_unavailable.description, 'string');
+});
+
+test('global command rows preserve order, verbatim text, and Windows elevation', () => {
+  const source = [
+    { do: '  set-mode "A"  ', undo: 'restore A', elevated: true, custom: 'keep' },
+    { do: 'second', undo: '', elevated: false },
+  ];
+  const rows = normalizeCommandRows(source, 'windows');
+  assert.deepEqual(serializeCommandRows(rows, 'windows'), source);
+  assert.deepEqual(serializeCommandRows(source, 'linux'), [
+    { do: '  set-mode "A"  ', undo: 'restore A', custom: 'keep' },
+    { do: 'second', undo: '' },
+  ]);
+});
+
+test('persisted command JSON is available to the v2 editor', () => {
+  const persisted = JSON.stringify([{ do: 'connect', undo: 'disconnect', elevated: true }]);
+  assert.deepEqual(normalizeCommandRows(persisted, 'windows'), [
+    { do: 'connect', undo: 'disconnect', elevated: true },
+  ]);
+});
+
+test('display visibility calls disabled Physical and does not clear hidden values', () => {
+  assert.deepEqual(displayFieldVisibility('disabled'), { physical: true, virtual: false });
+  assert.deepEqual(displayFieldVisibility('per_client'), { physical: false, virtual: true });
+  assert.deepEqual(
+    preserveHiddenDisplayValues(
+      { dd_virtual_display_scale: 125 },
+      { virtual_display_mode: 'disabled' },
+    ),
+    { dd_virtual_display_scale: 125, virtual_display_mode: 'disabled' },
+  );
+});
+
+test('host history downsampling and peaks make relative spikes comparable', () => {
+  const points = Array.from({ length: 10 }, (_, index) => ({
+    timestamp: index,
+    cpu_percent: index === 7 ? 95 : 10,
+    gpu_percent: index === 6 ? 88 : 20,
+    gpu_encoder_percent: index === 8 ? 79 : 5,
+    net_tx_bps: index === 9 ? 12_000_000 : 1_000_000,
+  }));
+  const downsampled = downsampleHostHistory(points, 4);
+  assert.equal(downsampled.length, 4);
+  assert.deepEqual(
+    downsampled.map((point) => point.timestamp),
+    [6, 7, 8, 9],
+    'the rendered series must retain each CPU/GPU/encoder/network spike',
+  );
+  assert.deepEqual(hostHistoryPeaks(points), { cpu: 95, gpu: 88, encoder: 79, networkMbps: 12 });
+});
+
+test('advanced encoder settings have actual fields and platform-aware options', () => {
+  for (const key of [
+    'nvenc_twopass',
+    'nvenc_spatial_aq',
+    'qsv_coder',
+    'amd_rc',
+    'vaapi_strict_rc_buffer',
+    'vk_tune',
+    'sw_preset',
+    'vt_software',
+    'keybindings',
+    'session_token_ttl_seconds',
+    'realtime_stats_show_host_stats',
+  ])
+    assert.ok(settingsFields.has(key), key);
+  assert.equal(encoderFamilyFor('vaapi'), 'vaapi');
+  assert.equal(encoderFamilyFor('vulkan'), 'vulkan');
+  assert.equal(encoderFamilyFor('nvenc_legacy'), 'nvidia');
+  assert.equal(matchesPlatform(settingsFields.get('qsv_coder')!, 'linux'), false);
+  assert.equal(fieldForPlatform(settingsFields.get('adapter_name')!, 'linux').kind, 'text');
+  assert.equal(
+    optionsForPlatform(settingsFields.get('virtual_display_mode')!, 'linux')[0].value,
+    'per_client',
+  );
+});

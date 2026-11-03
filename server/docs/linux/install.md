@@ -1,0 +1,416 @@
+# Installing Vibeshine on Linux (beta)
+
+Vibeshine's Linux host is in beta. It ships as a native package for **Arch Linux and CachyOS**,
+and it is developed and tested on **CachyOS with KDE Plasma 6 on Wayland**. Other Arch-based
+distributions should work but get less testing. There is no AppImage, Flatpak, Debian, Fedora, or
+Docker build in this beta.
+
+An explicit, experimental [Hyprland physical-display subset](hyprland.md) is available through
+the manual native-package path. It requires UWSM and does not provide private outputs, HDR
+or Steam/Xwayland application launching.
+
+## Requirements
+
+| Requirement | Detail |
+| --- | --- |
+| Distribution | Arch Linux or CachyOS, x86_64. Vibeshine is tuned for CachyOS. |
+| Desktop | KDE Plasma 6 on **Wayland**, started by **SDDM** or **Plasma Login Manager**. GNOME, other compositors, X11 sessions, and remote logins are not streamed. |
+| Kernel | Linux **6.16 or newer**, plus the headers for the kernel you boot (for example `linux-cachyos-headers`). The virtual-display driver is built with DKMS during installation. |
+| GPU | A GPU with a hardware **H.264** encoder. Testing has focused on NVIDIA and modern AMD GPUs; older cards may not work properly. NVIDIA uses NVENC through `nvidia-utils`; AMD needs `libva-mesa-driver`; Intel needs `intel-media-driver`. HEVC and AV1 are used when available. |
+| Pre-login streaming | NVIDIA only. AMD and Intel machines stream after you log in. |
+| Accounts | One interactive desktop account. Machines with several accounts choose the streaming owner once (see [Choosing the streaming user](#choosing-the-streaming-user)). |
+| Secure Boot | Supported. The package signs its kernel module; on kernels that enforce module signatures you approve a one-time MOK enrollment at the next reboot. Do not disable Secure Boot. |
+
+Vibeshine runs as **machine-wide system services**, not as a per-user service. Do not run it with
+`systemctl --user`, and do not add file capabilities to `/usr/bin/vibeshine`.
+
+## Install with the script (recommended)
+
+The installer checks the requirements above, installs the kernel headers for your running kernel,
+installs the package, opens the firewall if one is active, and tells you whether a reboot is needed.
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/Nonary/vibeshine/master/scripts/linux_install.sh
+less linux_install.sh            # optional: read what it does
+sudo bash linux_install.sh
+```
+
+The script prefers the signed Nonary pacman repository. When the repository is not reachable it
+downloads the newest release package from GitHub and installs it with `pacman -U`. Useful options:
+
+| Option | Effect |
+| --- | --- |
+| `--version 2.0.0` | Install that exact release. |
+| `--stable` | Ignore pre-releases. |
+| `--package ./vibeshine-*.pkg.tar.zst` | Install a package you already downloaded. |
+| `--no-repo` | Skip the pacman repository and use GitHub releases. |
+| `--yes` | Answer pacman prompts automatically. |
+
+Re-running the script is safe. It only installs what is missing and repeats the checks.
+The script does not run a full system upgrade. Local packages use `pacman -U`;
+repository installs use existing metadata to install Vibeshine and its dependencies.
+If the host repository has not been cached yet, the script uses a release package
+instead of refreshing system databases automatically.
+Maintain the rest of your Arch system separately. Matching headers for the
+running kernel are required: installing headers for a newer kernel is not enough.
+The script verifies the virtual-display module after package installation and
+builds it if necessary; a missing module or build failure stops installation.
+
+### Legacy driver-source leftovers
+
+Unowned driver-source files left by earlier local updates inside a host-package-owned
+`/usr/src/vibeshine-drm-*` directory are backed up under
+`/var/tmp/vibeshine-driver-backup.*` before exact-path replacement. Backups remain
+available if pacman fails. Other packages' files and symlinks are not overwritten.
+
+## Install manually
+
+### From the signed repository
+
+Import and locally trust the Nonary repository key:
+
+```bash
+curl -fsSLo /tmp/nonary-vibeshine.gpg \
+  https://nonary.github.io/vibeshine/arch/x86_64/nonary-vibeshine.gpg
+curl -fsSLo /tmp/nonary-vibeshine-fingerprint.txt \
+  https://nonary.github.io/vibeshine/arch/x86_64/nonary-vibeshine-fingerprint.txt
+sudo pacman-key --add /tmp/nonary-vibeshine.gpg
+sudo pacman-key --lsign-key "$(tr -d '[:space:]' </tmp/nonary-vibeshine-fingerprint.txt)"
+```
+
+Add the repository and install:
+
+```bash
+sudo install -Dm644 /dev/stdin /etc/pacman.d/vibeshine.conf <<'EOF'
+[vibeshine]
+SigLevel = Required
+Server = https://nonary.github.io/vibeshine/arch/x86_64
+EOF
+grep -qxF 'Include = /etc/pacman.d/vibeshine.conf' /etc/pacman.conf || \
+  printf '\nInclude = /etc/pacman.d/vibeshine.conf\n' | sudo tee -a /etc/pacman.conf
+sudo pacman -Syu vibeshine
+```
+
+Later releases then arrive through the normal `pacman -Syu`.
+
+### From a release package
+
+Every release on the [releases page](https://github.com/Nonary/vibeshine/releases) carries a
+`vibeshine-<version>-1-x86_64.pkg.tar.zst` asset. Install the kernel headers first so the driver
+builds during the transaction, then install the package:
+
+```bash
+sudo pacman -S --needed "$(pacman -Qqo /usr/lib/modules/$(uname -r)/vmlinuz)-headers"
+sudo pacman -Syu
+sudo pacman -U ./vibeshine-*.pkg.tar.zst
+```
+
+Packages installed this way are upgraded by downloading the next release and repeating the
+`pacman -U` step, or by switching to the repository above.
+
+### Build from source
+
+The `PKGBUILD` in the repository is a template; a CMake configure step fills in the commit and
+version before `makepkg` can use it. Install `cuda` first if you want NVENC (the build detects it):
+
+```bash
+git clone --branch 2.0.0 https://github.com/Nonary/vibeshine.git
+cd vibeshine
+cmake -S . -B build -DSUNSHINE_CONFIGURE_ONLY=ON -DSUNSHINE_CONFIGURE_PKGBUILD=ON
+mkdir pkg && cp build/PKGBUILD build/vibeshine.install pkg/
+cd pkg && makepkg -si
+```
+
+The build takes a while: it compiles the web interface with `npm`, runs the test suite, and needs
+`nodejs`, `npm`, `ninja`, and `gcc15` (the compiler CUDA supports). Pass `--nocheck` to
+`makepkg` to skip the tests.
+
+## After installation
+
+The package prints its remaining steps at the end of the pacman transaction. On a typical machine
+there are four.
+
+1. **Reboot after the first installation.** The login screen and desktop must restart to load
+   the new display and session integration, even if the driver is already loaded. On updates, reboot
+   if asked. A kernel that still holds an older driver, or a pending Secure Boot key
+   enrollment, needs one reboot. On the Secure Boot path the firmware shows the blue MOK Manager
+   screen: choose **Enroll MOK**, continue, and enter the password you typed during installation.
+2. **Log in to Plasma (Wayland) and pair.** Open <https://localhost:47990> on the machine, create
+   the Web UI username and password, then pair Moonlight with the PIN. Pairing also works at the
+   login screen: the Web UI stays reachable there, so enter the PIN from another device.
+3. **Open the firewall** if one is enabled. The package ships definitions for both common firewalls:
+
+   ```bash
+   # firewalld
+   sudo firewall-cmd --permanent --add-service=vibeshine && sudo firewall-cmd --reload
+   # ufw
+   sudo ufw allow Vibeshine
+   ```
+
+   Vibeshine listens on TCP 47984, 47989, 47990, and 48010, and on UDP 47998 to 48000 and 48010.
+   The UDP ports carry the video, audio, and control streams and are required even when the Web UI
+   already works.
+4. **Log out and back in once.** The package installs a PipeWire drop-in
+   (`/usr/share/pipewire/pipewire.conf.d/50-vibeshine-audio.conf`, 240 samples at 48 kHz) that the
+   audio stream expects. A new login, or `systemctl --user restart pipewire`, applies it.
+
+### Choosing the streaming user
+
+Installation picks the single interactive desktop account automatically. If the machine has several
+accounts the package prints an **ACTION REQUIRED** line instead. Choose the owner once and enable
+the controller:
+
+```bash
+sudo vibeshine configure USER
+sudo systemctl enable --now vibeshine-session-controller.service
+```
+
+### Authorizing application commands
+
+Custom application commands and per-app preparation commands require administrator approval.
+After reviewing the commands saved in `/var/lib/vibeshine/apps.json`, approve that snapshot:
+
+```bash
+sudo vibeshine authorize-commands
+```
+
+Run this again after adding or changing commands. Saving an application in the Web UI does
+not approve it. This command collects application launch, detached and preparation commands
+from `apps.json`; it does not authorize global preparation commands from `vibeshine.conf`.
+An unapproved command is rejected by the session broker and can exit with status 126.
+
+Managed Steam and Lutris launches use fixed numeric-ID operations instead of approving
+arbitrary commands. The exact reserved helper syntax, such as
+`/usr/libexec/vibeshine/vibeshine-session-exec lutris 16`, selects that fixed operation even
+when entered manually. It does not approve other command strings or shell arguments.
+On a Linux machine-service host, run Lutris synchronization once after upgrading to refresh
+older managed entries. Other custom launch and preparation commands still require approval.
+
+## Verify
+
+```bash
+sudo systemctl status vibeshine-session-controller.service vibeshine.service
+sudo journalctl -u vibeshine-session-controller.service -u vibeshine.service -b
+sudo vibeshine driver status
+```
+
+A healthy host logs `Screencasting with KMS`, `Using event-driven KMS capture for Vibeshine DRM
+CRTC`, and at least `Found H.264 encoder`. HEVC and AV1 lines appear only when the GPU supports
+them. Open ports alone do not prove streaming works; check for those lines.
+
+The controller starts the host only while the configured user's Plasma Wayland session (or the
+NVIDIA pre-login greeter) is active. Do not start `vibeshine.service` by hand. Restarting either
+unit disconnects any client that is streaming.
+
+## Troubleshooting
+
+| Symptom | What to do |
+| --- | --- |
+| `kernel headers ... are missing` during install | Run the printed `sudo pacman -S --needed <kernel>-headers`, then `sudo vibeshine driver install`. |
+| Install says the running kernel still holds the old module | Reboot. `modinfo -F version vibeshine_drm` and `/sys/module/vibeshine_drm/version` must match. |
+| MOK enrollment queued | Reboot and approve it in MOK Manager. `mokutil --list-new` shows what is pending. |
+| Controller logs `unsupported-session` | You are not in a Plasma **Wayland** session started by SDDM or Plasma Login Manager. Pick "Plasma (Wayland)" at the login screen. |
+| No HEVC or AV1 encoder found | Normal on older GPUs. H.264 is enough for the host to report ready. |
+| No pre-login stream | Expected on AMD and Intel GPUs. Log in first. |
+| Audio crackles or drifts | Log out and in again so the PipeWire drop-in applies. Keep Vibeshine's virtual sink; do not pin a static `audio_sink`. |
+| Moonlight sees the host but the stream fails | Open the UDP ports (see above). |
+| `could not start the Vibeshine session controller safely` at install | Check the reported cleanup proof, retained transaction record, and administrator masks, then retry the installer. Report the controller journal if it still fails. |
+
+KMS is recommended for managed virtual screens for maximum compatibility and
+Vibeshine's low-latency capture. Automatic capture selects KMS for these screens.
+Explicit capture selections in `/var/lib/vibeshine/vibeshine.conf` are honored
+for both physical and virtual screens. Other methods may not work properly with
+virtual screens and do not use the low-latency KMS path. Portal capture can open
+a consent dialog and block unattended startup.
+
+Two things on the host machine will silently stop streaming:
+
+- **Automatic suspend.** KDE's power settings suspend an idle machine even while Vibeshine is
+  waiting for clients. On a streaming host, set "When inactive" to "Do nothing" under System
+  Settings, Power Management, or at least disable it for the AC-powered profile.
+- **A second desktop session for the same user.** A VNC or RDP server that starts its own Plasma
+  X11 session (`vncserver@:1.service`, `plasma-x11-session`) imports that session's environment
+  into your systemd user manager and stops the Wayland workspace target. The controller then
+  reports `waiting for desktop session N to become usable` and never starts the host. Stop and
+  disable that service; Vibeshine's own pre-login stream is the supported remote path.
+
+## Where things live
+
+**Settings live in `/var/lib/vibeshine`**, including `vibeshine.conf`, credentials,
+pairings, applications, and imported covers. Use the Web UI for routine changes.
+Run `vibeshine paths` to list locations, `vibeshine status` for service status, or
+`sudo vibeshine logs` for recent logs. `vibeshine maintenance-help` lists all
+maintenance commands. Program files, administrator policy, and temporary session
+data retain their separate ownership and lifetimes:
+
+| Path | Purpose |
+| --- | --- |
+| `/usr/bin/vibeshine` | Public command-line client, unprivileged. |
+| `/usr/libexec/vibeshine/` | Privileged helpers (host, session broker, controller, driver installer). |
+| `/etc/vibeshine/` | Administrator policy, including the chosen desktop user in `machine.conf`. |
+| `/var/lib/vibeshine/` | Host state: `vibeshine.conf`, credentials, pairings, application list. |
+| `/usr/src/vibeshine-drm-*` | DKMS source for the virtual-display driver. |
+
+## Upgrade
+
+Repository installs upgrade with `sudo pacman -Syu`. Release-package installs upgrade with
+`sudo pacman -U` on the next package. The upgrade hook stops the running host, so finish any stream
+first. Upgrade hooks prepare the same profile for DEB, RPM, and Arch packages:
+
+- The selected user's `~/.config/vibeshine` is imported once into
+  `/var/lib/vibeshine`; the source copy is retained as a backup.
+- An existing marked machine profile takes precedence, so later upgrades never
+  replace newer credentials, pairings, settings, or applications with the old copy.
+- Old ownership and permissions are repaired before validation. Imported cover
+  paths are normalized, and existing command approvals are preserved.
+- Unsafe or failed imports stop setup instead of silently creating a fresh identity.
+  A nonempty, unmarked destination is not overwritten.
+
+For manual recovery after resolving a reported migration error, stop streaming and
+stop the controller and host before running `sudo vibeshine migrate`, then enable
+and start `vibeshine-session-controller.service` again. These service operations
+end active streams. The old helper paths remain available for existing scripts.
+
+If the hook says the kernel still holds the old driver, reboot before streaming again.
+
+### Shutdown failures and explicit force
+
+Package replacement deliberately disconnects streams. The host receives a graceful stop with
+a 60-second deadline. Replacement requires the old host's entire service cgroup to be empty,
+followed by broker/application cleanup and removal of the old session record.
+
+The installer offers one force-stop retry after a recorded shutdown deadline when it has an interactive
+terminal. `--yes` never accepts that choice automatically. For an unattended retry, use:
+
+```bash
+sudo bash linux_install.sh --package /path/to/fixed.pkg.tar.zst --force-stop --yes
+```
+
+Force terminates the verified host service cgroup after the graceful deadline. Active streams
+and applications end, and normal cleanup may be incomplete. Before the forced signal, the hook
+saves a private snapshot of `/etc/vibeshine` and `/var/lib/vibeshine`, excluding changing logs,
+under `/var/lib/vibeshine-package-backups/forced-stop.*`. The directory is root-only, and its
+`recovery.log` records the old invocation, installed version, and force outcome. This snapshot
+may have been taken while the old host was running; do not treat it as an atomic database backup.
+Archive errors, including a missing `tar`, stop the forced operation.
+
+Updated package hooks also accept `VIBESHINE_PACKAGE_FORCE=1`, for example
+`sudo env VIBESHINE_PACKAGE_FORCE=1 pacman -U /path/to/fixed.pkg.tar.zst`.
+That variable does not retrofit force support into an older installed hook; use the incoming
+installer when upgrading a broken old package. Force never targets a process by name or an
+unrelated session. A changed/uncertain service identity, an unkillable process, a populated
+cgroup, or unresolved generation cleanup still blocks replacement. The failure report explains
+the remaining proof and preserves the transaction record for a retry.
+
+A host using the old executable outside the machine service blocks replacement even with force. The report identifies its PID and scope. An executable match does not establish authority over another user manager's restart policy, session cleanup, or profile backup; stop that exact host and fence its activation source through its owning manager before retrying. An inode absence scan alone cannot prevent an unfenced user service from restarting.
+
+Cancellation waits for pacman and its hooks to finish before recovery. The client runs in a separate session so terminal interrupts cannot orphan a pretransaction hook. A requested cancellation may allow an in-progress package replacement to finish; the installer still returns the cancellation status.
+
+Owned runtime masks and the upgrade fence are recorded under `/run/vibeshine-package-transaction`.
+Failure/cancellation restores only barriers created by that transaction after verifying a safe
+release. Existing administrator masks are preserved, so automatic startup may be deferred. An idle, empty host behind a verified administrator mask does not need a new shutdown fence; package replacement still requires the complete old-generation resource proof. Runtime and persistent masks stay in place, and configuration succeeds with automatic startup deferred. A masked host that is active, populated, has pending jobs, or cannot be inspected remains blocked with a diagnostic.
+An unrecorded legacy fence is adopted only when the exact known fence and all four runtime masks match, with the old generation fully drained and no pending jobs. An active host, partial mask set, or different fence remains blocked even with force: ownership and the loaded shutdown contract are not established. Stop the identified old generation through its owning manager and verify its remaining jobs and resources before retrying; the installer preserves ambiguous barriers rather than removing them.
+
+An interruption that leaves shutdown uncertain retains the record until a retry can finish;
+do not delete it or unmask every service indiscriminately.
+
+### Incoming installer compatibility
+
+The incoming installer extracts its shutdown guard from the selected package and overrides only
+`00-vibeshine-quiesce.hook` in a private ALPM hook directory. It runs before package files change.
+The installer queries `pacman-conf HookDir` and explicitly retains the effective default and configured hook directories alongside its private guard. Configured administrator overrides keep their normal precedence. An existing administrator hook with the private guard's exact filename causes a clear refusal before the transaction; it is neither overridden nor allowed to disable the required shutdown proof. A same-name administrator hook could disable the required shutdown proof, so that collision is reported before a transaction instead of overriding the administrator policy. Relative hook directories are refused because the installer and package client may have different working directories. If that read-only query is unavailable or fails, the installer refuses to start the transaction rather than omit administrator hooks.
+The named `upgrade-2.0-lifecycle-v1` compatibility step applies only to installed `2.0.0` builds
+whose outgoing hook still has locale-sensitive metadata parsing or helper-text-first selection.
+It selects an exact-name override of the known old ALPM hook and uses the incoming guard's full shutdown proof in the C locale. A regular incoming guard runs for other versions while their outgoing hooks retain their checks. It does
+not edit installed hooks or suppress a failed proof. Fixed daily builds with the same version
+are tested by their actual hook conditions. The step is repeatable and can be removed when
+upgrades from those affected builds are no longer supported; future exceptions belong in
+separate named, condition-scoped scripts under `scripts/linux/migrations`.
+
+The separate `upgrade-2.0.1-lifecycle-v1` step applies to `2.0.1` builds with the qualified helper-first selector and old fence without `Restart=no`. Both repository baselines are exactly tagged `2.0.1`; the tests retain their original hooks, reproduce the direct fence-preparation mismatch, and verify the scoped override. Complete historical removal callbacks accept the proven incoming fence through their preserved-quiescence shortcut, keep the fence and masks intact, and reach driver cleanup. Epochs and package revisions are included in version matching. Unknown versions and already fixed hooks keep their outgoing checks.
+
+The temporary `upgrade-2.0.2-fuse-scan-v1` step supports the published
+`2.0.2daily.d20261017.2` Arch/CachyOS packages (package release `1`). It matches
+that daily, its published short commit suffix (with optional full `.r` suffix),
+and the complete installed `arch-package-hooks` SHA-256 for
+its qualified source commit. The new installer stages the corrected incoming
+full guard under `00-vibeshine-quiesce.hook` in its private HookDir, with
+`AbortOnFail` retained. It never sources or edits the old installed library. The preflight rechecks
+the version, complete fingerprint and file type under the package transaction
+lock; a changed installed guard aborts before any new shutdown begins.
+Edited, symlinked, already fixed, unknown-version, or different-revision hooks
+are not given this override. Administrator same-name hook collisions still
+abort before a transaction. Retire this step when upgrades from this daily
+are no longer supported; qualify additional versions and artifacts separately.
+
+Use a new installer containing this step with a fixed package containing both
+the migration and corrected executable proof. The signed repository route and
+`--package FILE` route both stage the guard before starting the package
+transaction. For an already downloaded trusted fixed package, the route is:
+
+```bash
+sudo bash ./linux_install.sh --package ./vibeshine-FIXED_VERSION-1-x86_64.pkg.tar.zst
+```
+
+An installed failing `AbortOnFail` guard runs before an incoming package's
+scriptlet can repair it. Direct `pacman -U` therefore cannot bootstrap this
+fix while that installed guard still fails. Do not disable transaction hooks,
+rename the installed library, or unmask uncertain generations to get past it.
+The bootstrap must pass the corrected full process/session/cgroup proof before
+replacement, and a failed proof still blocks file-security finalization.
+
+Cleanup treats a nonempty reported cgroup as absent only after an errno-aware
+lookup confirms it is missing. Permission and I/O errors remain blocked; a
+real missing cgroup and a readable `populated 0` group retain their behavior.
+The same check covers the controller, machine-host helper and package hooks.
+
+Controller cleanup also accepts a masked failed unit only when its MainPID is
+zero and its cgroup is empty or absent. Active, populated, malformed or
+uninspectable units remain blocked. A later cleanup failure now reports its
+actual step; older hooks could retain the label of a controller check that
+had already passed. The reported label alone does not establish which runtime
+resource prevented cleanup. These changes do not justify removing unknown
+fences or administrator masks.
+
+The published 2.0.0 metadata failure compared translated `stat %F` text with `regular file`.
+Locale-independent metadata checks are already present in the qualified primary source. The
+new changes address idle helper selection, bounded force, transaction ownership and recovery.
+
+Package ordering limits what an incoming package can repair:
+
+| Path | Earliest applicable step |
+| --- | --- |
+| Arch/CachyOS installer | Private incoming `PreTransaction` guard, before outgoing hooks and package writes. |
+| Future direct Arch transactions with the installed guard | Installed `AbortOnFail` hook loads the package function library before extraction. |
+| Direct Arch upgrade/removal from a broken installed hook | Use the incoming installer preflight; incoming post-install code runs too late. |
+| DEB | Old `prerm upgrade` runs before new `preinst`; dpkg can call new `prerm failed-upgrade` when the old script fails. Current removal-only `prerm` does nothing for those upgrade arguments. |
+| RPM | New `%pre` runs before replacement; new `%post` precedes old `%preun` during upgrade. Old scriptlets can still affect the transaction. |
+
+These boundaries follow the [ALPM hook rules](https://pacman.archlinux.page/alpm-hooks.5.html),
+[Debian maintainer-script ordering](https://www.debian.org/doc/debian-policy/ch-maintainerscripts.html#details-of-unpack-phase-of-installation-or-upgrade),
+and [RPM upgrade ordering](https://rpm.org/docs/4.20.x/manual/triggers.html).
+The shell entrypoint supports Arch/CachyOS. Its historical-package harness validates the incoming
+override and refusal paths; actual package-manager and GPU behavior requires host qualification.
+It does not claim to override arbitrary old DEB/RPM scripts or administrator hook overrides. The latest reporter did not establish their installed version, so the known 2.0.0 workaround cannot be assumed to match that report.
+
+## Uninstall
+
+```bash
+sudo pacman -R vibeshine
+```
+
+For a broken older pretransaction hook, supply a fixed incoming package as a source of the
+shutdown policy without installing it:
+
+```bash
+sudo bash linux_install.sh --remove --package /path/to/fixed.pkg.tar.zst
+```
+
+Add `--force-stop` only when you accept the termination consequences above. The removal path
+does not run install checks, install headers, configure a package repository, or open the
+firewall. Outgoing removal scriptlets still run; their behavior must be qualified with the
+actual old package, and failure is reported rather than silently discarded.
+
+Removal stops the services and removes the DKMS module but keeps `/var/lib/vibeshine` and
+`/etc/vibeshine`. To wipe them as well, run
+`sudo vibeshine reset` before removing the package.

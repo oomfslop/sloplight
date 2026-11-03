@@ -1,0 +1,2409 @@
+/**
+ * @file src/app_desk.cpp
+ * @brief One private virtual display per client that mirrors the client's screen.
+ */
+#include "app_desk.h"
+
+#include "host_windows.h"
+#include "logging.h"
+
+#ifdef _WIN32
+  #include <winsock2.h>
+  #include <windows.h>
+  #include <dwmapi.h>
+
+  #include <shellapi.h>
+
+  #include <algorithm>
+  #include <array>
+  #include <climits>
+  #include <atomic>
+  #include <chrono>
+  #include <cstdio>
+  #include <condition_variable>
+  #include <memory>
+  #include <cstring>
+  #include <map>
+  #include <set>
+  #include <mutex>
+  #include <thread>
+
+  #include <functional>
+
+  #include "platform/windows/app_window_layout.h"
+  #include "platform/windows/desk_atlas.h"
+  #include "platform/windows/desk_hold.h"
+  #include "platform/windows/misc.h"
+  #include "platform/windows/utf_utils.h"
+  #include "platform/windows/virtual_display.h"
+
+namespace app_desk {
+
+  namespace {
+
+    struct vdisplay_t {
+      bool sudovda = false;  ///< made by SudoVDA (any size) rather than the Sunshine driver (its catalog)
+      GUID guid {};
+      std::wstring device;  ///< "\\\\.\\DISPLAYn"
+      std::wstring monitor_path;  ///< device path the DPI scale is set through
+    };
+
+    struct desk_state_t {
+      bool sudovda = false;  ///< the desk display is SudoVDA's
+      GUID guid {};
+      std::wstring device;  ///< "\\\\.\\DISPLAYn"
+      std::wstring monitor_path;  ///< device path the DPI scale is set through
+      vdisplay_t atlas;  ///< the display the session captures: thumbnails of the desk's windows
+      std::shared_ptr<desk_atlas::atlas_t> atlas_window;
+      desk_t info;
+      std::map<HWND, POINT> adopted;  ///< window -> frame origin before adoption
+      std::set<HWND> seen;  ///< app windows anywhere on the host at the last look (new ones are adopted)
+      bool seen_once = false;
+      std::chrono::steady_clock::time_point seen_at {};
+      HWND foreground = nullptr;  ///< the foreground window at the last look
+      RECT foreground_frame {};  ///< its frame, when it was on the desk (else empty)
+      bool foreground_popup = false;  ///< it was a menu or popup, not a window of its own
+      bool open = false;  ///< a client is using it (false = idle, kept for a while)
+      bool empty = true;  ///< no windows on it at the last layout
+      std::chrono::steady_clock::time_point idle_since {};
+      unsigned idle_generation = 0;
+      options_t options;
+    };
+
+    std::mutex g_mutex;
+    std::map<std::string, desk_state_t> g_desks;  ///< client uuid -> desk
+
+    int monitor_refresh_hz(const wchar_t *device) {
+      DEVMODEW mode {};
+      mode.dmSize = sizeof(mode);
+      if (!EnumDisplaySettingsW(device, ENUM_CURRENT_SETTINGS, &mode)) return 0;
+      return static_cast<int>(mode.dmDisplayFrequency);
+    }
+
+    /** The monitor whose GDI device name is `device`, if attached. */
+    HMONITOR find_monitor(const std::wstring &device, RECT *rect_out = nullptr) {
+      struct ctx_t {
+        const std::wstring &device;
+        HMONITOR found = nullptr;
+        RECT rect {};
+      } ctx {device};
+      EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR mon, HDC, LPRECT, LPARAM lp) -> BOOL {
+        auto *c = reinterpret_cast<ctx_t *>(lp);
+        MONITORINFOEXW mi {};
+        mi.cbSize = sizeof(mi);
+        if (GetMonitorInfoW(mon, &mi) && c->device == mi.szDevice) {
+          c->found = mon;
+          c->rect = mi.rcMonitor;
+          return FALSE;
+        }
+        return TRUE;
+      },
+                          reinterpret_cast<LPARAM>(&ctx));
+      if (ctx.found && rect_out) *rect_out = ctx.rect;
+      return ctx.found;
+    }
+
+    /** Effective DPI of a monitor (0 when unknown). */
+    int monitor_dpi(HMONITOR mon) {
+      using fn_t = HRESULT(WINAPI *)(HMONITOR, int, UINT *, UINT *);
+      static fn_t fn = [] {
+        HMODULE shcore = LoadLibraryW(L"shcore.dll");
+        return shcore ? reinterpret_cast<fn_t>(GetProcAddress(shcore, "GetDpiForMonitor")) : nullptr;
+      }();
+      UINT x = 0, y = 0;
+      if (!mon || !fn || FAILED(fn(mon, 0 /* MDT_EFFECTIVE_DPI */, &x, &y))) return 0;
+      return static_cast<int>(x);
+    }
+
+    /** Attach a (detached) display at the given mode, right of everything else,
+     *  or switch an attached one to that mode. */
+    /** The host's own displays: every monitor but the desks' and atlases'. */
+    std::vector<RECT> own_monitors(const std::vector<std::wstring> &exclude) {
+      struct ctx_t {
+        const std::vector<std::wstring> &exclude;
+        std::vector<RECT> out;
+      } ctx {exclude, {}};
+      EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR mon, HDC, LPRECT, LPARAM lp) -> BOOL {
+        auto *c = reinterpret_cast<ctx_t *>(lp);
+        MONITORINFOEXW mi {};
+        mi.cbSize = sizeof(mi);
+        if (!GetMonitorInfoW(mon, &mi)) return TRUE;
+        for (const auto &d : c->exclude) {
+          if (!d.empty() && d == mi.szDevice) return TRUE;
+        }
+        c->out.push_back(mi.rcMonitor);
+        return TRUE;
+      },
+                          reinterpret_cast<LPARAM>(&ctx));
+      return ctx.out;
+    }
+
+    /** Where the desk goes: under the bottom-most of the host's own
+     *  displays, aligned to its left edge. Only its top edge then touches
+     *  another display, and a window the client lets hang off the desk's
+     *  left, right or bottom (as far as macOS lets a window go) stays on the
+     *  desk alone: beside a real display it would cross onto it and take its
+     *  DPI. Nothing goes above the desk's top (macOS keeps windows below its
+     *  menu bar). */
+    POINT desk_position(const std::vector<std::wstring> &exclude) {
+      const auto monitors = own_monitors(exclude);
+      if (monitors.empty()) return {0, 0};
+      const RECT *bottom_most = &monitors.front();
+      for (const auto &m : monitors) {
+        if (m.bottom > bottom_most->bottom) bottom_most = &m;
+      }
+      return {bottom_most->left, bottom_most->bottom};
+    }
+
+    /** Where the atlas goes: right of the right-most of the host's own
+     *  displays, at its top, away from the desk (under them): no window of
+     *  the desk crosses onto it. */
+    POINT atlas_position(const std::vector<std::wstring> &exclude) {
+      const auto monitors = own_monitors(exclude);
+      if (monitors.empty()) return {0, 0};
+      const RECT *right_most = &monitors.front();
+      for (const auto &m : monitors) {
+        if (m.right > right_most->right) right_most = &m;
+      }
+      return {right_most->right, right_most->top};
+    }
+
+    void attach_display(const std::wstring &device, int w, int h, int fps, POINT at) {
+      DEVMODEW current {};
+      current.dmSize = sizeof(current);
+      const bool attached = EnumDisplaySettingsW(device.c_str(), ENUM_CURRENT_SETTINGS, &current) && current.dmPelsWidth > 0;
+      DEVMODEW want {};
+      want.dmSize = sizeof(want);
+      want.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY | DM_POSITION;
+      want.dmPelsWidth = w;
+      want.dmPelsHeight = h;
+      want.dmDisplayFrequency = static_cast<DWORD>(fps);
+      want.dmPosition.x = at.x;
+      want.dmPosition.y = at.y;
+      const LONG set = ChangeDisplaySettingsExW(device.c_str(), &want, nullptr, CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+      const LONG commit = ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
+      BOOST_LOG(info) << "Desk: " << (attached ? "retuned" : "attached") << " display " << utf_utils::to_utf8(device) << " to " << w << 'x' << h << '@' << fps
+                      << " at " << at.x << ',' << at.y << " (set=" << set << ", commit=" << commit << ')';
+    }
+
+    struct mode_t {
+      int w = 0, h = 0, hz = 0;
+    };
+
+    /** The driver offers a fixed catalog of modes: the smallest one that
+     *  covers the requested size, at the requested rate or the fastest below
+     *  it (the desk is then a little larger than the client's screen, which
+     *  the client simply does not use). */
+    std::optional<mode_t> pick_mode(const std::wstring &device, int w, int h, int fps) {
+      std::vector<mode_t> modes;
+      DEVMODEW dm {};
+      dm.dmSize = sizeof(dm);
+      for (DWORD i = 0; EnumDisplaySettingsW(device.c_str(), i, &dm); ++i) {
+        modes.push_back({static_cast<int>(dm.dmPelsWidth), static_cast<int>(dm.dmPelsHeight), static_cast<int>(dm.dmDisplayFrequency)});
+      }
+      if (modes.empty()) return std::nullopt;
+      auto better = [&](const mode_t &a, const mode_t &b) {  // is a better than b?
+        const bool fa = a.w >= w && a.h >= h, fb = b.w >= w && b.h >= h;
+        if (fa != fb) return fa;
+        const long long area_a = 1LL * a.w * a.h, area_b = 1LL * b.w * b.h;
+        if (fa) {
+          if (area_a != area_b) return area_a < area_b;  // smallest that fits
+        } else if (area_a != area_b) {
+          return area_a > area_b;  // nothing fits: the largest
+        }
+        const bool ra = a.hz >= fps, rb = b.hz >= fps;
+        if (ra != rb) return ra;
+        return ra ? a.hz < b.hz : a.hz > b.hz;  // at or just above the rate, else the fastest
+      };
+      mode_t best = modes.front();
+      for (const auto &m : modes) {
+        if (better(m, best)) best = m;
+      }
+      std::string sizes;
+      int shown = 0;
+      for (const auto &m : modes) {
+        if (m.hz != best.hz) continue;
+        if (shown++ < 24) sizes += std::to_string(m.w) + "x" + std::to_string(m.h) + " ";
+      }
+      BOOST_LOG(info) << "Desk: " << modes.size() << " modes; picked " << best.w << 'x' << best.h << '@' << best.hz << " for " << w << 'x' << h << '@' << fps
+                      << " (sizes at " << best.hz << " Hz: " << sizes << ')';
+      return best;
+    }
+
+    /** Put the window's frame (DWM bounds, without the invisible resize
+     *  borders) at x, y and, with w and h, give it that size in the same
+     *  step: a resize from the left or top never shows the window shifted. */
+    void move_frame_to(HWND hwnd, int x, int y, int w = 0, int h = 0, bool async = true) {
+      if (IsIconic(hwnd)) {
+        // Minimized: where it comes back when restored is what moves (moving
+        // the minimized window itself leaves that on a desk display that may
+        // be gone by then: restored off every screen). The placement is in
+        // workspace coordinates (the primary display's work area) and of the
+        // whole window, about the invisible borders larger than the frame.
+        WINDOWPLACEMENT placement {};
+        placement.length = sizeof(placement);
+        if (!GetWindowPlacement(hwnd, &placement)) return;
+        MONITORINFO mi {};
+        mi.cbSize = sizeof(mi);
+        GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &mi);
+        const bool tool = GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW;
+        const LONG ox = tool ? 0 : mi.rcWork.left - mi.rcMonitor.left, oy = tool ? 0 : mi.rcWork.top - mi.rcMonitor.top;
+        const LONG border = static_cast<LONG>(7 * GetDpiForWindow(hwnd) / 96);
+        RECT &r = placement.rcNormalPosition;
+        const LONG pw = w > 0 && h > 0 ? w + 2 * border : r.right - r.left, ph = w > 0 && h > 0 ? h + border : r.bottom - r.top;
+        r.left = x - border - ox;
+        r.top = y - oy;
+        r.right = r.left + pw;
+        r.bottom = r.top + ph;
+        placement.showCmd = SW_SHOWMINNOACTIVE;
+        placement.flags = 0;
+        SetWindowPlacement(hwnd, &placement);
+        return;
+      }
+      RECT frame {}, win {};
+      int dx = 0, dy = 0, dw = 0, dh = 0;
+      if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))) && GetWindowRect(hwnd, &win)) {
+        dx = frame.left - win.left;
+        dy = frame.top - win.top;
+        dw = (win.right - win.left) - (frame.right - frame.left);
+        dh = (win.bottom - win.top) - (frame.bottom - frame.top);
+      }
+      const bool sized = w > 0 && h > 0;
+      SetWindowPos(hwnd, nullptr, x - dx, y - dy, sized ? w + dw : 0, sized ? h + dh : 0,
+                   (sized ? 0 : SWP_NOSIZE) | SWP_NOZORDER | SWP_NOACTIVATE | (async ? SWP_ASYNCWINDOWPOS : 0));
+    }
+
+    /** Resizes in step with the app's painting. A window counts as painted
+     *  at a size once it has been redrawn at it: Win32 apps paint when asked
+     *  (RedrawWindow with RDW_UPDATENOW returns when they have), a window
+     *  without a redirection surface (WinUI, XAML, swap chains) renders on a
+     *  thread of its own over the next compositions. While a resize the
+     *  client asked for is being painted, the next one waits and only the
+     *  newest is applied after: a live resize goes at the app's own pace,
+     *  and every size the window passes through gets drawn whole (the client
+     *  shows a window's picture while it is painted at its size). */
+    namespace paint_sync {
+      struct state_t {
+        int w = 0, h = 0;  ///< its size at the last look
+        int pw = -1, ph = -1;  ///< the size it is known painted at
+        std::chrono::steady_clock::time_point changed;  ///< its size last changed
+        std::function<void()> pending;  ///< the newest resize asked for meanwhile
+        bool busy = false;  ///< a worker is on it
+        bool shown = false;  ///< a layout has said it is painted at its size
+        std::chrono::steady_clock::time_point retry_at;  ///< not answering: looked at again then
+      };
+
+      std::mutex g_paint_mutex;
+      std::map<HWND, state_t> g_paints;
+
+      void work(HWND hwnd);
+
+      /** Under g_paint_mutex: a worker for it, unless one runs */
+      void start(HWND hwnd, state_t &st) {
+        if (st.busy) return;
+        st.busy = true;
+        std::thread(work, hwnd).detach();
+      }
+
+      void work(HWND hwnd) {
+        for (;;) {
+          std::function<void()> apply;
+          {
+            std::lock_guard l(g_paint_mutex);
+            apply = std::move(g_paints[hwnd].pending);
+            g_paints[hwnd].pending = nullptr;
+          }
+          if (!IsWindow(hwnd)) break;
+          // A window that does not answer is not waited for (its stable comes
+          // from the timeout in stable() instead)
+          DWORD_PTR answer = 0;
+          if (IsHungAppWindow(hwnd) || !SendMessageTimeoutW(hwnd, WM_NULL, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 200, &answer)) {
+            std::lock_guard l(g_paint_mutex);
+            auto &st = g_paints[hwnd];
+            st.busy = false;
+            st.retry_at = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+            if (!st.pending) st.pending = std::move(apply);  // tried again then
+            return;
+          }
+          // Synchronous: returns once the window has taken its new size
+          if (apply) apply();
+          RECT painted {};
+          if (!app_window_layout::frame_rect(hwnd, painted)) break;
+          RedrawWindow(hwnd, nullptr, nullptr, RDW_UPDATENOW | RDW_ALLCHILDREN);
+          const bool composed = GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_NOREDIRECTIONBITMAP;
+          for (int i = 0; i < (composed ? 3 : 1); ++i) DwmFlush();
+          {
+            std::lock_guard l(g_paint_mutex);
+            auto &st = g_paints[hwnd];
+            const int pw = painted.right - painted.left, ph = painted.bottom - painted.top;
+            RECT now {};
+            if (app_window_layout::frame_rect(hwnd, now) && now.right - now.left == pw && now.bottom - now.top == ph) {
+              st.pw = pw;
+              st.ph = ph;
+              st.shown = false;
+            }
+            if (!st.pending && st.pw == pw && st.ph == ph) {
+              st.busy = false;
+              return;
+            }
+          }
+          // Another resize waits: this size goes out first, in a layout and
+          // a composition (so the client gets each painted size)
+          for (int i = 0; i < 50; ++i) {
+            {
+              std::lock_guard l(g_paint_mutex);
+              if (g_paints[hwnd].shown) break;
+            }
+            Sleep(1);
+          }
+          DwmFlush();
+        }
+        std::lock_guard l(g_paint_mutex);
+        g_paints.erase(hwnd);
+      }
+
+      /** A resize the client asked for (`apply` sets the window's size,
+       *  synchronously): now, or after the one being painted */
+      void resize(HWND hwnd, std::function<void()> apply) {
+        std::lock_guard l(g_paint_mutex);
+        auto &st = g_paints[hwnd];
+        st.pending = std::move(apply);
+        start(hwnd, st);
+      }
+
+      /** Layout: painted at its size w x h? (a window that does not answer
+       *  counts as painted after a while) */
+      bool stable(HWND hwnd, int w, int h) {
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard l(g_paint_mutex);
+        auto &st = g_paints[hwnd];
+        if (st.w != w || st.h != h) {
+          st.w = w;
+          st.h = h;
+          st.changed = now;
+        }
+        if (st.pw == w && st.ph == h) {
+          st.shown = true;
+          return true;
+        }
+        if (now >= st.retry_at) start(hwnd, st);  // resized by something else, or not answering before
+        return now - st.changed > std::chrono::milliseconds(400);
+      }
+
+      /** Layout: forget windows no longer on the desk */
+      void keep_only(const std::set<HWND> &present) {
+        std::lock_guard l(g_paint_mutex);
+        std::erase_if(g_paints, [&](const auto &e) {
+          return !e.second.busy && !present.contains(e.first);
+        });
+      }
+    }  // namespace paint_sync
+
+    /** A window that crosses to a display of another DPI gets WM_DPICHANGED
+     *  with a suggested, scaled frame; some apps (Explorer) take it, some
+     *  (Notepad) rescale their content but keep the frame. Once the move has
+     *  settled, give the ones that kept it the scaled frame, as a monitor
+     *  drag would have. Off this thread: the window may be slow. */
+    void settle_dpi_change(HWND hwnd, UINT dpi_before, RECT frame_before) {
+      std::thread([hwnd, dpi_before, frame_before] {
+        // The move is posted; wait for the window to be on the other DPI.
+        UINT dpi_after = dpi_before;
+        for (int i = 0; i < 20 && dpi_after == dpi_before; ++i) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          if (!IsWindow(hwnd)) return;
+          dpi_after = GetDpiForWindow(hwnd);
+        }
+        if (!dpi_before || !dpi_after || dpi_after == dpi_before || IsIconic(hwnd)) {
+          BOOST_LOG(debug) << "Desk: window 0x" << std::hex << reinterpret_cast<std::uintptr_t>(hwnd) << std::dec << " dpi " << dpi_before << " -> " << dpi_after << ", nothing to settle";
+          return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));  // let it answer WM_DPICHANGED first
+        RECT frame {};
+        if (!app_window_layout::frame_rect(hwnd, frame)) return;
+        const LONG w0 = frame_before.right - frame_before.left, h0 = frame_before.bottom - frame_before.top;
+        const LONG w1 = frame.right - frame.left, h1 = frame.bottom - frame.top;
+        if (w0 <= 0 || h0 <= 0 || std::abs(w1 - w0) > w0 / 20 || std::abs(h1 - h0) > h0 / 20) return;  // it rescaled itself
+        RECT win {};
+        if (!GetWindowRect(hwnd, &win)) return;
+        const LONG ww = MulDiv(win.right - win.left, static_cast<int>(dpi_after), static_cast<int>(dpi_before));
+        const LONG wh = MulDiv(win.bottom - win.top, static_cast<int>(dpi_after), static_cast<int>(dpi_before));
+        SetWindowPos(hwnd, nullptr, 0, 0, ww, wh, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        BOOST_LOG(info) << "Desk: window 0x" << std::hex << reinterpret_cast<std::uintptr_t>(hwnd) << std::dec << " kept its frame across " << dpi_before << "->" << dpi_after
+                        << " dpi; resized " << w1 << 'x' << h1 << " -> " << ww << 'x' << wh;
+      }).detach();
+    }
+
+    /** Windows puts a taskbar on every display, the desk included; nothing of
+     *  the desk but its windows must ever be in the picture. */
+    void hide_desk_taskbar(HMONITOR desk) {
+      if (!desk) return;
+      for (HWND tray = FindWindowExW(nullptr, nullptr, L"Shell_SecondaryTrayWnd", nullptr); tray;
+           tray = FindWindowExW(nullptr, tray, L"Shell_SecondaryTrayWnd", nullptr)) {
+        if (MonitorFromWindow(tray, MONITOR_DEFAULTTONULL) == desk && IsWindowVisible(tray)) {
+          ShowWindow(tray, SW_HIDE);
+          BOOST_LOG(info) << "Desk: hid the taskbar on the desk";
+        }
+      }
+    }
+
+    /** Where a window goes when the desk lets go of it: where it was before
+     *  it came to the desk, or, for one that never was anywhere else (it
+     *  opened on the desk), the same place on the primary display. */
+    /** A window leaves the desk for (x, y) on another display: at the size
+     *  its DPI there gives it. Maximized on the desk, it is moved as its
+     *  normal self and maximized where it lands (moved as it is, it stays
+     *  "maximized" at a size that fills nothing, and comes back on the desk
+     *  when restored). */
+    void send_home(HWND hwnd, int x, int y) {
+      const bool zoomed = IsZoomed(hwnd);
+      if (zoomed) ShowWindow(hwnd, SW_RESTORE);
+      RECT frame {};
+      if (!IsIconic(hwnd) && app_window_layout::frame_rect(hwnd, frame)) settle_dpi_change(hwnd, GetDpiForWindow(hwnd), frame);
+      move_frame_to(hwnd, x, y);
+      // (queued after the move, which goes through the window's thread too)
+      if (zoomed) ShowWindowAsync(hwnd, SW_MAXIMIZE);
+    }
+
+    POINT home_for(const RECT &frame, const RECT &desk) {
+      RECT x {};
+      if (!IntersectRect(&x, &frame, &desk)) return {frame.left, frame.top};
+      MONITORINFO mi {};
+      mi.cbSize = sizeof(mi);
+      GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &mi);
+      const RECT &work = mi.rcWork;
+      const LONG w = frame.right - frame.left, h = frame.bottom - frame.top;
+      const LONG px = work.left + std::clamp<LONG>(frame.left - desk.left, 0, std::max<LONG>(0, (work.right - work.left) - w));
+      const LONG py = work.top + std::clamp<LONG>(frame.top - desk.top, 0, std::max<LONG>(0, (work.bottom - work.top) - h));
+      return {px, py};
+    }
+
+    /** Minimized windows that come back on the desk when restored */
+    std::vector<HWND> minimized_on(const RECT &desk) {
+      struct ctx_t {
+        RECT desk;
+        POINT offset;
+        std::vector<HWND> out;
+      } ctx {desk, {}, {}};
+      MONITORINFO mi {};
+      mi.cbSize = sizeof(mi);
+      GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &mi);
+      ctx.offset = {mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top};
+      EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
+        auto *c = reinterpret_cast<ctx_t *>(lp);
+        if (!IsWindowVisible(hwnd) || !IsIconic(hwnd)) return TRUE;
+        WINDOWPLACEMENT placement {};
+        placement.length = sizeof(placement);
+        if (!GetWindowPlacement(hwnd, &placement)) return TRUE;
+        RECT r = placement.rcNormalPosition, x {};
+        if (!(GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)) OffsetRect(&r, c->offset.x, c->offset.y);
+        if (IntersectRect(&x, &r, &c->desk)) c->out.push_back(hwnd);
+        return TRUE;
+      },
+                  reinterpret_cast<LPARAM>(&ctx));
+      return ctx.out;
+    }
+
+    /** Visible top-level windows on the desk (the desk's own taskbar aside). */
+    std::vector<HWND> windows_on(const RECT &desk) {
+      struct ctx_t {
+        RECT desk;
+        std::vector<HWND> out;
+      } ctx {desk, {}};
+      EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
+        auto *c = reinterpret_cast<ctx_t *>(lp);
+        if (!IsWindowVisible(hwnd) || app_window_layout::is_cloaked(hwnd)) return TRUE;
+        wchar_t cls[64] {};
+        GetClassNameW(hwnd, cls, 64);
+        if (wcscmp(cls, L"Shell_SecondaryTrayWnd") == 0 || wcscmp(cls, L"Shell_TrayWnd") == 0) return TRUE;
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        if (pid == GetCurrentProcessId()) return TRUE;
+        RECT r {}, x {};
+        if (!app_window_layout::frame_rect(hwnd, r) || !IntersectRect(&x, &r, &c->desk)) return TRUE;
+        c->out.push_back(hwnd);
+        return TRUE;
+      },
+                  reinterpret_cast<LPARAM>(&ctx));
+      return ctx.out;
+    }
+
+    std::string window_title(HWND hwnd) {
+      const int length = GetWindowTextLengthW(hwnd);
+      if (length <= 0) return {};
+      std::wstring title(static_cast<std::size_t>(length) + 1, L'\0');
+      const int copied = GetWindowTextW(hwnd, title.data(), static_cast<int>(title.size()));
+      title.resize(copied > 0 ? static_cast<std::size_t>(copied) : 0);
+      try {
+        return utf_utils::to_utf8(title);
+      } catch (...) {
+        return {};
+      }
+    }
+
+    std::string process_name(DWORD pid) {
+      HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+      if (!process) return {};
+      wchar_t path[MAX_PATH] {};
+      DWORD size = MAX_PATH;
+      std::string out;
+      if (QueryFullProcessImageNameW(process, 0, path, &size)) {
+        std::wstring p(path, size);
+        const auto slash = p.find_last_of(L"\\/");
+        try {
+          out = utf_utils::to_utf8(slash == std::wstring::npos ? p : p.substr(slash + 1));
+        } catch (...) {
+        }
+      }
+      CloseHandle(process);
+      return out;
+    }
+
+    /** The part of the desk the client does not show (the driver's mode is
+     *  larger than the client's screen) taken out of the desk's work area,
+     *  the way a taskbar is: hidden app bars on its right and bottom edges.
+     *  Windows keeps menus, flyouts and tooltips inside the work area and
+     *  maximizes into it, so nothing lands where the client cannot see it. */
+    class work_area_reserve_t {
+    public:
+      work_area_reserve_t(const RECT &desk, int right, int bottom) {
+        thread_ = std::thread([this, desk, right, bottom] {
+          run(desk, right, bottom);
+        });
+        std::unique_lock lock(mutex_);
+        ready_.wait(lock, [this] {
+          return started_;
+        });
+      }
+
+      ~work_area_reserve_t() {
+        if (thread_id_) PostThreadMessageW(thread_id_, WM_QUIT, 0, 0);
+        if (thread_.joinable()) thread_.join();
+      }
+
+      bool same(const RECT &desk, int right, int bottom) const {
+        return EqualRect(&desk_, &desk) && right == right_ && bottom == bottom_;
+      }
+
+    private:
+      static constexpr UINT callback_message = WM_APP + 1;
+
+      /** Our two bars meet in the bottom right corner: the bottom one ends
+       *  where the right one begins (left overlapping, the shell moves the
+       *  bottom bar up by the right one's width instead). The shell's
+       *  suggestion is asked for, as app bars must, but our rectangles are
+       *  exact: nothing else lives on the desk's edges. */
+      static void place(HWND bar, UINT edge, const RECT &desk, int extent, int right) {
+        APPBARDATA abd {sizeof(abd)};
+        abd.hWnd = bar;
+        abd.uEdge = edge;
+        RECT want = desk;
+        if (edge == ABE_RIGHT) {
+          want.left = desk.right - extent;
+        } else {
+          want.top = desk.bottom - extent;
+          want.right = desk.right - right;
+        }
+        abd.rc = want;
+        SHAppBarMessage(ABM_QUERYPOS, &abd);
+        abd.rc = want;
+        SHAppBarMessage(ABM_SETPOS, &abd);
+        SetWindowPos(bar, nullptr, want.left, want.top, want.right - want.left, want.bottom - want.top, SWP_NOZORDER | SWP_NOACTIVATE);
+      }
+
+      void run(const RECT &desk, int right, int bottom) {
+        desk_ = desk;
+        right_ = right;
+        bottom_ = bottom;
+        thread_id_ = GetCurrentThreadId();
+        MSG msg;
+        PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);  // the thread's queue, for WM_QUIT
+        WNDCLASSW wc {};
+        wc.lpfnWndProc = DefWindowProcW;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"VibeshineDeskReserve";
+        RegisterClassW(&wc);  // fails harmlessly when already registered
+        std::vector<std::pair<HWND, std::pair<UINT, int>>> bars;
+        for (auto [edge, extent] : {std::pair<UINT, int> {ABE_RIGHT, right}, std::pair<UINT, int> {ABE_BOTTOM, bottom}}) {
+          if (extent <= 0) continue;
+          // Never shown: an app bar reserves its edge whether visible or not,
+          // and a visible one would be in the picture
+          HWND bar = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, wc.lpszClassName, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, wc.hInstance, nullptr);
+          if (!bar) continue;
+          APPBARDATA abd {sizeof(abd)};
+          abd.hWnd = bar;
+          abd.uCallbackMessage = callback_message;
+          if (!SHAppBarMessage(ABM_NEW, &abd)) {
+            DestroyWindow(bar);
+            continue;
+          }
+          place(bar, edge, desk, extent, right);
+          bars.push_back({bar, {edge, extent}});
+        }
+        BOOST_LOG(info) << "Desk: reserving " << right << " px right and " << bottom << " px bottom of the desk's work area (" << bars.size() << " bars)";
+        SetTimer(nullptr, 0, 1000, nullptr);  // the shell applies it in a moment: report what it became
+        {
+          std::lock_guard lock(mutex_);
+          started_ = true;
+        }
+        ready_.notify_all();
+        while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+          if (msg.message == WM_TIMER && !msg.hwnd) {
+            KillTimer(nullptr, msg.wParam);
+            MONITORINFO mi {sizeof(mi)};
+            GetMonitorInfoW(MonitorFromRect(&desk, MONITOR_DEFAULTTONEAREST), &mi);
+            BOOST_LOG(info) << "Desk: work area " << mi.rcWork.left << ',' << mi.rcWork.top << ' ' << mi.rcWork.right - mi.rcWork.left << 'x'
+                            << mi.rcWork.bottom - mi.rcWork.top << " of " << desk.right - desk.left << 'x' << desk.bottom - desk.top;
+            continue;
+          }
+          if (msg.message == callback_message && msg.wParam == ABN_POSCHANGED) {
+            for (auto &[bar, spec] : bars) place(bar, spec.first, desk, spec.second, right);
+          }
+          TranslateMessage(&msg);
+          DispatchMessageW(&msg);
+        }
+        for (auto &[bar, spec] : bars) {
+          APPBARDATA abd {sizeof(abd)};
+          abd.hWnd = bar;
+          SHAppBarMessage(ABM_REMOVE, &abd);
+          DestroyWindow(bar);
+        }
+      }
+
+      std::thread thread_;
+      std::mutex mutex_;
+      std::condition_variable ready_;
+      bool started_ = false;
+      std::atomic<DWORD> thread_id_ {0};
+      RECT desk_ {};
+      int right_ = 0, bottom_ = 0;
+    };
+
+    std::map<std::string, std::unique_ptr<work_area_reserve_t>> g_reserves;  ///< client uuid -> its desk's reserve (under g_mutex)
+
+    void reserve_work_area(const std::string &client_uuid, const RECT &desk, int shown_w, int shown_h) {
+      const int right = std::max(0, static_cast<int>(desk.right - desk.left) - shown_w);
+      const int bottom = std::max(0, static_cast<int>(desk.bottom - desk.top) - shown_h);
+      auto &slot = g_reserves[client_uuid];
+      if (slot && slot->same(desk, right, bottom)) return;
+      slot.reset();
+      if (right > 0 || bottom > 0) slot = std::make_unique<work_area_reserve_t>(desk, right, bottom);
+    }
+
+    /** Make sure this virtual display exists at the mode (the driver's
+     *  nearest when it only has a catalog; w, h and fps then say what it
+     *  got) and at the place `where` says. Creates it when missing. */
+    bool ensure_display(vdisplay_t &d, const std::string &id, const char *label, int &w, int &h, int &fps, bool custom, bool sudovda,
+                        const std::function<POINT()> &where, RECT &rect) {
+      bool present = !d.device.empty() && find_monitor(d.device, &rect);
+      if (present && (d.sudovda != sudovda || (custom && (rect.right - rect.left != w || rect.bottom - rect.top != h)))) {
+        // A different size (or driver) needs a display created for it: recreate.
+        BOOST_LOG(info) << "Desk: recreating " << label << " for " << w << 'x' << h << (sudovda ? " (SudoVDA)" : "");
+        VDISPLAY::set_virtual_display_protected(d.guid, d.device, false);
+        if (d.sudovda) VDISPLAY::removeSudovdaDisplay(d.guid);
+        else VDISPLAY::removeVirtualDisplay(d.guid);
+        d.device.clear();
+        d.monitor_path.clear();
+        present = false;
+      }
+      if (present) {
+        if (!custom) {
+          if (auto mode = pick_mode(d.device, w, h, fps)) {
+            w = mode->w;
+            h = mode->h;
+            fps = mode->hz;
+          }
+        }
+        const POINT at = where();
+        if (rect.right - rect.left != w || rect.bottom - rect.top != h || monitor_refresh_hz(d.device.c_str()) != fps || rect.left != at.x || rect.top != at.y) {
+          // Different size, rate or place: retune the existing display.
+          attach_display(d.device, w, h, fps, at);
+          for (int i = 0; i < 100; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            if (find_monitor(d.device, &rect) && rect.right - rect.left == w && rect.bottom - rect.top == h && rect.left == at.x && rect.top == at.y) break;
+          }
+          present = find_monitor(d.device, &rect);
+        }
+        return present;
+      }
+      if (!sudovda && !VDISPLAY::ensure_driver_is_ready()) {
+        BOOST_LOG(warning) << "Desk: no virtual display driver";
+        return false;
+      }
+      // A fresh monitor identity every time: Windows "remembers window
+      // locations based on monitor connection" and would otherwise drag
+      // windows that once sat on it back onto it when it reappears, with
+      // placements scaled by whatever DPI it had then.
+      const auto stamp = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+      const auto uuid = VDISPLAY::virtualDisplayUuidFromStableId(id + "-" + std::to_string(stamp));
+      std::memcpy(&d.guid, uuid.b8, sizeof(d.guid));
+      std::optional<VDISPLAY::VirtualDisplayCreationResult> created;
+      if (sudovda) {
+        created = VDISPLAY::createSudovdaDisplay(id.c_str(), label, static_cast<uint32_t>(w), static_cast<uint32_t>(h), static_cast<uint32_t>(fps), d.guid);
+      } else {
+        VDISPLAY::setWatchdogFeedingEnabled(true);
+        created = VDISPLAY::createVirtualDisplay(id.c_str(), label, nullptr, static_cast<uint32_t>(w), static_cast<uint32_t>(h), static_cast<uint32_t>(fps),
+                                                 d.guid, 0, false, 1, std::nullopt, false, true, true, custom);
+      }
+      d.sudovda = sudovda;
+      if (!created) {
+        BOOST_LOG(warning) << "Desk: the virtual display driver could not create " << label << " at " << w << 'x' << h << '@' << fps;
+        return false;
+      }
+      d.device = created->display_name.value_or(L"");
+      VDISPLAY::set_virtual_display_protected(d.guid, d.device, true);
+      if (created->monitor_device_path) d.monitor_path = *created->monitor_device_path;
+      // The driver brings it up detached or at a default mode: attach it at ours.
+      present = false;
+      bool picked = false;
+      for (int i = 0; i < 200 && !present; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!d.device.empty() && !picked && !custom) {
+          if (auto mode = pick_mode(d.device, w, h, fps)) {
+            w = mode->w;
+            h = mode->h;
+            fps = mode->hz;
+            picked = true;
+          }
+        }
+        if (!d.device.empty() && (i == 10 || i == 60)) attach_display(d.device, w, h, fps, where());
+        present = !d.device.empty() && find_monitor(d.device, &rect) && rect.right - rect.left == w && rect.bottom - rect.top == h &&
+                  monitor_refresh_hz(d.device.c_str()) + 1 >= fps;
+      }
+      if (!present) {
+        BOOST_LOG(warning) << "Desk: " << label << " did not come up at " << w << 'x' << h << '@' << fps;
+        VDISPLAY::set_virtual_display_protected(d.guid, d.device, false);
+        if (d.sudovda) VDISPLAY::removeSudovdaDisplay(d.guid);
+        else VDISPLAY::removeVirtualDisplay(d.guid);
+        d.device.clear();
+        d.monitor_path.clear();
+        return false;
+      }
+      // Some drivers attach a new display at a place of their own: put it where it belongs
+      const POINT at = where();
+      if (rect.left != at.x || rect.top != at.y) {
+        attach_display(d.device, w, h, fps, at);
+        for (int i = 0; i < 60; ++i) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+          if (find_monitor(d.device, &rect) && rect.left == at.x && rect.top == at.y) break;
+        }
+      }
+      BOOST_LOG(info) << "Desk: created " << label << ' ' << utf_utils::to_utf8(d.device) << ' ' << w << 'x' << h << '@' << fps << " at " << rect.left << ',' << rect.top;
+      return true;
+    }
+
+    void remove_display(vdisplay_t &d) {
+      if (d.device.empty()) return;
+      VDISPLAY::set_virtual_display_protected(d.guid, d.device, false);
+      if (d.sudovda) VDISPLAY::removeSudovdaDisplay(d.guid);
+      else VDISPLAY::removeVirtualDisplay(d.guid);
+      d.device.clear();
+      d.monitor_path.clear();
+    }
+
+    /** Windows' own window management fights the client's: dragging to an
+     *  edge or hovering a maximize button (Snap Layouts) tiles windows on the
+     *  host behind the client's back. Off for the logged-in user while any
+     *  desk is open, as the Settings app turns it off; the user's values are
+     *  kept under HKCU\\Software\\Vibeshine\\DeskTweaks until restored, so a
+     *  crash restores them with the next desk. */
+    constexpr const wchar_t *tweaks_backup_key = L"Software\\Vibeshine\\DeskTweaks";
+    constexpr const wchar_t *explorer_advanced_key = L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced";
+    constexpr const wchar_t *snap_values[] = {L"EnableSnapAssistFlyout", L"EnableSnapBar", L"SnapAssist"};
+    std::atomic<bool> g_tweaked {false};
+
+    /** Runs `fn` with the logged-in user's HKCU open (we run as SYSTEM). */
+    void with_user_hive(const std::function<void(HKEY)> &fn) {
+      HANDLE token = platf::retrieve_users_token(false);
+      if (!token) {
+        BOOST_LOG(warning) << "Desk: no logged-in user for host tweaks";
+        return;
+      }
+      (void) platf::impersonate_current_user(token, [&] {
+        HKEY user = nullptr;
+        if (RegOpenCurrentUser(KEY_READ | KEY_WRITE, &user) == ERROR_SUCCESS) {
+          fn(user);
+          RegCloseKey(user);
+        }
+      });
+      CloseHandle(token);
+    }
+
+    bool read_dword(HKEY root, const wchar_t *key, const wchar_t *name, DWORD &out) {
+      DWORD size = sizeof(out);
+      return RegGetValueW(root, key, name, RRF_RT_REG_DWORD, nullptr, &out, &size) == ERROR_SUCCESS;
+    }
+
+    void write_dword(HKEY root, const wchar_t *key, const wchar_t *name, DWORD value) {
+      RegSetKeyValueW(root, key, name, REG_DWORD, &value, sizeof(value));
+    }
+
+    void announce_settings() {
+      DWORD_PTR result = 0;
+      SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, SPI_SETWINARRANGING, reinterpret_cast<LPARAM>(L"WindowMetrics"), SMTO_ABORTIFHUNG, 500, &result);
+      SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, reinterpret_cast<LPARAM>(L"TraySettings"), SMTO_ABORTIFHUNG, 500, &result);
+    }
+
+    std::mutex g_tweak_mutex;  ///< apply/restore run one at a time, off the caller's thread
+
+    void apply_host_tweaks_now();
+    void restore_host_tweaks_now();
+
+    // The settings broadcast takes seconds when some window is slow to
+    // answer: never on the request that opens or closes a desk. Each worker
+    // brings the host to the state wanted when it runs, so the order the
+    // workers run in does not matter (an open and a quick close end restored).
+    std::atomic<bool> g_tweak_wanted {false};
+    std::atomic<bool> g_quiet_wanted {false};  ///< a desk that is "quiet when idle" is open
+
+    /** The host's text cursor, still while a quiet desk is open: a blinking
+     *  one is a change on the screen twice a second, a frame each to send */
+    UINT g_caret_blink = 0;  ///< the user's blink time while it is held still (0: not held)
+
+    void reconcile_caret() {
+      const bool quiet = g_tweak_wanted && g_quiet_wanted;
+      if (quiet && g_caret_blink == 0) {
+        g_caret_blink = GetCaretBlinkTime();
+        if (g_caret_blink == 0) g_caret_blink = 530;
+        SetCaretBlinkTime(INFINITE);
+        BOOST_LOG(info) << "Desk: the host's text cursor stops blinking while windows are streamed (was " << g_caret_blink << " ms)";
+      } else if (!quiet && g_caret_blink != 0) {
+        SetCaretBlinkTime(g_caret_blink);
+        g_caret_blink = 0;
+        BOOST_LOG(info) << "Desk: the host's text cursor blinks again";
+      }
+    }
+
+    void reconcile_host_tweaks() {
+      std::thread([] {
+        std::lock_guard lock(g_tweak_mutex);
+        if (g_tweak_wanted) apply_host_tweaks_now();
+        else restore_host_tweaks_now();
+        reconcile_caret();
+      }).detach();
+    }
+
+    void apply_host_tweaks() {
+      g_tweak_wanted = true;
+      reconcile_host_tweaks();
+    }
+
+    void restore_host_tweaks() {
+      g_tweak_wanted = false;
+      reconcile_host_tweaks();
+    }
+
+    /** UI animations, off while windows are streamed: a menu that slides or
+     *  fades in is half drawn for a while, and a stream shows every one of
+     *  those frames. Live settings only (not saved to the profile): a crash
+     *  leaves them off until the next sign-in at worst. */
+    struct animation_t {
+      UINT get, set;
+      BOOL was = FALSE;
+    };
+    animation_t g_animations[] = {
+      {SPI_GETCLIENTAREAANIMATION, SPI_SETCLIENTAREAANIMATION},
+      {SPI_GETMENUANIMATION, SPI_SETMENUANIMATION},
+      {SPI_GETMENUFADE, SPI_SETMENUFADE},
+      {SPI_GETCOMBOBOXANIMATION, SPI_SETCOMBOBOXANIMATION},
+      {SPI_GETTOOLTIPANIMATION, SPI_SETTOOLTIPANIMATION},
+      {SPI_GETTOOLTIPFADE, SPI_SETTOOLTIPFADE},
+      {SPI_GETSELECTIONFADE, SPI_SETSELECTIONFADE},
+    };
+
+    void apply_host_tweaks_now() {
+      if (g_tweaked) return;
+      g_tweaked = true;
+      BOOL arranging = TRUE;
+      SystemParametersInfoW(SPI_GETWINARRANGING, 0, &arranging, 0);
+      with_user_hive([&](HKEY user) {
+        DWORD saved = 0;
+        if (!read_dword(user, tweaks_backup_key, L"Saved", saved)) {
+          // First time (or restored since): keep the user's values. "absent"
+          // values are remembered as such and deleted again on restore.
+          for (const wchar_t *name : snap_values) {
+            DWORD v = 0;
+            const bool present = read_dword(user, explorer_advanced_key, name, v);
+            write_dword(user, tweaks_backup_key, name, present ? v : 0xffffffffu);
+          }
+          write_dword(user, tweaks_backup_key, L"WinArranging", arranging ? 1 : 0);
+          write_dword(user, tweaks_backup_key, L"Saved", 1);
+        }
+        for (const wchar_t *name : snap_values) write_dword(user, explorer_advanced_key, name, 0);
+      });
+      const BOOL ok = SystemParametersInfoW(SPI_SETWINARRANGING, FALSE, nullptr, SPIF_SENDCHANGE);
+      for (auto &a : g_animations) {
+        a.was = FALSE;
+        SystemParametersInfoW(a.get, 0, &a.was, 0);
+        // These take the value as the pointer argument
+        SystemParametersInfoW(a.set, 0, reinterpret_cast<PVOID>(static_cast<std::uintptr_t>(FALSE)), SPIF_SENDCHANGE);
+      }
+      announce_settings();
+      BOOST_LOG(info) << "Desk: window snapping off on the host while streaming windows (spi " << (ok ? "ok" : "failed") << ", was " << arranging << ')';
+    }
+
+    void restore_host_tweaks_now() {
+      if (!g_tweaked) return;
+      g_tweaked = false;
+      DWORD arranging = 1;
+      with_user_hive([&](HKEY user) {
+        DWORD saved = 0;
+        if (!read_dword(user, tweaks_backup_key, L"Saved", saved)) return;
+        for (const wchar_t *name : snap_values) {
+          DWORD v = 0xffffffffu;
+          read_dword(user, tweaks_backup_key, name, v);
+          if (v == 0xffffffffu) RegDeleteKeyValueW(user, explorer_advanced_key, name);
+          else write_dword(user, explorer_advanced_key, name, v);
+        }
+        read_dword(user, tweaks_backup_key, L"WinArranging", arranging);
+        RegDeleteKeyW(user, tweaks_backup_key);
+      });
+      SystemParametersInfoW(SPI_SETWINARRANGING, arranging ? TRUE : FALSE, nullptr, SPIF_SENDCHANGE);
+      for (const auto &a : g_animations) {
+        SystemParametersInfoW(a.set, 0, reinterpret_cast<PVOID>(static_cast<std::uintptr_t>(a.was)), SPIF_SENDCHANGE);
+      }
+      announce_settings();
+      BOOST_LOG(info) << "Desk: window snapping restored on the host";
+    }
+
+    /** The host pointer's shape, by the system cursor it is (apps' own
+     *  cursors are drawn as arrows): the client shows the Mac's equivalent. */
+    RECT g_clip {};  ///< the pointer's confinement at the last cursor_shape(), or empty
+
+    std::string cursor_shape() {
+      // The pointer belongs to the interactive desktop: this request thread
+      // has to be on it to see the real cursor, and back on its own after
+      // (with a UAC prompt up the interactive desktop is the secure one, and
+      // the windows are on ours)
+      const HDESK own = GetThreadDesktop(GetCurrentThreadId());
+      platf::syncThreadDesktop();
+      CURSORINFO ci {};
+      ci.cbSize = sizeof(ci);
+      const bool got = GetCursorInfo(&ci) && ci.hCursor;
+      // Confined to a window (games hold the pointer with ClipCursor)
+      RECT clip {};
+      g_clip = {};
+      if (GetClipCursor(&clip)) {
+        const RECT screen {GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN) + GetSystemMetrics(SM_CYVIRTUALSCREEN)};
+        if (!EqualRect(&clip, &screen)) g_clip = clip;
+      }
+      if (own) SetThreadDesktop(own);
+      if (!got) return "arrow";
+      static const struct {
+        WORD id;
+        const char *name;
+      } table[] = {
+        {32512, "arrow"}, {32513, "ibeam"}, {32649, "hand"}, {32644, "we"}, {32645, "ns"},  // IDC_ARROW, IBEAM, HAND, SIZEWE, SIZENS
+        {32642, "nwse"}, {32643, "nesw"}, {32646, "all"}, {32515, "cross"}, {32648, "no"},  // SIZENWSE, SIZENESW, SIZEALL, CROSS, NO
+        {32514, "wait"}, {32650, "progress"}, {32651, "help"}, {32516, "uparrow"},  // WAIT, APPSTARTING, HELP, UPARROW
+      };
+      for (const auto &c : table) {
+        if (ci.hCursor == LoadCursorW(nullptr, MAKEINTRESOURCEW(c.id))) return c.name;
+      }
+      return "arrow";
+    }
+
+    /** Remove a desk's display once it has been idle long enough (detached thread). */
+    void schedule_idle_removal(const std::string &client_uuid, unsigned generation) {
+      std::thread([client_uuid, generation] {
+        std::this_thread::sleep_for(std::chrono::minutes(10));
+        vdisplay_t desk, atlas;
+        {
+          std::lock_guard lock(g_mutex);
+          auto it = g_desks.find(client_uuid);
+          if (it == g_desks.end() || it->second.open || it->second.idle_generation != generation) return;
+          desk.sudovda = it->second.sudovda;
+          desk.guid = it->second.guid;
+          desk.device = it->second.device;
+          atlas = it->second.atlas;
+          g_desks.erase(it);
+        }
+        remove_display(atlas);
+        VDISPLAY::set_virtual_display_protected(desk.guid, {}, false);
+        if (desk.sudovda ? VDISPLAY::removeSudovdaDisplay(desk.guid) : VDISPLAY::removeVirtualDisplay(desk.guid)) {
+          BOOST_LOG(info) << "Desk: removed the idle display of client " << client_uuid;
+        } else {
+          BOOST_LOG(warning) << "Desk: failed to remove the idle display of client " << client_uuid;
+        }
+      }).detach();
+    }
+
+  }  // namespace
+
+  desk_t open(const std::string &client_uuid, int w, int h, int fps, int dpi, const options_t &options) {
+    rescue_stranded_windows();
+    w = std::max(640, w & ~1);
+    h = std::max(480, h & ~1);
+    const int shown_w = w, shown_h = h;  // the client's screen; the mode may be larger
+    fps = std::clamp(fps, 24, 240);
+    dpi = std::clamp(dpi, 96, 384);
+    std::lock_guard lock(g_mutex);
+    auto &desk = g_desks[client_uuid];
+    desk.options = options;
+    desk.options.unfocused_divisor = std::clamp(options.unfocused_divisor, 1, 16);
+    desk.options.background_qp = std::clamp(options.background_qp, 0, 20);
+    // SudoVDA (or a Sunshine driver with requested resolutions) makes displays
+    // of exactly the size asked for; otherwise the driver's catalog decides.
+    const bool sudovda = VDISPLAY::sudovdaReady();
+    const bool custom = sudovda || VDISPLAY::supportsRequestedResolutionCatalog();
+    auto ours = [&desk] {
+      return std::vector<std::wstring> {desk.device, desk.atlas.device};
+    };
+    vdisplay_t desk_display;
+    desk_display.sudovda = desk.sudovda;
+    desk_display.guid = desk.guid;
+    desk_display.device = desk.device;
+    desk_display.monitor_path = desk.monitor_path;
+    RECT rect {};
+    const bool desk_ok = ensure_display(desk_display, "vibeshine-desk-" + client_uuid, "the desk", w, h, fps, custom, sudovda, [&] {
+      return desk_position(ours());
+    }, rect);
+    desk.sudovda = desk_display.sudovda;
+    desk.guid = desk_display.guid;
+    desk.device = desk_display.device;
+    desk.monitor_path = desk_display.monitor_path;
+    if (!desk_ok) {
+      remove_display(desk.atlas);
+      g_desks.erase(client_uuid);
+      return {};
+    }
+    // The atlas, what the session streams: 3840x2160 whatever the desk, or
+    // smaller where the client asks (a slow link, windows drawn at 1x). No
+    // larger: that is what the client's hardware decoder keeps up with at
+    // 120 fps (measured on Apple silicon: 4096x2304 decodes in 12 ms instead
+    // of 8 and adds ~2 ms glass to glass; taller shapes like 3056x2704 drop to
+    // software decoding, ~80 ms). With a catalog the desk's mode, which is
+    // 3840x2160 here too.
+    int aw = w, ah = h, afps = fps;
+    if (custom) {
+      aw = 3840;
+      ah = 2160;
+      if (options.atlas_w > 0 && options.atlas_h > 0) {
+        aw = std::clamp(options.atlas_w & ~1, 1280, 3840);
+        ah = std::clamp(options.atlas_h & ~1, 720, 2160);
+      }
+    }
+    const int want_aw = aw, want_ah = ah;
+    RECT atlas_rect {};
+    if (!ensure_display(desk.atlas, "vibeshine-atlas-" + client_uuid, "the atlas", aw, ah, afps, custom, sudovda, [&] {
+          return atlas_position(ours());
+        }, atlas_rect) || aw != want_aw || ah != want_ah) {
+      BOOST_LOG(warning) << "Desk: no atlas display at " << want_aw << 'x' << want_ah << " (got " << aw << 'x' << ah << ')';
+      remove_display(desk.atlas);
+      vdisplay_t gone;
+      gone.sudovda = desk.sudovda;
+      gone.guid = desk.guid;
+      gone.device = desk.device;
+      remove_display(gone);
+      g_desks.erase(client_uuid);
+      return {};
+    }
+    find_monitor(desk.device, &rect);  // the atlas may have shifted the layout
+    desk.open = true;
+    desk.info.valid = true;
+    try {
+      desk.info.display = utf_utils::to_utf8(desk.device);
+    } catch (...) {
+    }
+    desk.info.rect[0] = rect.left;
+    desk.info.rect[1] = rect.top;
+    desk.info.rect[2] = rect.right - rect.left;
+    desk.info.rect[3] = rect.bottom - rect.top;
+    desk.info.fps = fps;
+    desk.info.dpi = dpi;
+    // The scale can only be set on an attached display; apply it now and
+    // wait for it to show, then report what the desk really runs at.
+    if (monitor_dpi(find_monitor(desk.device)) != dpi && !desk.monitor_path.empty()) {
+      const auto r = VDISPLAY::set_display_scale_percent(desk.monitor_path, static_cast<std::uint32_t>(dpi * 100 / 96));
+      BOOST_LOG(info) << "Desk: scale " << dpi * 100 / 96 << "% requested: found=" << r.target_found << " applied=" << r.applied << " current=" << r.current_percent
+                      << " recommended=" << r.recommended_percent << " status=" << r.status;
+    }
+    for (int i = 0; i < 30; ++i) {
+      const int actual = monitor_dpi(find_monitor(desk.device));
+      if (actual == dpi) break;
+      if (i == 29 && actual > 0) {
+        BOOST_LOG(warning) << "Desk: asked for " << dpi << " dpi, the display runs at " << actual;
+        desk.info.dpi = actual;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    hide_desk_taskbar(find_monitor(desk.device));
+    hide_desk_taskbar(find_monitor(desk.atlas.device));
+    if (find_monitor(desk.device, &rect)) reserve_work_area(client_uuid, rect, shown_w, shown_h);
+    try {
+      desk.info.capture = utf_utils::to_utf8(desk.atlas.device);
+      desk.info.capture_size[0] = aw;
+      desk.info.capture_size[1] = ah;
+    } catch (...) {
+    }
+    find_monitor(desk.atlas.device, &atlas_rect);
+    if (!desk.atlas_window || !EqualRect(&desk.atlas_window->monitor(), &atlas_rect)) {
+      desk.atlas_window.reset();
+      desk.atlas_window = std::make_shared<desk_atlas::atlas_t>(atlas_rect);
+    }
+    desk_hold::set_background_qp(desk.options.background_qp);
+    g_quiet_wanted = desk.options.quiet_idle;
+    apply_host_tweaks();
+    BOOST_LOG(info) << "Desk: open " << desk.info.display << ' ' << desk.info.rect[2] << 'x' << desk.info.rect[3] << '@' << fps << " at " << desk.info.dpi << " dpi"
+                    << (custom ? " (exact mode)" : " (catalog mode)") << ", atlas " << desk.info.capture;
+    return desk.info;
+  }
+
+  std::optional<options_t> options(const std::string &client_uuid) {
+    std::lock_guard lock(g_mutex);
+    auto it = g_desks.find(client_uuid);
+    if (it == g_desks.end()) return std::nullopt;
+    return it->second.options;
+  }
+
+  std::optional<desk_t> get(const std::string &client_uuid) {
+    std::lock_guard lock(g_mutex);
+    auto it = g_desks.find(client_uuid);
+    if (it == g_desks.end() || !it->second.open) return std::nullopt;
+    RECT rect {};
+    if (!find_monitor(it->second.device, &rect)) return std::nullopt;
+    it->second.info.rect[0] = rect.left;
+    it->second.info.rect[1] = rect.top;
+    return it->second.info;
+  }
+
+  std::optional<std::pair<int, int>> input_origin(const std::string &client_uuid) {
+    std::lock_guard lock(g_mutex);
+    auto it = g_desks.find(client_uuid);
+    RECT rect {};
+    if (it == g_desks.end() || !find_monitor(it->second.device, &rect)) return std::nullopt;
+    return std::pair<int, int> {static_cast<int>(rect.left - GetSystemMetrics(SM_XVIRTUALSCREEN)), static_cast<int>(rect.top - GetSystemMetrics(SM_YVIRTUALSCREEN))};
+  }
+
+  namespace {
+    std::map<std::string, std::pair<int, unsigned>> g_sessions;  ///< client -> (live desk streams, generation)
+    std::atomic<int> g_shift_x {0}, g_shift_y {0};  ///< see pointer_shift()
+  }
+
+  void session_started(const std::string &client_uuid) {
+    std::lock_guard lock(g_mutex);
+    auto &s = g_sessions[client_uuid];
+    ++s.first;
+    ++s.second;
+  }
+
+  void session_ended(const std::string &client_uuid) {
+    unsigned generation = 0;
+    {
+      std::lock_guard lock(g_mutex);
+      auto &s = g_sessions[client_uuid];
+      s.first = std::max(0, s.first - 1);
+      if (s.first > 0) return;
+      generation = ++s.second;
+    }
+    std::thread([client_uuid, generation] {
+      std::this_thread::sleep_for(std::chrono::seconds(20));
+      {
+        std::lock_guard lock(g_mutex);
+        auto &s = g_sessions[client_uuid];
+        if (s.first > 0 || s.second != generation) return;
+      }
+      BOOST_LOG(info) << "Desk: no stream for client " << client_uuid << " since 20 s; closing its desk";
+      close(client_uuid);
+    }).detach();
+  }
+
+  void close(const std::string &client_uuid) {
+    g_shift_x = 0;
+    g_shift_y = 0;
+    std::lock_guard lock(g_mutex);
+    auto it = g_desks.find(client_uuid);
+    if (it == g_desks.end()) return;
+    for (const auto &[hwnd, origin] : it->second.adopted) {
+      if (IsWindow(hwnd)) send_home(hwnd, origin.x, origin.y);
+    }
+    // Everything else still on the desk (dialogs and windows that opened
+    // there) goes to the primary display: nothing stays on a display nobody sees
+    RECT desk {};
+    if (find_monitor(it->second.device, &desk)) {
+      for (HWND hwnd : windows_on(desk)) {
+        if (it->second.adopted.contains(hwnd)) continue;
+        RECT frame {};
+        if (!app_window_layout::frame_rect(hwnd, frame)) continue;
+        const POINT home = home_for(frame, desk);
+        send_home(hwnd, home.x, home.y);
+        BOOST_LOG(info) << "Desk: moved 0x" << std::hex << reinterpret_cast<std::uintptr_t>(hwnd) << std::dec << " to the primary display";
+      }
+      // Minimized ones too, or they come back off every screen once the desk is gone
+      for (HWND hwnd : minimized_on(desk)) {
+        if (it->second.adopted.contains(hwnd)) continue;
+        WINDOWPLACEMENT placement {};
+        placement.length = sizeof(placement);
+        if (!GetWindowPlacement(hwnd, &placement)) continue;
+        const RECT &r = placement.rcNormalPosition;
+        const POINT home = home_for({desk.left + 1, desk.top + 1, desk.left + 1 + (r.right - r.left), desk.top + 1 + (r.bottom - r.top)}, desk);
+        move_frame_to(hwnd, home.x + 64, home.y + 64);
+        BOOST_LOG(info) << "Desk: minimized " << describe_window(reinterpret_cast<std::uintptr_t>(hwnd)) << " comes back on the primary display now";
+      }
+    }
+    it->second.adopted.clear();
+    g_reserves.erase(client_uuid);
+    it->second.atlas_window.reset();
+    it->second.open = false;
+    bool any = false;
+    for (const auto &[uuid, d] : g_desks) any = any || d.open;
+    if (!any) restore_host_tweaks();
+    it->second.idle_since = std::chrono::steady_clock::now();
+    schedule_idle_removal(client_uuid, ++it->second.idle_generation);
+  }
+
+  bool any_open() {
+    std::lock_guard lock(g_mutex);
+    return !g_desks.empty();
+  }
+
+  std::string describe_window(std::uint64_t handle) {
+    auto hwnd = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(handle));
+    char head[32];
+    std::snprintf(head, sizeof(head), "0x%llx", static_cast<unsigned long long>(handle));
+    if (!hwnd || !IsWindow(hwnd)) return std::string(head) + " (gone)";
+    wchar_t cls[96] {};
+    GetClassNameW(hwnd, cls, 96);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    std::string out = std::string(head) + " [" + window_title(hwnd) + "] <" + utf_utils::to_utf8(cls) + "> of " + process_name(pid);
+    if (!IsWindowVisible(hwnd)) out += " (hidden)";
+    if (IsIconic(hwnd)) out += " (minimized)";
+    return out;
+  }
+
+  std::uint64_t foreground_window() {
+    return reinterpret_cast<std::uintptr_t>(GetForegroundWindow());
+  }
+
+  void rescue_stranded_windows() {
+    // Where desks go: below or right of every display there is (a window
+    // parked at -32000, or hidden at negative places on purpose, stays)
+    struct ctx_t {
+      RECT screens {};
+      std::vector<HWND> out;
+    } ctx;
+    EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR, HDC, LPRECT r, LPARAM lp) -> BOOL {
+      auto *c = reinterpret_cast<ctx_t *>(lp);
+      UnionRect(&c->screens, &c->screens, r);
+      return TRUE;
+    },
+                        reinterpret_cast<LPARAM>(&ctx));
+    EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
+      auto *c = reinterpret_cast<ctx_t *>(lp);
+      if (!IsWindowVisible(hwnd) || app_window_layout::is_cloaked(hwnd)) return TRUE;
+      if (GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) return TRUE;
+      DWORD pid = 0;
+      GetWindowThreadProcessId(hwnd, &pid);
+      if (pid == GetCurrentProcessId()) return TRUE;
+      RECT r {};
+      if (IsIconic(hwnd)) {
+        // Minimized: where it would come back (workspace coordinates)
+        WINDOWPLACEMENT placement {};
+        placement.length = sizeof(placement);
+        if (!GetWindowPlacement(hwnd, &placement)) return TRUE;
+        MONITORINFO mi {};
+        mi.cbSize = sizeof(mi);
+        GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &mi);
+        r = placement.rcNormalPosition;
+        OffsetRect(&r, mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top);
+      } else if (!app_window_layout::frame_rect(hwnd, r)) {
+        return TRUE;
+      }
+      if (r.right - r.left < 100 || r.bottom - r.top < 50) return TRUE;
+      if (MonitorFromRect(&r, MONITOR_DEFAULTTONULL)) return TRUE;
+      if (r.top >= c->screens.bottom - 8 || r.left >= c->screens.right - 8) c->out.push_back(hwnd);
+      return TRUE;
+    },
+                reinterpret_cast<LPARAM>(&ctx));
+    if (ctx.out.empty()) return;
+    MONITORINFO mi {};
+    mi.cbSize = sizeof(mi);
+    GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &mi);
+    const RECT &work = mi.rcWork;
+    LONG step = 0;
+    for (HWND hwnd : ctx.out) {
+      RECT r {};
+      if (IsIconic(hwnd)) {
+        WINDOWPLACEMENT placement {};
+        placement.length = sizeof(placement);
+        if (!GetWindowPlacement(hwnd, &placement)) continue;
+        r = placement.rcNormalPosition;
+      } else if (!app_window_layout::frame_rect(hwnd, r)) {
+        continue;
+      }
+      const LONG w = r.right - r.left, h = r.bottom - r.top;
+      const LONG x = work.left + std::min<LONG>(64 + step, std::max<LONG>(0, (work.right - work.left) - w));
+      const LONG y = work.top + std::min<LONG>(64 + step, std::max<LONG>(0, (work.bottom - work.top) - h));
+      send_home(hwnd, x, y);
+      step += 48;
+      BOOST_LOG(info) << "Desk: " << describe_window(reinterpret_cast<std::uintptr_t>(hwnd)) << " was left off every display (where a desk was); moved to the primary display";
+    }
+  }
+
+  bool adopt(const std::string &client_uuid, std::uint64_t handle, int x, int y, int w, int h) {
+    auto hwnd = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(handle));
+    if (!IsWindow(hwnd)) return false;
+    std::lock_guard lock(g_mutex);
+    auto it = g_desks.find(client_uuid);
+    if (it == g_desks.end() || !it->second.open) return false;
+    RECT rect {};
+    if (!find_monitor(it->second.device, &rect)) return false;
+    if (it->second.adopted.contains(hwnd)) {
+      // Already on the desk: a plain move, as far off its edges as the Mac
+      // lets a window go (a window flicked aside), so both keep agreeing on
+      // where it is. Nothing borders the desk but above (desk_position); a
+      // sliver stays on it so it remains the window's display.
+      RECT frame {};
+      if (app_window_layout::frame_rect(hwnd, frame)) {
+        const LONG fw = w > 0 ? w : frame.right - frame.left;
+        const LONG dw = rect.right - rect.left, dh = rect.bottom - rect.top;
+        x = static_cast<int>(std::clamp<LONG>(x, -(fw - 8), std::max<LONG>(-(fw - 8), dw - 8)));
+        y = static_cast<int>(std::clamp<LONG>(y, 0, std::max<LONG>(0, dh - 8)));
+      }
+      if (w > 0 && h > 0) {
+        // A resize from the left or top: in step with the app's painting
+        const LONG dx = rect.left + x, dy = rect.top + y;
+        paint_sync::resize(hwnd, [hwnd, dx, dy, w, h] {
+          move_frame_to(hwnd, dx, dy, w, h, false);
+        });
+      } else {
+        move_frame_to(hwnd, rect.left + x, rect.top + y);
+      }
+      return true;
+    }
+    BOOST_LOG(info) << "Desk trace: adopting " << describe_window(handle) << " at " << x << ',' << y;
+    if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+    // Maximized elsewhere: maximized on the desk (moved as its normal self)
+    const bool zoomed = IsZoomed(hwnd);
+    if (zoomed) ShowWindow(hwnd, SW_RESTORE);
+    RECT frame {};
+    if (!app_window_layout::frame_rect(hwnd, frame)) return false;
+    // A window first seen on the desk itself (it opened there, or is parked
+    // past its edge mid-drag) has no home elsewhere: the primary display
+    it->second.adopted[hwnd] = home_for(frame, rect);
+    settle_dpi_change(hwnd, GetDpiForWindow(hwnd), frame);
+    // First time: keep it inside the desk.
+    const LONG fw = frame.right - frame.left, fh = frame.bottom - frame.top;
+    const LONG dw = rect.right - rect.left, dh = rect.bottom - rect.top;
+    x = static_cast<int>(std::max<LONG>(0, std::min<LONG>(x, dw - std::min(fw, dw))));
+    y = static_cast<int>(std::max<LONG>(0, std::min<LONG>(y, dh - std::min(fh, dh))));
+    move_frame_to(hwnd, rect.left + x, rect.top + y);
+    if (zoomed) {
+      // (queued after the move, which goes through the window's thread too)
+      ShowWindowAsync(hwnd, SW_MAXIMIZE);
+      return true;
+    }
+    // Coming from a display of another DPI it is resized once it is here:
+    // then it goes back inside what the client shows (the work area), made
+    // smaller if it has outgrown it, as macOS keeps windows within the screen
+    const std::wstring device = it->second.device;
+    std::thread([hwnd, device] {
+      for (int i = 0; i < 8; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        RECT f {}, desk {};
+        HMONITOR mon = find_monitor(device, &desk);
+        if (!mon || !IsWindow(hwnd) || !app_window_layout::frame_rect(hwnd, f)) return;
+        MONITORINFO mi {};
+        mi.cbSize = sizeof(mi);
+        if (!GetMonitorInfoW(mon, &mi)) return;
+        const RECT &w = mi.rcWork;
+        const LONG ww = w.right - w.left, wh = w.bottom - w.top;
+        LONG fw = f.right - f.left, fh = f.bottom - f.top;
+        const bool shrink = fw > ww || fh > wh;
+        if (shrink || f.right > w.right || f.bottom > w.bottom || f.left < w.left || f.top < w.top) {
+          fw = std::min(fw, ww);
+          fh = std::min(fh, wh);
+          move_frame_to(hwnd, std::clamp<LONG>(f.left, w.left, w.right - fw), std::clamp<LONG>(f.top, w.top, w.bottom - fh), shrink ? fw : 0, shrink ? fh : 0);
+          if (!shrink) return;
+        }
+      }
+    }).detach();
+    return true;
+  }
+
+  bool order(const std::string &client_uuid, const std::vector<std::uint64_t> &top_first, bool focus) {
+    RECT desk {};
+    {
+      std::lock_guard lock(g_mutex);
+      auto it = g_desks.find(client_uuid);
+      if (it == g_desks.end() || !it->second.open || !find_monitor(it->second.device, &desk)) return false;
+    }
+    std::vector<HWND> windows;
+    for (auto handle : top_first) {
+      auto hwnd = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(handle));
+      RECT r {}, x {};
+      if (!IsWindow(hwnd) || !GetWindowRect(hwnd, &r) || !IntersectRect(&x, &r, &desk)) continue;  // only windows on the desk
+      if (IsHungAppWindow(hwnd)) continue;  // DeferWindowPos would wait for it
+      windows.push_back(hwnd);
+    }
+    if (windows.empty()) return false;
+    // The client is the active app: its front window gets the focus in the
+    // same step, so the host never shows the new order with the old focus.
+    // (Unless it, a popup of it or its thread's menu has it already: a
+    // click got there first, and activating again would close its menu.)
+    if (focus) {
+      HWND top = windows.front(), fg = GetForegroundWindow();
+      const bool has = fg && (fg == top || GetAncestor(fg, GA_ROOTOWNER) == top ||
+                              GetWindowThreadProcessId(fg, nullptr) == GetWindowThreadProcessId(top, nullptr));
+      if (!has) host_windows::action(reinterpret_cast<std::uintptr_t>(top), host_windows::op_e::activate);
+    }
+    if (windows.size() < 2) return true;
+    // One batch, each window right below the one before it. The front one
+    // is not moved: raising a window above the foreground one is refused
+    // to a background process, and only the order among the desk's own
+    // windows matters (the desk is a display of its own). Separate
+    // SetWindowPos calls on windows of different threads applied in any
+    // order and could leave the stack half done.
+    HDWP batch = BeginDeferWindowPos(static_cast<int>(windows.size()) - 1);
+    for (std::size_t i = 1; batch && i < windows.size(); ++i) {
+      batch = DeferWindowPos(batch, windows[i], windows[i - 1], 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    }
+    if (!batch || !EndDeferWindowPos(batch)) {
+      BOOST_LOG(info) << "App desk: stacking failed (" << GetLastError() << ')';
+      return false;
+    }
+    return true;
+  }
+
+  bool park(const std::string &client_uuid, std::uint64_t handle) {
+    auto hwnd = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(handle));
+    RECT desk {}, frame {};
+    {
+      std::lock_guard lock(g_mutex);
+      auto it = g_desks.find(client_uuid);
+      if (it == g_desks.end() || !it->second.open || !find_monitor(it->second.device, &desk)) return false;
+    }
+    if (!IsWindow(hwnd) || !app_window_layout::frame_rect(hwnd, frame)) return false;
+    // 8 px stay on the desk so Windows keeps it on this display
+    move_frame_to(hwnd, desk.right - 8, std::clamp<LONG>(frame.top, desk.top, desk.bottom - 8));
+    return true;
+  }
+
+  bool resize(const std::string &client_uuid, std::uint64_t handle, int w, int h) {
+    auto hwnd = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(handle));
+    if (!IsWindow(hwnd) || w <= 0 || h <= 0) return false;
+    {
+      std::lock_guard lock(g_mutex);
+      auto it = g_desks.find(client_uuid);
+      if (it == g_desks.end() || !it->second.open || !it->second.adopted.contains(hwnd)) return false;
+    }
+    paint_sync::resize(hwnd, [hwnd, w, h] {
+      RECT frame {};
+      if (!app_window_layout::frame_rect(hwnd, frame)) return;
+      move_frame_to(hwnd, frame.left, frame.top, w, h, false);
+    });
+    return true;
+  }
+
+  bool release(const std::string &client_uuid, std::uint64_t handle) {
+    BOOST_LOG(info) << "Desk trace: releasing " << describe_window(handle);
+    auto hwnd = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(handle));
+    std::lock_guard lock(g_mutex);
+    auto it = g_desks.find(client_uuid);
+    if (it == g_desks.end()) return false;
+    auto a = it->second.adopted.find(hwnd);
+    if (a == it->second.adopted.end()) return false;
+    if (IsWindow(hwnd)) send_home(hwnd, a->second.x, a->second.y);
+    it->second.adopted.erase(a);
+    return true;
+  }
+
+  namespace {
+    /** A window an app on the desk opens (Ctrl-N, "open in new window")
+     *  lands where Windows puts it, usually on the host's own display: it
+     *  comes to the desk, cascaded from that app's front window, so it shows
+     *  on the client like the others. Only new windows of processes already
+     *  on the desk; looked for at most ten times a second.
+     *
+     *  Likewise a window already open elsewhere that takes the foreground
+     *  from a desk window (a file opened from the desk goes to an app's
+     *  existing window): the user is working with it now. */
+    void adopt_new_windows(const std::string &client_uuid) {
+      RECT desk {}, work {};
+      std::set<DWORD> pids;
+      std::set<HWND> seen;
+      bool first = false;
+      HWND fg_before = nullptr;
+      RECT fg_before_frame {};
+      bool fg_before_popup = false;
+      std::map<DWORD, RECT> front_of;  // pid -> frame of its top-most window on the desk
+      {
+        std::lock_guard lock(g_mutex);
+        auto it = g_desks.find(client_uuid);
+        if (it == g_desks.end() || !it->second.open) return;
+        const auto now = std::chrono::steady_clock::now();
+        if (now - it->second.seen_at < std::chrono::milliseconds(100)) return;
+        it->second.seen_at = now;
+        HMONITOR mon = find_monitor(it->second.device, &desk);
+        if (!mon) return;
+        MONITORINFO mi {};
+        mi.cbSize = sizeof(mi);
+        work = GetMonitorInfoW(mon, &mi) ? mi.rcWork : desk;
+        for (const auto &[hwnd, origin] : it->second.adopted) {
+          DWORD pid = 0;
+          if (IsWindow(hwnd) && GetWindowThreadProcessId(hwnd, &pid)) pids.insert(pid);
+        }
+        seen = it->second.seen;
+        first = !it->second.seen_once;
+        fg_before = it->second.foreground;
+        fg_before_frame = it->second.foreground_frame;
+        fg_before_popup = it->second.foreground_popup;
+      }
+      struct ctx_t {
+        std::vector<std::pair<HWND, DWORD>> windows;
+      } ctx;
+      EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
+        if (!IsWindowVisible(hwnd) || IsIconic(hwnd) || app_window_layout::is_cloaked(hwnd)) return TRUE;
+        // Owned by a window of the user's: its dialog, it goes with that one.
+        // An owner nobody sees (the shell's Properties sheets have one) makes
+        // it a window of its own
+        if (HWND owner = GetWindow(hwnd, GW_OWNER); owner && IsWindowVisible(owner)) return TRUE;
+        if (GetWindowLongW(hwnd, GWL_EXSTYLE) & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) return TRUE;
+        if (GetWindowTextLengthW(hwnd) == 0) return TRUE;
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        if (pid == GetCurrentProcessId()) return TRUE;
+        reinterpret_cast<ctx_t *>(lp)->windows.push_back({hwnd, pid});
+        return TRUE;
+      },
+                  reinterpret_cast<LPARAM>(&ctx));
+      // Front-most desk window per process (EnumWindows goes top to bottom)
+      for (const auto &[hwnd, pid] : ctx.windows) {
+        RECT r {}, x {};
+        if (!front_of.contains(pid) && app_window_layout::frame_rect(hwnd, r) && IntersectRect(&x, &r, &desk)) front_of[pid] = r;
+      }
+      std::set<HWND> now_seen;
+      std::vector<std::pair<HWND, POINT>> to_adopt;
+      for (const auto &[hwnd, pid] : ctx.windows) {
+        now_seen.insert(hwnd);
+        // An elevation prompt (UAC not on the secure desktop) is the client's
+        // business wherever it opens: it comes over, in the middle
+        const bool prompt = _stricmp(process_name(pid).c_str(), "consent.exe") == 0;
+        if (seen.contains(hwnd) || first) continue;
+        RECT r {}, x {};
+        const bool framed = app_window_layout::frame_rect(hwnd, r);
+        const bool on_desk = framed && IntersectRect(&x, &r, &desk);
+        // Every window that appears while windows are streamed, and what
+        // becomes of it here (one that never shows on the client is in this list)
+        BOOST_LOG(info) << "Desk: new window 0x" << std::hex << reinterpret_cast<std::uintptr_t>(hwnd) << std::dec << " [" << window_title(hwnd) << "] of "
+                        << process_name(pid) << (on_desk ? " on the desk" : !framed ? " (no frame)" : (prompt || pids.contains(pid)) ? " elsewhere, its app is on the desk" : " elsewhere: no app of it on the desk, left there");
+        if (!prompt && !pids.contains(pid)) continue;
+        if (!framed || on_desk) continue;
+        const LONG w = r.right - r.left, h = r.bottom - r.top;
+        if (prompt) {
+          to_adopt.push_back({hwnd, {std::max<LONG>(0, (work.right - work.left - w) / 2) + work.left - desk.left, std::max<LONG>(0, (work.bottom - work.top - h) / 2) + work.top - desk.top}});
+          continue;
+        }
+        auto base = front_of.find(pid);
+        if (base == front_of.end()) continue;
+        LONG px = base->second.left + 48, py = base->second.top + 48;
+        px = std::clamp<LONG>(px, work.left, std::max<LONG>(work.left, work.right - w));
+        py = std::clamp<LONG>(py, work.top, std::max<LONG>(work.top, work.bottom - h));
+        to_adopt.push_back({hwnd, {px - desk.left, py - desk.top}});
+      }
+      // The foreground went from a desk window to one elsewhere. Only while
+      // that desk window is still there: when it closes or is minimized,
+      // Windows hands the foreground to the next window in line by itself
+      // (the user did not go to it)
+      HWND fg = GetForegroundWindow();
+      RECT fg_frame {};
+      {
+        RECT x {};
+        if (!fg || !app_window_layout::frame_rect(fg, fg_frame) || !IntersectRect(&x, &fg_frame, &desk)) fg_frame = {};
+      }
+      // (a menu the user picked something from closes as the foreground
+      // moves: that move is the user's doing)
+      const bool before_still_there = fg_before && (fg_before_popup || (IsWindow(fg_before) && IsWindowVisible(fg_before) && !IsIconic(fg_before)));
+      if (fg && fg != fg_before && before_still_there && !IsRectEmpty(&fg_before_frame) && IsRectEmpty(&fg_frame)) {
+        const bool app_window = std::any_of(ctx.windows.begin(), ctx.windows.end(), [&](const auto &e) {
+          return e.first == fg;
+        });
+        RECT r {};
+        const bool queued = std::any_of(to_adopt.begin(), to_adopt.end(), [&](const auto &e) {
+          return e.first == fg;
+        });
+        if (app_window && !queued && app_window_layout::frame_rect(fg, r)) {
+          const LONG w = r.right - r.left, h = r.bottom - r.top;
+          const LONG px = std::clamp<LONG>(fg_before_frame.left + 48, work.left, std::max<LONG>(work.left, work.right - w));
+          const LONG py = std::clamp<LONG>(fg_before_frame.top + 48, work.top, std::max<LONG>(work.top, work.bottom - h));
+          to_adopt.push_back({fg, {px - desk.left, py - desk.top}});
+        }
+      }
+      if (fg != fg_before) {
+        BOOST_LOG(info) << "Desk trace: foreground " << describe_window(reinterpret_cast<std::uintptr_t>(fg)) << (IsRectEmpty(&fg_frame) ? " (elsewhere)" : " (on the desk)")
+                        << " <- " << describe_window(reinterpret_cast<std::uintptr_t>(fg_before));
+      }
+      if (!first) {
+        for (HWND gone : seen) {
+          if (!now_seen.contains(gone)) BOOST_LOG(info) << "Desk trace: window " << describe_window(reinterpret_cast<std::uintptr_t>(gone)) << " left the list";
+        }
+      }
+      {
+        std::lock_guard lock(g_mutex);
+        auto it = g_desks.find(client_uuid);
+        if (it == g_desks.end()) return;
+        it->second.seen = std::move(now_seen);
+        it->second.seen_once = true;
+        it->second.foreground = fg;
+        it->second.foreground_frame = fg_frame;
+        // (as the layout tells windows from popups: a caption, or an
+        // unowned activatable one of window size, like frameless apps)
+        it->second.foreground_popup = false;
+        if (fg) {
+          const LONG style = GetWindowLongW(fg, GWL_STYLE), ex = GetWindowLongW(fg, GWL_EXSTYLE);
+          RECT r {};
+          GetWindowRect(fg, &r);
+          const bool frameless_window = !GetWindow(fg, GW_OWNER) && !(ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) && r.right - r.left >= 200 && r.bottom - r.top >= 150;
+          it->second.foreground_popup = (style & WS_CAPTION) != WS_CAPTION && !frameless_window;
+        }
+      }
+      for (const auto &[hwnd, at] : to_adopt) {
+        BOOST_LOG(info) << "Desk: window 0x" << std::hex << reinterpret_cast<std::uintptr_t>(hwnd) << std::dec << " is new to an app on the desk or took the foreground from it; bringing it over";
+        adopt(client_uuid, reinterpret_cast<std::uintptr_t>(hwnd), at.x, at.y);
+      }
+    }
+  }  // namespace
+
+  namespace {
+    struct secure_prompt_t {
+      HWND hwnd = nullptr;
+      RECT rect {};  ///< where it is (screen)
+    };
+
+    /** The prompt on the secure desktop while that is where input goes
+     *  (UAC): moved to `to` (screen), where the session's capture sees it. */
+    std::optional<secure_prompt_t> secure_prompt(POINT to) {
+      HDESK input = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS | DESKTOP_ENUMERATE | DESKTOP_WRITEOBJECTS | GENERIC_READ | GENERIC_WRITE);
+      if (!input) return std::nullopt;
+      wchar_t name[64] {};
+      DWORD needed = 0;
+      GetUserObjectInformationW(input, UOI_NAME, name, sizeof(name), &needed);
+      if (_wcsicmp(name, L"Default") == 0) {
+        CloseDesktop(input);
+        return std::nullopt;
+      }
+      std::optional<secure_prompt_t> found;
+      // A thread of its own: only a thread without windows can join the
+      // secure desktop
+      std::thread([&] {
+        if (!SetThreadDesktop(input)) return;
+        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        struct ctx_t {
+          HWND best = nullptr;
+          long long area = 0;
+        } ctx;
+        // The largest visible window that is not a backdrop covering its display
+        EnumDesktopWindows(
+          input,
+          [](HWND hwnd, LPARAM lp) -> BOOL {
+            if (!IsWindowVisible(hwnd)) return TRUE;
+            RECT r {};
+            if (!GetWindowRect(hwnd, &r)) return TRUE;
+            MONITORINFO mi {};
+            mi.cbSize = sizeof(mi);
+            if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) return TRUE;
+            const long long w = r.right - r.left, h = r.bottom - r.top;
+            if (w <= 0 || h <= 0 || (w >= (mi.rcMonitor.right - mi.rcMonitor.left) * 9 / 10 && h >= (mi.rcMonitor.bottom - mi.rcMonitor.top) * 9 / 10)) return TRUE;
+            auto *c = reinterpret_cast<ctx_t *>(lp);
+            if (w * h > c->area) {
+              c->best = hwnd;
+              c->area = w * h;
+            }
+            return TRUE;
+          },
+          reinterpret_cast<LPARAM>(&ctx)
+        );
+        if (!ctx.best) return;
+        RECT r {};
+        if (FAILED(DwmGetWindowAttribute(ctx.best, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r)))) GetWindowRect(ctx.best, &r);
+        if (r.left != to.x || r.top != to.y) {
+          RECT win {};
+          GetWindowRect(ctx.best, &win);
+          SetWindowPos(ctx.best, HWND_TOPMOST, to.x - (r.left - win.left), to.y - (r.top - win.top), 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+          if (FAILED(DwmGetWindowAttribute(ctx.best, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r)))) GetWindowRect(ctx.best, &r);
+        }
+        found = secure_prompt_t {ctx.best, r};
+      }).join();
+      CloseDesktop(input);
+      return found;
+    }
+  }  // namespace
+
+  std::pair<int, int> pointer_shift() {
+    return {g_shift_x.load(), g_shift_y.load()};
+  }
+
+  namespace {
+    /** How an app lets its window be sized: the smallest frame, and the
+     *  steps it snaps sizes to while the user drags an edge (terminals snap
+     *  to character cells), so the client's window resizes the same way. */
+    struct sizing_t {
+      int min[2] {0, 0};
+      int step[2] {1, 1};
+      int base[2] {0, 0};  ///< a frame size on the step grid
+      int max[2] {0, 0};  ///< the largest frame (0: no limit)
+      bool resizable = true;  ///< has a sizing border at all
+    };
+
+    std::uint64_t gcd(std::uint64_t a, std::uint64_t b) {
+      while (b) {
+        a %= b;
+        std::swap(a, b);
+      }
+      return a;
+    }
+
+    /** Asked of the app itself (both messages are marshalled to other
+     *  processes): WM_GETMINMAXINFO, and WM_SIZING with a few sizes past the
+     *  current one, the step being what all the snapped sizes have in common.
+     *  Kept for a few seconds per window and size (a font change alters the
+     *  step but not the size). */
+    sizing_t sizing_of(HWND hwnd, const RECT &frame) {
+      struct cached_t {
+        int w, h;
+        UINT dpi;
+        std::chrono::steady_clock::time_point at;
+        sizing_t sizing;
+      };
+      static std::mutex mutex;
+      static std::map<HWND, cached_t> cache;
+      std::lock_guard lock(mutex);
+      RECT win {};
+      if (!GetWindowRect(hwnd, &win)) return {};
+      const int w = win.right - win.left, h = win.bottom - win.top;
+      const UINT dpi = GetDpiForWindow(hwnd);
+      const auto now = std::chrono::steady_clock::now();
+      if (auto it = cache.find(hwnd); it != cache.end() && it->second.w == w && it->second.h == h && it->second.dpi == dpi && now - it->second.at < std::chrono::seconds(5)) {
+        return it->second.sizing;
+      }
+      std::erase_if(cache, [](const auto &e) {
+        return !IsWindow(e.first);
+      });
+      sizing_t out;
+      // (the frame is the window without its invisible resize borders)
+      const int border_w = w - (frame.right - frame.left), border_h = h - (frame.bottom - frame.top);
+      constexpr UINT flags = SMTO_ABORTIFHUNG | SMTO_BLOCK;
+      DWORD_PTR result = 0;
+      MINMAXINFO mmi {};
+      mmi.ptMinTrackSize = {GetSystemMetricsForDpi(SM_CXMINTRACK, dpi), GetSystemMetricsForDpi(SM_CYMINTRACK, dpi)};
+      mmi.ptMaxTrackSize = {GetSystemMetricsForDpi(SM_CXMAXTRACK, dpi), GetSystemMetricsForDpi(SM_CYMAXTRACK, dpi)};
+      if (SendMessageTimeoutW(hwnd, WM_GETMINMAXINFO, 0, reinterpret_cast<LPARAM>(&mmi), flags, 50, &result)) {
+        out.min[0] = std::max(0, static_cast<int>(mmi.ptMinTrackSize.x) - border_w);
+        out.min[1] = std::max(0, static_cast<int>(mmi.ptMinTrackSize.y) - border_h);
+        // (the default is the size of the whole virtual screen: no limit)
+        const POINT fallback {GetSystemMetricsForDpi(SM_CXMAXTRACK, dpi), GetSystemMetricsForDpi(SM_CYMAXTRACK, dpi)};
+        if (mmi.ptMaxTrackSize.x > 0 && mmi.ptMaxTrackSize.x < fallback.x) out.max[0] = std::max(out.min[0], static_cast<int>(mmi.ptMaxTrackSize.x) - border_w);
+        if (mmi.ptMaxTrackSize.y > 0 && mmi.ptMaxTrackSize.y < fallback.y) out.max[1] = std::max(out.min[1], static_cast<int>(mmi.ptMaxTrackSize.y) - border_h);
+      }
+      out.resizable = (GetWindowLongW(hwnd, GWL_STYLE) & WS_THICKFRAME) != 0;
+      if (GetWindowLongW(hwnd, GWL_STYLE) & WS_THICKFRAME) {
+        // The snapped sizes are on the app's grid, which the current size
+        // need not be (a terminal sized by other means): the step is what
+        // their differences have in common, the grid goes through the first
+        std::uint64_t step[2] {0, 0};
+        int first[2] {0, 0};
+        bool answered = true;
+        for (int d : {37, 50, 63, 100, 200}) {
+          RECT r {win.left, win.top, win.right + d, win.bottom + d};
+          if (!SendMessageTimeoutW(hwnd, WM_SIZING, WMSZ_BOTTOMRIGHT, reinterpret_cast<LPARAM>(&r), flags, 50, &result)) {
+            answered = false;
+            break;
+          }
+          const int got[2] {static_cast<int>(r.right - r.left), static_cast<int>(r.bottom - r.top)};
+          for (int i : {0, 1}) {
+            if (d == 37) first[i] = got[i];
+            else step[i] = gcd(step[i], static_cast<std::uint64_t>(std::abs(got[i] - first[i])));
+          }
+        }
+        if (answered) {
+          for (int i : {0, 1}) {
+            if (step[i] > 1 && step[i] <= 64) {
+              out.step[i] = static_cast<int>(step[i]);
+              out.base[i] = first[i] - (i == 0 ? border_w : border_h);
+            }
+          }
+        }
+      }
+      cache[hwnd] = {w, h, dpi, now, out};
+      return out;
+    }
+  }  // namespace
+
+  layout_t layout(const std::string &client_uuid) {
+    adopt_new_windows(client_uuid);
+    layout_t out;
+    RECT desk {};
+    std::vector<HWND> adopted;
+    HMONITOR desk_monitor = nullptr, atlas_monitor = nullptr;
+    std::shared_ptr<desk_atlas::atlas_t> atlas;
+    options_t options;
+    {
+      std::lock_guard lock(g_mutex);
+      auto it = g_desks.find(client_uuid);
+      if (it == g_desks.end() || !it->second.open || !(desk_monitor = find_monitor(it->second.device, &desk))) return out;
+      for (const auto &[hwnd, origin] : it->second.adopted) adopted.push_back(hwnd);
+      atlas = it->second.atlas_window;
+      options = it->second.options;
+      atlas_monitor = find_monitor(it->second.atlas.device);
+    }
+    // Explorer shows it again now and then (display changes, restarts)
+    static std::chrono::steady_clock::time_point last_tray_check {};
+    if (std::chrono::steady_clock::now() - last_tray_check > std::chrono::seconds(2)) {
+      last_tray_check = std::chrono::steady_clock::now();
+      hide_desk_taskbar(desk_monitor);
+      hide_desk_taskbar(atlas_monitor);
+    }
+    out.valid = true;
+    struct raw_t {
+      HWND hwnd;
+      RECT rect;
+      LONG style, ex_style;
+      HWND owner;
+      DWORD pid, tid;
+    };
+    struct ctx_t {
+      RECT desk;
+      std::vector<raw_t> top_first;
+    } ctx {desk, {}};
+    const DWORD self = GetCurrentProcessId();
+    constexpr auto visit = [](HWND hwnd, LPARAM lp) -> BOOL {
+      auto *c = reinterpret_cast<ctx_t *>(lp);
+      if (!IsWindowVisible(hwnd) || IsIconic(hwnd) || app_window_layout::is_cloaked(hwnd)) return TRUE;
+      RECT r {};
+      if (!app_window_layout::frame_rect(hwnd, r)) return TRUE;
+      RECT x {};
+      if (!IntersectRect(&x, &r, &c->desk)) return TRUE;
+      wchar_t cls[64] {};
+      GetClassNameW(hwnd, cls, 64);
+      static const wchar_t *shell[] = {L"Progman", L"WorkerW", L"Shell_TrayWnd", L"Shell_SecondaryTrayWnd", L"Windows.UI.Core.CoreWindow", L"IME"};
+      for (auto *s : shell) {
+        if (wcscmp(cls, s) == 0) return TRUE;
+      }
+      // The shell's XAML hosts are its full-screen overlays (Alt-Tab, task
+      // view) but also real dialogs ("Open with"): only the overlays are left out
+      if (wcscmp(cls, L"XamlExplorerHostIslandWindow") == 0 && (r.right - r.left) * 10 >= (c->desk.right - c->desk.left) * 9 &&
+          (r.bottom - r.top) * 10 >= (c->desk.bottom - c->desk.top) * 9) {
+        return TRUE;
+      }
+      raw_t raw {hwnd, r, GetWindowLongW(hwnd, GWL_STYLE), GetWindowLongW(hwnd, GWL_EXSTYLE), GetWindow(hwnd, GW_OWNER), 0, 0};
+      raw.tid = GetWindowThreadProcessId(hwnd, &raw.pid);
+      c->top_first.push_back(raw);
+      return TRUE;
+    };
+    EnumWindows(visit, reinterpret_cast<LPARAM>(&ctx));
+    // System UI in z-order bands of its own (the "Open with" dialog, ...) is
+    // not enumerated by EnumWindows; FindWindowEx walks those too. They stack
+    // above the desktop's windows.
+    {
+      std::set<HWND> seen;
+      for (const auto &r : ctx.top_first) seen.insert(r.hwnd);
+      ctx_t extra {ctx.desk, {}};
+      for (HWND h = FindWindowExW(nullptr, nullptr, nullptr, nullptr); h; h = FindWindowExW(nullptr, h, nullptr, nullptr)) {
+        if (!seen.contains(h)) visit(h, reinterpret_cast<LPARAM>(&extra));
+      }
+      // Only windows outside the desktop band: the rest EnumWindows saw (or
+      // left out on purpose)
+      std::erase_if(extra.top_first, [](const raw_t &r) {
+        using get_band_t = BOOL(WINAPI *)(HWND, DWORD *);
+        static const auto get_band = reinterpret_cast<get_band_t>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetWindowBand"));
+        DWORD band = 1;
+        return !get_band || !get_band(r.hwnd, &band) || band <= 1;
+      });
+      ctx.top_first.insert(ctx.top_first.begin(), extra.top_first.begin(), extra.top_first.end());
+    }
+    const HWND foreground = GetForegroundWindow();
+    const bool rounded = app_window_layout::rounded_corners_os();
+    // Bottom-most first
+    std::vector<raw_t> windows(ctx.top_first.rbegin(), ctx.top_first.rend());
+    for (std::size_t i = 0; i < windows.size(); ++i) {
+      const auto &w = windows[i];
+      if (w.pid == self) continue;
+      // A window of its own: one with a caption, or an unowned one Alt-Tab
+      // would list (no tool window, activatable) of window size: dialogs and
+      // apps drawing their own frame ("Open with", frameless apps). Menus,
+      // tooltips and drop-downs are tool windows, owned, or no-activate.
+      const bool has_caption = (w.style & WS_CAPTION) == WS_CAPTION;
+      const auto frameless_window = [](const raw_t &r) {
+        return !r.owner && !(r.ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) && (r.rect.right - r.rect.left) >= 200 && (r.rect.bottom - r.rect.top) >= 150;
+      };
+      const bool captioned = has_caption || frameless_window(w);
+      HWND owner = w.owner;
+      if (!captioned && !owner) {
+        // Unowned popup (Win32 menu, combo list): belongs to a top-level
+        // window of its thread on the desk. Threads with several (browsers):
+        // the thread's active window (menus open from it), else the top-most
+        // one the popup starts in, else the top-most one.
+        GUITHREADINFO gui {};
+        gui.cbSize = sizeof(gui);
+        const HWND active = GetGUIThreadInfo(w.tid, &gui) ? GetAncestor(gui.hwndActive, GA_ROOT) : nullptr;
+        HWND inside = nullptr, top = nullptr;
+        for (const auto &o : windows) {
+          if (o.hwnd == w.hwnd || o.tid != w.tid || o.owner || !((o.style & WS_CAPTION) == WS_CAPTION || frameless_window(o))) continue;
+          if (o.hwnd == active) {
+            owner = o.hwnd;
+            break;
+          }
+          top = o.hwnd;  // bottom-most first: the last is the top-most
+          if (w.rect.left >= o.rect.left && w.rect.left < o.rect.right && w.rect.top >= o.rect.top && w.rect.top < o.rect.bottom) inside = o.hwnd;
+        }
+        if (!owner) owner = inside ? inside : top;
+      }
+      // (A popup inside its owner is listed too: a window's thumbnail never
+      // holds its popups, each is a window of its own.)
+      window_t win;
+      win.handle = reinterpret_cast<std::uintptr_t>(w.hwnd);
+      win.owner = reinterpret_cast<std::uintptr_t>(owner);
+      win.pid = w.pid;
+      win.process = process_name(w.pid);
+      win.title = window_title(w.hwnd);
+      win.kind = !captioned ? "popup" : (w.owner ? "dialog" : "window");
+      // Desk-relative, unclipped: a window the client pushed partly off its
+      // screen hangs off the desk by the same amount.
+      win.rect[0] = static_cast<int>(w.rect.left - desk.left);
+      win.rect[1] = static_cast<int>(w.rect.top - desk.top);
+      win.rect[2] = static_cast<int>(w.rect.right - w.rect.left);
+      win.rect[3] = static_cast<int>(w.rect.bottom - w.rect.top);
+      win.state = IsZoomed(w.hwnd) ? "maximized" : "normal";
+      win.focused = w.hwnd == foreground;
+      if (has_caption) {
+        RECT cr {};
+        POINT co {0, 0};
+        if (GetClientRect(w.hwnd, &cr) && ClientToScreen(w.hwnd, &co)) win.caption = static_cast<int>(std::max(0L, co.y - w.rect.top));
+      }
+      if (rounded && !IsZoomed(w.hwnd)) {
+        const UINT dpi = GetDpiForWindow(w.hwnd);
+        win.radius = static_cast<int>(8 * (dpi ? dpi : 96) / 96);
+      }
+      if (captioned && !IsZoomed(w.hwnd) && !IsHungAppWindow(w.hwnd)) {
+        const auto sizing = sizing_of(w.hwnd, w.rect);
+        win.min_size[0] = sizing.min[0];
+        win.min_size[1] = sizing.min[1];
+        win.resize_step[0] = sizing.step[0];
+        win.resize_step[1] = sizing.step[1];
+        win.resize_base[0] = sizing.base[0];
+        win.resize_base[1] = sizing.base[1];
+        win.max_size[0] = sizing.max[0];
+        win.max_size[1] = sizing.max[1];
+        win.resizable = sizing.resizable;
+      }
+      win.z = static_cast<int>(out.windows.size());
+      win.icon_key = host_windows::icon_key(win.handle);
+      out.windows.push_back(std::move(win));
+    }
+    // Adopted windows that are minimized are off the desk but still the
+    // client's: list them so their client windows live on (minimized too).
+    for (HWND hwnd : adopted) {
+      if (!IsWindow(hwnd) || !IsIconic(hwnd)) continue;
+      WINDOWPLACEMENT placement {};
+      placement.length = sizeof(placement);
+      if (!GetWindowPlacement(hwnd, &placement)) continue;
+      const auto &r = placement.rcNormalPosition;
+      window_t win;
+      win.handle = reinterpret_cast<std::uintptr_t>(hwnd);
+      DWORD pid = 0;
+      GetWindowThreadProcessId(hwnd, &pid);
+      win.pid = pid;
+      win.process = process_name(pid);
+      win.title = window_title(hwnd);
+      win.kind = "window";
+      win.rect[0] = static_cast<int>(r.left - desk.left);
+      win.rect[1] = static_cast<int>(r.top - desk.top);
+      win.rect[2] = static_cast<int>(r.right - r.left);
+      win.rect[3] = static_cast<int>(r.bottom - r.top);
+      win.state = "minimized";
+      win.radius = rounded ? 8 : 0;
+      win.z = -1;
+      win.icon_key = host_windows::icon_key(win.handle);
+      out.windows.insert(out.windows.begin(), std::move(win));
+    }
+    // A popup that has just appeared, or changed size (menus reuse their
+    // window), may not have drawn itself at that size yet: DWM then shows a
+    // placeholder (a gradient with the app's icon) in its thumbnail. A new
+    // one comes over once it has had a few frames to draw; a resized one
+    // keeps its last place and picture meanwhile.
+    std::set<std::uintptr_t> unready;
+    {
+      struct seen_t {
+        std::chrono::steady_clock::time_point since;  ///< appeared or changed size
+        std::chrono::steady_clock::time_point first;  ///< appeared
+        int w = 0, h = 0;
+        std::array<int, 4> shown {};  ///< the rect the client last got
+        bool was_shown = false;
+      };
+      static std::map<std::uintptr_t, seen_t> seen;
+      const auto now = std::chrono::steady_clock::now();
+      constexpr auto ready_time = std::chrono::milliseconds(50);
+      std::set<std::uintptr_t> present;
+      for (const auto &w : out.windows) present.insert(w.handle);
+      std::erase_if(seen, [&](const auto &e) {
+        return !present.contains(e.first);
+      });
+      std::erase_if(out.windows, [&](window_t &w) {
+        if (w.kind != "popup") return false;
+        auto [it, fresh] = seen.try_emplace(w.handle, seen_t {now, now, w.rect[2], w.rect[3]});
+        auto &e = it->second;
+        if (!fresh && (e.w != w.rect[2] || e.h != w.rect[3])) {
+          e.since = now;
+          e.w = w.rect[2];
+          e.h = w.rect[3];
+        }
+        if (now - e.since < ready_time) {
+          if (!e.was_shown) return true;
+          unready.insert(w.handle);
+          std::copy(e.shown.begin(), e.shown.end(), w.rect);
+          return false;
+        }
+        std::copy(w.rect, w.rect + 4, e.shown.begin());
+        e.was_shown = true;
+        return false;
+      });
+      for (auto &w : out.windows) {
+        const auto it = seen.find(w.handle);
+        w.settled = it == seen.end() || now - it->second.first >= std::chrono::milliseconds(300);
+      }
+    }
+    for (std::size_t i = 0; i < out.windows.size(); ++i) out.windows[i].z = static_cast<int>(i);
+    // Painted at their size? (see paint_sync)
+    {
+      std::set<HWND> present;
+      for (auto &w : out.windows) {
+        if (w.kind == "popup" || w.state == "minimized") continue;
+        const auto hwnd = reinterpret_cast<HWND>(w.handle);
+        present.insert(hwnd);
+        w.stable = paint_sync::stable(hwnd, w.rect[2], w.rect[3]);
+      }
+      paint_sync::keep_only(present);
+    }
+    // Their pictures: a slot each in the atlas (the copy on white for popups,
+    // whose transparency matters: menus with their shadows, tooltips)
+    if (atlas) {
+      // Priority: how much of each window shows (stacking and positions
+      // mirror the client's, so this is what the client shows). When the
+      // atlas is full, windows hidden behind others go smaller first.
+      auto visible_area = [&](std::size_t i) {
+        const auto &w = out.windows[i];
+        constexpr int grid = 24;
+        int shown = 0;
+        for (int gy = 0; gy < grid; ++gy) {
+          for (int gx = 0; gx < grid; ++gx) {
+            const int px = w.rect[0] + (2 * gx + 1) * w.rect[2] / (2 * grid);
+            const int py = w.rect[1] + (2 * gy + 1) * w.rect[3] / (2 * grid);
+            bool covered = false;
+            for (std::size_t j = i + 1; j < out.windows.size() && !covered; ++j) {
+              const auto &o = out.windows[j];
+              covered = o.state != "minimized" && o.kind != "popup" && px >= o.rect[0] && py >= o.rect[1] && px < o.rect[0] + o.rect[2] && py < o.rect[1] + o.rect[3];
+            }
+            shown += covered ? 0 : 1;
+          }
+        }
+        return static_cast<int>(static_cast<long long>(w.rect[2]) * w.rect[3] * shown / (grid * grid));
+      };
+      // The parts of a window the user sees, in its frame: 32 px cells, each
+      // shown unless one window above covers it whole or it is off the desk,
+      // grown by a cell (a window moved or uncovered on the client has
+      // real pixels there before the host catches up), as 256 px tiles. The
+      // atlas keeps these 1:1 when the window goes smaller.
+      auto visible_parts = [&](std::size_t i) {
+        const auto &w = out.windows[i];
+        constexpr int cell = 32, grow = 1;
+        const int cols = (w.rect[2] + cell - 1) / cell, rows = (w.rect[3] + cell - 1) / cell;
+        const int dw = desk.right - desk.left, dh = desk.bottom - desk.top;
+        std::vector<char> shown(static_cast<std::size_t>(cols) * rows, 0), grown(shown.size(), 0);
+        for (int r = 0; r < rows; ++r) {
+          for (int c = 0; c < cols; ++c) {
+            const int x0 = w.rect[0] + c * cell, y0 = w.rect[1] + r * cell;
+            const int x1 = std::min(x0 + cell, w.rect[0] + w.rect[2]), y1 = std::min(y0 + cell, w.rect[1] + w.rect[3]);
+            if (x1 <= 0 || y1 <= 0 || x0 >= dw || y0 >= dh) continue;
+            bool covered = false;
+            for (std::size_t j = i + 1; j < out.windows.size() && !covered; ++j) {
+              const auto &o = out.windows[j];
+              covered = o.state != "minimized" && o.kind != "popup" && x0 >= o.rect[0] && y0 >= o.rect[1] && x1 <= o.rect[0] + o.rect[2] && y1 <= o.rect[1] + o.rect[3];
+            }
+            shown[r * cols + c] = !covered;
+          }
+        }
+        for (int r = 0; r < rows; ++r) {
+          for (int c = 0; c < cols; ++c) {
+            if (!shown[r * cols + c]) continue;
+            for (int gr = std::max(0, r - grow); gr <= std::min(rows - 1, r + grow); ++gr) {
+              for (int gc = std::max(0, c - grow); gc <= std::min(cols - 1, c + grow); ++gc) grown[gr * cols + gc] = 1;
+            }
+          }
+        }
+        // As fixed tiles of the frame: what a move uncovers or covers changes
+        // only the tiles at the edge, the others keep their place in the atlas
+        constexpr int tile = 256 / cell;
+        std::vector<RECT> parts;
+        for (int tr = 0; tr * tile < rows; ++tr) {
+          for (int tc = 0; tc * tile < cols; ++tc) {
+            bool any = false;
+            for (int r = tr * tile; r < std::min(rows, (tr + 1) * tile) && !any; ++r) {
+              for (int c = tc * tile; c < std::min(cols, (tc + 1) * tile) && !any; ++c) any = grown[r * cols + c];
+            }
+            if (any) parts.push_back({tc * tile * cell, tr * tile * cell, std::min((tc + 1) * tile * cell, w.rect[2]), std::min((tr + 1) * tile * cell, w.rect[3])});
+          }
+        }
+        return parts;
+      };
+      std::vector<desk_atlas::source_t> sources;
+      for (std::size_t i = 0; i < out.windows.size(); ++i) {
+        const auto &w = out.windows[i];
+        if (w.state == "minimized") continue;
+        // The window the user works in (and its menus) stays sharp whatever
+        // covers it
+        const bool focused = w.focused || (w.kind == "popup" && w.owner && std::any_of(out.windows.begin(), out.windows.end(), [&](const window_t &o) {
+                                             return o.handle == w.owner && o.focused;
+                                           }));
+        // Popups (menus, tooltips) are what the user is reading: never the ones
+        // drawn smaller
+        const long long area = std::min<long long>(INT_MAX / 4, visible_area(i));
+        const int priority = static_cast<int>(area + (w.kind == "popup" ? INT_MAX / 2 : focused ? INT_MAX / 4 : 0));
+        if (unready.contains(w.handle)) continue;  // keeps its last picture on the client
+        auto parts = w.kind == "popup" ? std::vector<RECT> {} : visible_parts(i);
+        // Covered whole by others: not in the stream at all (the client keeps
+        // its last picture until it shows again)
+        if (options.skip_covered && !focused && w.kind != "popup" && parts.empty()) continue;
+        // In the background: a lower frame rate (the focused window, its
+        // dialogs and popups at full)
+        const bool owned_by_focused = std::any_of(out.windows.begin(), out.windows.end(), [&](const window_t &o) {
+          return o.focused && (o.handle == w.owner || w.handle == o.owner);
+        });
+        const bool background = !(focused || owned_by_focused || w.kind == "popup");
+        const int divisor = background ? options.unfocused_divisor : 1;
+        sources.push_back({reinterpret_cast<HWND>(static_cast<std::uintptr_t>(w.handle)), w.rect[2], w.rect[3], w.kind == "popup", priority, std::move(parts), w.settled, divisor, background});
+      }
+      const auto sync_start = std::chrono::steady_clock::now();
+      unsigned seq = 0;
+      const auto slots = atlas->sync(sources, &out.moved, &seq);
+      out.hard_repacks = atlas->hard_repacks();
+      out.seq = seq;
+      out.ghosts = static_cast<int>(atlas->ghosts());
+      out.atlas_us = static_cast<int>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - sync_start).count());
+      for (const auto &slot : slots) {
+        for (auto &w : out.windows) {
+          if (w.handle != reinterpret_cast<std::uintptr_t>(slot.hwnd)) continue;
+          w.slot[0] = slot.x;
+          w.slot[1] = slot.y;
+          w.slot[2] = slot.w;
+          w.slot[3] = slot.h;
+          w.alpha_slot[0] = slot.ax;
+          w.alpha_slot[1] = slot.ay;
+          w.alpha_scale = slot.white_scale;
+          w.alpha_strips = slot.strips;
+          w.scale = slot.scale;
+          w.pieces.clear();
+          for (const auto &p : slot.pieces) w.pieces.push_back({p.x, p.y, p.w, p.h, p.ax, p.ay});
+        }
+      }
+    }
+    // A UAC prompt: the secure desktop is what the displays show now, our
+    // atlas included. The prompt is brought onto the atlas display and shown
+    // as a dialog in the middle of the client's screen; the pointer goes to
+    // it there; the other windows keep their last picture meanwhile.
+    {
+      static std::chrono::steady_clock::time_point checked {};
+      static std::optional<secure_prompt_t> prompt;
+      MONITORINFO ami {};
+      ami.cbSize = sizeof(ami);
+      if (atlas_monitor && GetMonitorInfoW(atlas_monitor, &ami)) {
+        if (std::chrono::steady_clock::now() - checked > std::chrono::milliseconds(100)) {
+          checked = std::chrono::steady_clock::now();
+          prompt = secure_prompt({ami.rcMonitor.left + 16, ami.rcMonitor.top + 16});
+        }
+      } else {
+        prompt.reset();
+      }
+      if (prompt) {
+        const int w = prompt->rect.right - prompt->rect.left, h = prompt->rect.bottom - prompt->rect.top;
+        const int dw = desk.right - desk.left, dh = desk.bottom - desk.top;
+        for (auto &win : out.windows) {
+          win.slot[2] = win.slot[3] = 0;
+          win.alpha_slot[0] = win.alpha_slot[1] = -1;
+          win.pieces.clear();
+          win.focused = false;
+        }
+        window_t d;
+        d.handle = reinterpret_cast<std::uintptr_t>(prompt->hwnd);
+        d.kind = "dialog";
+        d.title = "User Account Control";
+        d.process = "consent.exe";
+        d.rect[0] = std::max(0, (dw - w) / 2);
+        d.rect[1] = std::max(0, (dh - h) / 2);
+        d.rect[2] = w;
+        d.rect[3] = h;
+        d.state = "normal";
+        d.focused = true;
+        d.radius = 8;
+        d.slot[0] = prompt->rect.left - ami.rcMonitor.left;
+        d.slot[1] = prompt->rect.top - ami.rcMonitor.top;
+        d.slot[2] = w;
+        d.slot[3] = h;
+        d.z = static_cast<int>(out.windows.size());
+        out.windows.push_back(std::move(d));
+        g_shift_x = prompt->rect.left - (desk.left + std::max(0, (dw - w) / 2));
+        g_shift_y = prompt->rect.top - (desk.top + std::max(0, (dh - h) / 2));
+      } else {
+        g_shift_x = 0;
+        g_shift_y = 0;
+      }
+    }
+    // FNV-1a over what the client reacts to
+    std::uint64_t h = 1469598103934665603ull;
+    auto mix = [&h](std::uint64_t v) {
+      for (int i = 0; i < 8; ++i) {
+        h ^= (v >> (i * 8)) & 0xff;
+        h *= 1099511628211ull;
+      }
+    };
+    for (const auto &w : out.windows) {
+      mix(w.handle);
+      mix(w.owner);
+      for (int v : w.rect) mix(static_cast<std::uint32_t>(v));
+      for (int v : w.slot) mix(static_cast<std::uint32_t>(v));
+      for (int v : w.alpha_slot) mix(static_cast<std::uint32_t>(v));
+      for (int v : w.alpha_strips) mix(static_cast<std::uint32_t>(v));
+      for (const auto &p : w.pieces) {
+        for (int v : p) mix(static_cast<std::uint32_t>(v));
+      }
+      mix(w.focused);
+      mix(w.stable);
+      mix(w.caption);
+      mix(w.radius);
+      mix(w.z);
+      for (unsigned char c : w.state) mix(c);
+      for (unsigned char c : w.title) mix(c);
+      for (unsigned char c : w.kind) mix(c);
+      for (int v : w.min_size) mix(static_cast<std::uint32_t>(v));
+      for (int v : w.max_size) mix(static_cast<std::uint32_t>(v));
+      for (int v : w.resize_step) mix(static_cast<std::uint32_t>(v));
+      for (int v : w.resize_base) mix(static_cast<std::uint32_t>(v));
+      mix(w.resizable);
+    }
+    {
+      // What comes and goes on the client: every window shown or dropped,
+      // and which one has the focus
+      static std::mutex trace_mutex;
+      static std::map<std::string, std::pair<std::map<std::uint64_t, std::string>, std::uint64_t>> shown;
+      std::lock_guard lock(trace_mutex);
+      auto &[before, focused_before] = shown[client_uuid];
+      std::map<std::uint64_t, std::string> now;
+      std::uint64_t focused = 0;
+      for (const auto &w : out.windows) {
+        now[w.handle] = w.kind + (w.state == "minimized" ? ", minimized" : "") + " [" + w.title + "] of " + w.process;
+        if (w.focused) focused = w.handle;
+      }
+      for (const auto &[handle, what] : now) {
+        if (!before.contains(handle)) BOOST_LOG(info) << "Desk trace: layout + 0x" << std::hex << handle << std::dec << ' ' << what;
+      }
+      for (const auto &[handle, what] : before) {
+        if (!now.contains(handle)) BOOST_LOG(info) << "Desk trace: layout - 0x" << std::hex << handle << std::dec << ' ' << what;
+      }
+      if (focused != focused_before) BOOST_LOG(info) << "Desk trace: layout focus 0x" << std::hex << focused << std::dec << (focused ? "" : " (none of the desk's)");
+      before = std::move(now);
+      focused_before = focused;
+    }
+    out.cursor = cursor_shape();
+    // A window holding the pointer: the confinement inside the foreground
+    // window, which is one of the desk's
+    if (!IsRectEmpty(&g_clip)) {
+      const HWND fg = GetForegroundWindow();
+      RECT r {};
+      if (fg && GetWindowRect(fg, &r) && g_clip.left >= r.left - 2 && g_clip.top >= r.top - 2 && g_clip.right <= r.right + 2 && g_clip.bottom <= r.bottom + 2) {
+        for (const auto &w : out.windows) {
+          if (w.handle == reinterpret_cast<std::uintptr_t>(fg)) out.pointer_lock = w.handle;
+        }
+      }
+    }
+    mix(out.pointer_lock);
+    mix(out.seq);
+    for (unsigned char c : out.cursor) mix(c);
+    out.etag = h ? h : 1;
+    {
+      std::lock_guard lock(g_mutex);
+      if (auto it = g_desks.find(client_uuid); it != g_desks.end()) it->second.empty = out.windows.empty();
+    }
+    return out;
+  }
+
+  bool standing_by(const std::string &client_uuid) {
+    std::lock_guard lock(g_mutex);
+    auto it = g_desks.find(client_uuid);
+    return it != g_desks.end() && it->second.open && it->second.empty;
+  }
+
+}  // namespace app_desk
+
+#else
+
+namespace app_desk {
+  desk_t open(const std::string &, int, int, int, int, const options_t &) {
+    return {};
+  }
+
+  std::optional<desk_t> get(const std::string &) {
+    return std::nullopt;
+  }
+
+  std::optional<options_t> options(const std::string &) {
+    return std::nullopt;
+  }
+
+  void close(const std::string &) {}
+
+  std::optional<std::pair<int, int>> input_origin(const std::string &) {
+    return std::nullopt;
+  }
+
+  std::pair<int, int> pointer_shift() {
+    return {0, 0};
+  }
+
+  bool park(const std::string &, std::uint64_t) {
+    return false;
+  }
+
+  bool order(const std::string &, const std::vector<std::uint64_t> &, bool) {
+    return false;
+  }
+
+  void session_started(const std::string &) {}
+
+  void session_ended(const std::string &) {}
+
+  bool any_open() {
+    return false;
+  }
+
+  bool adopt(const std::string &, std::uint64_t, int, int, int, int) {
+    return false;
+  }
+
+  bool resize(const std::string &, std::uint64_t, int, int) {
+    return false;
+  }
+
+  std::string describe_window(std::uint64_t handle) {
+    return std::to_string(handle);
+  }
+
+  std::uint64_t foreground_window() {
+    return 0;
+  }
+
+  void rescue_stranded_windows() {
+  }
+
+  bool release(const std::string &, std::uint64_t) {
+    return false;
+  }
+
+  layout_t layout(const std::string &) {
+    return {};
+  }
+
+  bool standing_by(const std::string &) {
+    return false;
+  }
+}  // namespace app_desk
+
+#endif

@@ -1,0 +1,4220 @@
+/**
+ * @file src/process.cpp
+ * @brief Definitions for the startup and shutdown of the apps started by a streaming Session.
+ */
+#define BOOST_BIND_GLOBAL_PLACEHOLDERS
+
+// standard includes
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cctype>
+#include <charconv>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <cwctype>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <optional>
+#include <set>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+// lib includes
+#include <boost/algorithm/string.hpp>
+#include <boost/crc.hpp>
+#include <boost/filesystem.hpp>
+#include <boost/program_options/parsers.hpp>
+#include <boost/property_tree/json_parser.hpp>
+#include <boost/property_tree/ptree.hpp>
+#include <nlohmann/json.hpp>
+#include <openssl/evp.h>
+#include <openssl/sha.h>
+
+// local includes
+#include "app_catalog_policy.h"
+#include "app_framegen_config.h"
+#include "audio.h"
+#include "config.h"
+#include "confighttp.h"
+#include "crypto.h"
+#include "deferred_action.h"
+#if defined(_WIN32) || defined(__linux__)
+  #include "display_helper_integration.h"
+  #include "remote_display_topology.h"
+#endif
+#include "globals.h"
+#include "logging.h"
+#include "nvhttp.h"
+#include "host_stream_control.h"
+#include "platform/common.h"
+#ifdef _WIN32
+  #include "config_playnite.h"
+  #include "platform/windows/dualsense_launch_policy.h"
+  #include "platform/windows/display.h"
+  #include "platform/windows/frame_limiter.h"
+  #include "platform/windows/ipc/misc_utils.h"
+  #include "platform/windows/lossless_scaling_paths.h"
+  #include "platform/windows/misc.h"
+  #include "platform/windows/playnite_integration.h"
+  #include "platform/windows/virtual_display_cleanup.h"
+  #include "tools/playnite_launcher/focus_utils.h"
+  #include "tools/playnite_launcher/lossless_scaling.h"
+  #include "tools/playnite_launcher/lossless_scaling_policy.h"
+
+  #include <Psapi.h>
+#elif defined(__linux__)
+  #include "platform/linux/gamescopegrab.h"
+  #include "platform/linux/frame_limiter.h"
+  #include "platform/linux/mangohud_policy.h"
+  #include "platform/linux/mangohud_state.h"
+  #include "platform/linux/misc.h"
+  #include "platform/linux/secure_open.h"
+  #include "platform/linux/smooth_motion_policy.h"
+  #include "platform/linux/wayland_hdr_compatibility.h"
+  #include "steam_integration.h"
+
+  #include <fcntl.h>
+  #include <linux/openat2.h>
+  #include <sys/stat.h>
+  #include <sys/syscall.h>
+  #include <unistd.h>
+#endif
+#include "process.h"
+#include "remote_monitor_profile_policy.h"
+#ifdef _WIN32
+  #include "platform/windows/virtual_display.h"
+#endif
+#include "rtsp.h"
+#include "state_storage.h"
+#include "stream.h"
+#include "system_tray.h"
+#include "utility.h"
+#include "uuid.h"
+#include "webrtc_stream.h"
+
+#ifdef _WIN32
+  // from_utf8() string conversion function
+  #include "platform/windows/utf_utils.h"
+
+  // _SH constants for _wfsopen()
+  #include <share.h>
+#endif
+
+namespace proc {
+  using namespace std::literals;
+  namespace pt = boost::property_tree;
+
+  std::optional<ctx_t> resolve_app_from_snapshot(const std::vector<ctx_t> &apps, const std::string &appid, const std::string &appuuid);
+
+  namespace {
+    constexpr const char *LOSSLESS_PROFILE_RECOMMENDED = "recommended";
+    constexpr const char *LOSSLESS_PROFILE_CUSTOM = "custom";
+    constexpr int LOSSLESS_DEFAULT_FLOW_SCALE = 50;
+    constexpr int LOSSLESS_DEFAULT_RESOLUTION_SCALE = 100;
+    constexpr bool LOSSLESS_DEFAULT_PERFORMANCE_MODE = true;
+    constexpr int LOSSLESS_MIN_FLOW_SCALE = 0;
+    constexpr int LOSSLESS_MAX_FLOW_SCALE = 100;
+    constexpr int LOSSLESS_MIN_RESOLUTION_SCALE = 10;
+    constexpr int LOSSLESS_MAX_RESOLUTION_SCALE = 100;
+    constexpr int LOSSLESS_SHARPNESS_MIN = 1;
+    constexpr int LOSSLESS_SHARPNESS_MAX = 10;
+
+    constexpr const char *ENV_LOSSLESS_PROFILE = "SUNSHINE_LOSSLESS_SCALING_ACTIVE_PROFILE";
+    constexpr const char *ENV_LOSSLESS_ENABLED = "SUNSHINE_LOSSLESS_SCALING_ENABLED";
+    constexpr const char *ENV_LOSSLESS_CAPTURE_API = "SUNSHINE_LOSSLESS_SCALING_CAPTURE_API";
+    constexpr const char *ENV_LOSSLESS_QUEUE_TARGET = "SUNSHINE_LOSSLESS_SCALING_QUEUE_TARGET";
+    constexpr const char *ENV_LOSSLESS_HDR = "SUNSHINE_LOSSLESS_SCALING_HDR";
+    constexpr const char *ENV_LOSSLESS_FLOW_SCALE = "SUNSHINE_LOSSLESS_SCALING_FLOW_SCALE";
+    constexpr const char *ENV_LOSSLESS_PERFORMANCE_MODE = "SUNSHINE_LOSSLESS_SCALING_PERFORMANCE_MODE";
+    constexpr const char *ENV_LOSSLESS_RESOLUTION = "SUNSHINE_LOSSLESS_SCALING_RESOLUTION_SCALE";
+    constexpr const char *ENV_LOSSLESS_FRAMEGEN_MODE = "SUNSHINE_LOSSLESS_SCALING_FRAMEGEN_MODE";
+    constexpr const char *ENV_LOSSLESS_LSFG3_MODE = "SUNSHINE_LOSSLESS_SCALING_LSFG3_MODE";
+    constexpr const char *ENV_LOSSLESS_SCALING_TYPE = "SUNSHINE_LOSSLESS_SCALING_SCALING_TYPE";
+    constexpr const char *ENV_LOSSLESS_SHARPNESS = "SUNSHINE_LOSSLESS_SCALING_SHARPNESS";
+    constexpr const char *ENV_LOSSLESS_LS1_SHARPNESS = "SUNSHINE_LOSSLESS_SCALING_LS1_SHARPNESS";
+    constexpr const char *ENV_LOSSLESS_ANIME4K_TYPE = "SUNSHINE_LOSSLESS_SCALING_ANIME4K_TYPE";
+    constexpr const char *ENV_LOSSLESS_ANIME4K_VRS = "SUNSHINE_LOSSLESS_SCALING_ANIME4K_VRS";
+    constexpr const char *ENV_LOSSLESS_LAUNCH_DELAY = "SUNSHINE_LOSSLESS_SCALING_LAUNCH_DELAY";
+    constexpr const char *ENV_LOSSLESS_LEGACY_AUTO_DETECT = "SUNSHINE_LOSSLESS_SCALING_LEGACY_AUTO_DETECT";
+    constexpr std::array<std::string_view, 6> RTX_HDR_LIVE_KEYS {
+      "rtx_hdr"sv,
+      "rtx_hdr_sdr_brightness"sv,
+      "rtx_hdr_contrast"sv,
+      "rtx_hdr_saturation"sv,
+      "rtx_hdr_middle_gray"sv,
+      "rtx_hdr_peak_brightness"sv,
+    };
+
+#ifdef _WIN32
+    std::optional<std::filesystem::path> lossless_to_path(const std::string &utf8) {
+      if (utf8.empty()) {
+        return std::nullopt;
+      }
+      try {
+        return std::filesystem::path(platf::dxgi::utf8_to_wide(utf8));
+      } catch (...) {
+      }
+      try {
+        std::u8string utf8_bytes;
+        utf8_bytes.reserve(utf8.size());
+        for (unsigned char ch : utf8) {
+          utf8_bytes.push_back(static_cast<char8_t>(ch));
+        }
+        return std::filesystem::path(utf8_bytes);
+      } catch (...) {
+        return std::nullopt;
+      }
+    }
+
+    std::string lossless_path_to_utf8(const std::filesystem::path &path) {
+      try {
+        return platf::dxgi::wide_to_utf8(path.wstring());
+      } catch (...) {
+        return std::string();
+      }
+    }
+
+    std::optional<std::filesystem::path> resolve_lossless_executable_path() {
+      auto configured_path = lossless_to_path(config::lossless_scaling.exe_path);
+      if (configured_path) {
+        auto resolved_configured = lossless_paths::resolve_lossless_candidate(*configured_path);
+        if (resolved_configured) {
+          return resolved_configured;
+        }
+
+        std::error_code ec;
+        auto ext = configured_path->extension().wstring();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](wchar_t ch) {
+          return std::towlower(ch);
+        });
+        if (ext == L".exe" && std::filesystem::is_regular_file(*configured_path, ec)) {
+          return configured_path->lexically_normal();
+        }
+
+        BOOST_LOG(warning) << "Lossless Scaling: configured executable path is invalid, not falling back to default: "
+                           << config::lossless_scaling.exe_path;
+        return std::nullopt;
+      }
+
+      auto default_path = lossless_paths::default_steam_lossless_path();
+      std::optional<std::filesystem::path> default_opt;
+      if (!default_path.empty()) {
+        default_opt = default_path;
+      }
+
+      auto candidates = lossless_paths::discover_lossless_candidates(configured_path, std::nullopt, default_opt);
+      if (!candidates.empty()) {
+        return candidates.front();
+      }
+      return std::nullopt;
+    }
+#endif
+
+    std::string normalize_frame_generation_provider(const std::string &value) {
+      std::string normalized;
+      normalized.reserve(value.size());
+      for (char ch : value) {
+        if (std::isalnum(static_cast<unsigned char>(ch))) {
+          normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        }
+      }
+      if (normalized == "nvidia" || normalized == "smoothmotion" || normalized == "nvidiasmoothmotion") {
+        return "nvidia-smooth-motion";
+      }
+      if (normalized == "game" || normalized == "gameprovided" || normalized == "gameprovider") {
+        return "game-provided";
+      }
+      if (normalized == "lossless" || normalized == "losslessscaling") {
+        return "lossless-scaling";
+      }
+      return "lossless-scaling";
+    }
+
+#ifdef __linux__
+    bool nvidia_present_layer_installed() {
+      static const bool installed = []() {
+        constexpr std::array<std::string_view, 3> manifest_directories {
+          "/etc/vulkan/implicit_layer.d",
+          "/usr/local/share/vulkan/implicit_layer.d",
+          "/usr/share/vulkan/implicit_layer.d",
+        };
+        for (const auto directory : manifest_directories) {
+          std::error_code ec;
+          for (const auto &entry : std::filesystem::directory_iterator(directory, ec)) {
+            if (ec) {
+              break;
+            }
+            if (!entry.is_regular_file(ec) || entry.path().extension() != ".json") {
+              continue;
+            }
+            std::ifstream manifest(entry.path());
+            std::string contents(
+              (std::istreambuf_iterator<char>(manifest)),
+              std::istreambuf_iterator<char>()
+            );
+            if (
+              contents.find("VK_LAYER_NV_present") != std::string::npos &&
+              contents.find("libnvidia-present") != std::string::npos
+            ) {
+              return true;
+            }
+          }
+        }
+        return false;
+      }();
+      return installed;
+    }
+#endif
+
+    struct lossless_profile_defaults_t {
+      bool performance_mode;
+      int flow_scale;
+      int resolution_scale;
+      std::string scaling_mode;
+      int sharpening;
+      std::string anime4k_size;
+      bool anime4k_vrs;
+    };
+
+    const lossless_profile_defaults_t LOSSLESS_DEFAULTS_RECOMMENDED {
+      true,
+      LOSSLESS_DEFAULT_FLOW_SCALE,
+      LOSSLESS_DEFAULT_RESOLUTION_SCALE,
+      "off",
+      5,
+      "S",
+      false,
+    };
+
+    const lossless_profile_defaults_t LOSSLESS_DEFAULTS_CUSTOM {
+      false,
+      LOSSLESS_DEFAULT_FLOW_SCALE,
+      LOSSLESS_DEFAULT_RESOLUTION_SCALE,
+      "off",
+      5,
+      "S",
+      false,
+    };
+
+    const std::array<std::string, 11> &lossless_scaling_modes() {
+      static const std::array<std::string, 11> modes {
+        "off",
+        "ls1",
+        "fsr",
+        "nis",
+        "sgsr",
+        "bcas",
+        "anime4k",
+        "xbr",
+        "sharp-bilinear",
+        "integer",
+        "nearest"
+      };
+      return modes;
+    }
+
+    std::optional<std::string> normalize_scaling_mode(const std::string &value) {
+      std::string lower = boost::algorithm::to_lower_copy(value);
+      const auto &modes = lossless_scaling_modes();
+      if (std::find(modes.begin(), modes.end(), lower) != modes.end()) {
+        return lower;
+      }
+      return std::nullopt;
+    }
+
+    bool is_valid_env_key(const std::string &name) {
+      if (name.empty()) {
+        return false;
+      }
+      return name.find('=') == std::string::npos;
+    }
+
+    bool scaling_mode_requires_sharpening(const std::string &mode) {
+      static const std::array<std::string, 4> sharpening_modes {"ls1", "fsr", "nis", "sgsr"};
+      return std::find(sharpening_modes.begin(), sharpening_modes.end(), mode) != sharpening_modes.end();
+    }
+
+    bool scaling_mode_is_anime(const std::string &mode) {
+      return mode == "anime4k";
+    }
+
+    std::optional<std::string> scaling_mode_to_lossless_value(const std::string &mode) {
+      if (mode == "off") {
+        return std::string("Off");
+      }
+      if (mode == "ls1") {
+        return std::string("LS1");
+      }
+      if (mode == "fsr") {
+        return std::string("FSR");
+      }
+      if (mode == "nis") {
+        return std::string("NIS");
+      }
+      if (mode == "sgsr") {
+        return std::string("SGSR");
+      }
+      if (mode == "bcas") {
+        return std::string("BicubicCAS");
+      }
+      if (mode == "anime4k") {
+        return std::string("Anime4k");
+      }
+      if (mode == "xbr") {
+        return std::string("XBR");
+      }
+      if (mode == "sharp-bilinear") {
+        return std::string("SharpBilinear");
+      }
+      if (mode == "integer") {
+        return std::string("Integer");
+      }
+      if (mode == "nearest") {
+        return std::string("Nearest");
+      }
+      return std::nullopt;
+    }
+
+    int clamp_sharpness(int value) {
+      return std::clamp(value, LOSSLESS_SHARPNESS_MIN, LOSSLESS_SHARPNESS_MAX);
+    }
+
+    struct lossless_runtime_values_t {
+      std::string profile;
+      std::optional<bool> performance_mode;
+      std::optional<int> flow_scale;
+      std::optional<double> resolution_scale_factor;
+      std::optional<std::string> capture_api;
+      std::optional<int> queue_target;
+      std::optional<bool> hdr_enabled;
+      std::optional<std::string> frame_generation;
+      std::optional<std::string> lsfg3_mode;
+      std::optional<std::string> scaling_type;
+      std::optional<int> sharpness;
+      std::optional<int> ls1_sharpness;
+      std::optional<std::string> anime4k_type;
+      std::optional<bool> anime4k_vrs;
+    };
+
+    std::optional<bool> pt_get_optional_bool(const pt::ptree &node, const std::string &key) {
+      auto child = node.get_child_optional(key);
+      if (!child) {
+        return std::nullopt;
+      }
+      try {
+        return child->get_value<bool>();
+      } catch (...) {
+      }
+      try {
+        auto text = child->get_value<std::string>();
+        if (text.empty()) {
+          return std::nullopt;
+        }
+        if (boost::iequals(text, "true") || text == "1") {
+          return true;
+        }
+        if (boost::iequals(text, "false") || text == "0") {
+          return false;
+        }
+      } catch (...) {
+      }
+      return std::nullopt;
+    }
+
+    std::optional<int> pt_get_optional_int(const pt::ptree &node, const std::string &key) {
+      auto child = node.get_child_optional(key);
+      if (!child) {
+        return std::nullopt;
+      }
+      try {
+        return child->get_value<int>();
+      } catch (...) {
+      }
+      try {
+        auto text = child->get_value<std::string>();
+        if (text.empty()) {
+          return std::nullopt;
+        }
+        return std::stoi(text);
+      } catch (...) {
+      }
+      return std::nullopt;
+    }
+
+    void populate_lossless_overrides(const pt::ptree &node, lossless_scaling_profile_overrides_t &target) {
+      if (auto perf = pt_get_optional_bool(node, "performance-mode")) {
+        target.performance_mode = *perf;
+      }
+      if (auto flow = pt_get_optional_int(node, "flow-scale")) {
+        target.flow_scale = *flow;
+      }
+      if (auto res = pt_get_optional_int(node, "resolution-scale")) {
+        target.resolution_scale = *res;
+      }
+      if (auto scaling = node.get_optional<std::string>("scaling-type")) {
+        if (auto normalized = normalize_scaling_mode(*scaling)) {
+          target.scaling_type = *normalized;
+        }
+      }
+      if (auto sharp = pt_get_optional_int(node, "sharpening")) {
+        target.sharpening = clamp_sharpness(*sharp);
+      }
+      if (auto anime = node.get_optional<std::string>("anime4k-size")) {
+        std::string value = boost::algorithm::to_upper_copy(*anime);
+        target.anime4k_size = std::move(value);
+      }
+      if (auto vrs = pt_get_optional_bool(node, "anime4k-vrs")) {
+        target.anime4k_vrs = *vrs;
+      }
+    }
+
+    lossless_runtime_values_t compute_lossless_runtime(const ctx_t &ctx, bool frame_gen_enabled) {
+      lossless_runtime_values_t result;
+      const lossless_profile_defaults_t &defaults = boost::iequals(ctx.lossless_scaling_profile, LOSSLESS_PROFILE_RECOMMENDED) ?
+                                                      LOSSLESS_DEFAULTS_RECOMMENDED :
+                                                      LOSSLESS_DEFAULTS_CUSTOM;
+
+      const lossless_scaling_profile_overrides_t &overrides = boost::iequals(ctx.lossless_scaling_profile, LOSSLESS_PROFILE_RECOMMENDED) ?
+                                                                ctx.lossless_scaling_recommended :
+                                                                ctx.lossless_scaling_custom;
+
+      if (boost::iequals(ctx.lossless_scaling_profile, LOSSLESS_PROFILE_RECOMMENDED)) {
+        result.profile = LOSSLESS_PROFILE_RECOMMENDED;
+        result.capture_api = "WGC";
+        result.queue_target = 0;
+        result.hdr_enabled = true;
+        if (frame_gen_enabled) {
+          result.frame_generation = "LSFG3";
+          result.lsfg3_mode = "ADAPTIVE";
+        }
+      } else {
+        result.profile = LOSSLESS_PROFILE_CUSTOM;
+        if (frame_gen_enabled) {
+          result.frame_generation = "LSFG3";
+        }
+      }
+
+      bool performance_mode = overrides.performance_mode.value_or(defaults.performance_mode);
+      result.performance_mode = performance_mode;
+
+      int flow_scale = overrides.flow_scale.value_or(defaults.flow_scale);
+      flow_scale = std::clamp(flow_scale, LOSSLESS_MIN_FLOW_SCALE, LOSSLESS_MAX_FLOW_SCALE);
+      result.flow_scale = flow_scale;
+
+      std::string scaling_mode = overrides.scaling_type.has_value() ? *overrides.scaling_type : defaults.scaling_mode;
+      auto normalized_mode = normalize_scaling_mode(scaling_mode);
+      if (!normalized_mode) {
+        normalized_mode = defaults.scaling_mode;
+      }
+
+      // Only apply resolution scaling if scaling type is not 'off'
+      if (*normalized_mode != "off") {
+        int resolution_scale = overrides.resolution_scale.value_or(defaults.resolution_scale);
+        resolution_scale = std::clamp(resolution_scale, LOSSLESS_MIN_RESOLUTION_SCALE, LOSSLESS_MAX_RESOLUTION_SCALE);
+        double factor = 100.0 / static_cast<double>(resolution_scale);
+        factor = std::clamp(factor, 1.0, 10.0);
+        factor = std::round(factor * 100.0) / 100.0;
+        result.resolution_scale_factor = factor;
+      } else {
+        // When scaling is off, use unity scale factor to disable custom scaling
+        result.resolution_scale_factor = 1.0;
+      }
+
+      if (auto mapped = scaling_mode_to_lossless_value(*normalized_mode)) {
+        result.scaling_type = *mapped;
+      }
+
+      if (scaling_mode_requires_sharpening(*normalized_mode)) {
+        int sharpness = overrides.sharpening.value_or(defaults.sharpening);
+        sharpness = clamp_sharpness(sharpness);
+        result.sharpness = sharpness;
+        if (*normalized_mode == "ls1") {
+          result.ls1_sharpness = sharpness;
+        }
+      }
+
+      if (scaling_mode_is_anime(*normalized_mode)) {
+        std::string anime_type = overrides.anime4k_size.has_value() ? *overrides.anime4k_size : defaults.anime4k_size;
+        boost::algorithm::to_upper(anime_type);
+        result.anime4k_type = anime_type;
+        bool vrs = overrides.anime4k_vrs.value_or(defaults.anime4k_vrs);
+        result.anime4k_vrs = vrs;
+      }
+
+      return result;
+    }
+
+#ifdef _WIN32
+    constexpr auto k_lossless_observation_duration = std::chrono::seconds(10);
+    constexpr auto k_lossless_poll_interval = std::chrono::milliseconds(250);
+
+    std::optional<DWORD> foreground_window_process_id() {
+      HWND hwnd = GetForegroundWindow();
+      if (!hwnd) {
+        return std::nullopt;
+      }
+
+      DWORD pid = 0;
+      if (!GetWindowThreadProcessId(hwnd, &pid) || pid == 0) {
+        return std::nullopt;
+      }
+
+      return pid;
+    }
+
+    std::vector<DWORD> process_group_pids(const bp::group &group) {
+      std::vector<DWORD> pids;
+      if (!group) {
+        return pids;
+      }
+
+      const auto job_handle = (HANDLE) group.native_handle();
+      DWORD required_length = sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST);
+      auto process_id_list = (PJOBOBJECT_BASIC_PROCESS_ID_LIST) calloc(1, required_length);
+      auto fg = util::fail_guard([&process_id_list]() {
+        free(process_id_list);
+      });
+
+      while (!QueryInformationJobObject(job_handle, JobObjectBasicProcessIdList, process_id_list, required_length, &required_length) &&
+             GetLastError() == ERROR_MORE_DATA) {
+        free(process_id_list);
+        process_id_list = (PJOBOBJECT_BASIC_PROCESS_ID_LIST) calloc(1, required_length);
+        if (!process_id_list) {
+          return pids;
+        }
+      }
+
+      if (!process_id_list) {
+        return pids;
+      }
+
+      pids.reserve(process_id_list->NumberOfProcessIdsInList);
+      for (DWORD i = 0; i < process_id_list->NumberOfProcessIdsInList; ++i) {
+        pids.push_back(static_cast<DWORD>(process_id_list->ProcessIdList[i]));
+      }
+
+      return pids;
+    }
+
+    bool process_group_contains_pid(const bp::group &group, DWORD pid) {
+      if (!group || pid == 0) {
+        return false;
+      }
+
+      auto pids = process_group_pids(group);
+      return std::find(pids.begin(), pids.end(), pid) != pids.end();
+    }
+
+    struct lossless_process_candidate {
+      DWORD pid = 0;
+      ULONGLONG start_cpu = 0;
+      ULONGLONG last_cpu = 0;
+      SIZE_T peak_working_set = 0;
+      std::wstring path;
+      std::chrono::steady_clock::time_point first_seen;
+      std::chrono::steady_clock::time_point last_seen;
+    };
+
+    struct lossless_selection {
+      DWORD pid = 0;
+      std::wstring path_wide;
+      std::string path_utf8;
+      std::string directory_utf8;
+    };
+
+    std::vector<DWORD> enumerate_process_ids_snapshot() {
+      DWORD needed = 0;
+      std::vector<DWORD> pids(1024);
+      while (true) {
+        if (!EnumProcesses(pids.data(), static_cast<DWORD>(pids.size() * sizeof(DWORD)), &needed)) {
+          return {};
+        }
+        if (needed < pids.size() * sizeof(DWORD)) {
+          pids.resize(needed / sizeof(DWORD));
+          break;
+        }
+        pids.resize(pids.size() * 2);
+      }
+      return pids;
+    }
+
+    std::unordered_set<DWORD> capture_process_baseline_for_lossless() {
+      std::unordered_set<DWORD> result;
+      auto snapshot = enumerate_process_ids_snapshot();
+      result.reserve(snapshot.size());
+      for (auto pid : snapshot) {
+        if (pid != 0) {
+          result.insert(pid);
+        }
+      }
+      return result;
+    }
+
+    bool sample_process_usage(DWORD pid, ULONGLONG &cpu_time, SIZE_T &working_set) {
+      HANDLE handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+      if (!handle) {
+        handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+      }
+      if (!handle) {
+        return false;
+      }
+      FILETIME creation {}, exit_time {}, kernel {}, user {};
+      BOOL got_times = GetProcessTimes(handle, &creation, &exit_time, &kernel, &user);
+      PROCESS_MEMORY_COUNTERS_EX pmc {};
+      BOOL got_mem = GetProcessMemoryInfo(handle, reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&pmc), sizeof(pmc));
+      CloseHandle(handle);
+      if (!got_times) {
+        return false;
+      }
+      ULARGE_INTEGER kernel_int {};
+      kernel_int.HighPart = kernel.dwHighDateTime;
+      kernel_int.LowPart = kernel.dwLowDateTime;
+      ULARGE_INTEGER user_int {};
+      user_int.HighPart = user.dwHighDateTime;
+      user_int.LowPart = user.dwLowDateTime;
+      cpu_time = kernel_int.QuadPart + user_int.QuadPart;
+      working_set = got_mem ? pmc.WorkingSetSize : 0;
+      return true;
+    }
+
+    std::optional<std::wstring> query_process_image_path_optional(DWORD pid) {
+      std::wstring path;
+      if (playnite_launcher::focus::get_process_image_path(pid, path)) {
+        return path;
+      }
+      return std::nullopt;
+    }
+
+    std::wstring normalize_lowercase_path(const std::wstring &path) {
+      std::wstring normalized = path;
+      for (auto &ch : normalized) {
+        if (ch == L'/') {
+          ch = L'\\';
+        }
+        ch = static_cast<wchar_t>(std::towlower(ch));
+      }
+      return normalized;
+    }
+
+    bool path_matches_preferred(const std::wstring &path, const std::wstring &preferred_normalized) {
+      if (preferred_normalized.empty()) {
+        return false;
+      }
+      auto normalized = normalize_lowercase_path(path);
+      if (normalized.size() < preferred_normalized.size()) {
+        return false;
+      }
+      if (normalized.compare(0, preferred_normalized.size(), preferred_normalized) != 0) {
+        return false;
+      }
+      if (normalized.size() == preferred_normalized.size()) {
+        return true;
+      }
+      return normalized[preferred_normalized.size()] == L'\\';
+    }
+
+    std::optional<lossless_selection> detect_lossless_candidate(const std::unordered_set<DWORD> &baseline, DWORD root_pid, const std::wstring &preferred_normalized, std::atomic_bool &stop_flag) {
+      std::unordered_map<DWORD, lossless_process_candidate> candidates;
+      auto deadline = std::chrono::steady_clock::now() + k_lossless_observation_duration;
+
+      SYSTEM_INFO sys_info {};
+      GetSystemInfo(&sys_info);
+      double cpu_count = sys_info.dwNumberOfProcessors > 0 ? static_cast<double>(sys_info.dwNumberOfProcessors) : 1.0;
+
+      while (std::chrono::steady_clock::now() < deadline) {
+        if (stop_flag.load(std::memory_order_acquire)) {
+          return std::nullopt;
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        auto snapshot = enumerate_process_ids_snapshot();
+        for (auto pid : snapshot) {
+          if (pid == 0 || baseline.find(pid) != baseline.end()) {
+            continue;
+          }
+          auto &entry = candidates[pid];
+          if (entry.pid == 0) {
+            entry.pid = pid;
+            entry.first_seen = now;
+            entry.last_seen = now;
+          }
+          ULONGLONG cpu_time = 0;
+          SIZE_T working_set = 0;
+          if (!sample_process_usage(pid, cpu_time, working_set)) {
+            if (entry.start_cpu == 0) {
+              candidates.erase(pid);
+            }
+            continue;
+          }
+          if (entry.start_cpu == 0) {
+            entry.start_cpu = cpu_time;
+          }
+          entry.last_cpu = cpu_time;
+          entry.last_seen = now;
+          if (working_set > entry.peak_working_set) {
+            entry.peak_working_set = working_set;
+          }
+          if (entry.path.empty()) {
+            if (auto path = query_process_image_path_optional(pid)) {
+              entry.path = std::move(*path);
+            }
+          }
+        }
+
+        std::this_thread::sleep_for(k_lossless_poll_interval);
+      }
+
+      if (stop_flag.load(std::memory_order_acquire)) {
+        return std::nullopt;
+      }
+
+      if (candidates.empty()) {
+        return std::nullopt;
+      }
+
+      double max_cpu_ratio = 0.0;
+      double max_mem = 0.0;
+
+      struct candidate_score {
+        DWORD pid;
+        std::wstring path;
+        double cpu_ratio;
+        double mem_mb;
+        bool preferred_match;
+      };
+
+      std::vector<candidate_score> scores;
+      scores.reserve(candidates.size());
+
+      for (auto &[pid, candidate] : candidates) {
+        if (candidate.start_cpu == 0 || candidate.last_cpu < candidate.start_cpu) {
+          continue;
+        }
+        if (candidate.last_seen <= candidate.first_seen) {
+          continue;
+        }
+        if (candidate.path.empty()) {
+          if (auto refreshed = query_process_image_path_optional(pid)) {
+            candidate.path = std::move(*refreshed);
+          }
+        }
+        if (candidate.path.empty()) {
+          continue;
+        }
+        double elapsed = std::chrono::duration<double>(candidate.last_seen - candidate.first_seen).count();
+        if (elapsed <= 0.1) {
+          elapsed = 0.1;
+        }
+        double cpu_seconds = static_cast<double>(candidate.last_cpu - candidate.start_cpu) / 10000000.0;
+        if (cpu_seconds < 0.0) {
+          cpu_seconds = 0.0;
+        }
+        double cpu_ratio = cpu_seconds / (elapsed * cpu_count);
+        if (cpu_ratio < 0.0) {
+          cpu_ratio = 0.0;
+        }
+        double mem_mb = static_cast<double>(candidate.peak_working_set) / (1024.0 * 1024.0);
+        bool matches = path_matches_preferred(candidate.path, preferred_normalized);
+        scores.push_back({pid, candidate.path, cpu_ratio, mem_mb, matches});
+        max_cpu_ratio = std::max(max_cpu_ratio, cpu_ratio);
+        max_mem = std::max(max_mem, mem_mb);
+      }
+
+      if (scores.empty()) {
+        return std::nullopt;
+      }
+
+      bool cpu_low = max_cpu_ratio < 0.08;
+      double cpu_weight = cpu_low ? 0.5 : 0.7;
+      double mem_weight = 1.0 - cpu_weight;
+
+      auto ensure_dir_prefix = [](std::wstring value) {
+        if (!value.empty() && value.back() != L'\\') {
+          value.push_back(L'\\');
+        }
+        return normalize_lowercase_path(value);
+      };
+
+      std::wstring windows_dir_norm;
+      {
+        wchar_t windows_dir[MAX_PATH] = {};
+        UINT len = GetWindowsDirectoryW(windows_dir, ARRAYSIZE(windows_dir));
+        if (len > 0 && len < ARRAYSIZE(windows_dir)) {
+          windows_dir_norm = ensure_dir_prefix(std::wstring(windows_dir, len));
+        }
+      }
+
+      auto has_prefix = [](const std::wstring &value, const std::wstring &prefix) {
+        return !prefix.empty() && value.size() >= prefix.size() && value.compare(0, prefix.size(), prefix) == 0;
+      };
+
+      const candidate_score *best = nullptr;
+      double best_score = -1.0;
+
+      for (const auto &score : scores) {
+        double cpu_norm = max_cpu_ratio > 0.0 ? score.cpu_ratio / max_cpu_ratio : 0.0;
+        double mem_norm = max_mem > 0.0 ? score.mem_mb / max_mem : 0.0;
+        double combined = (cpu_weight * cpu_norm) + (mem_weight * mem_norm);
+        if (score.preferred_match) {
+          combined += 0.2;
+        }
+        if (score.pid == root_pid) {
+          combined += score.preferred_match ? 0.05 : -0.05;
+        }
+        combined += std::min(score.cpu_ratio, 1.0) * 0.15;
+
+        if (!windows_dir_norm.empty()) {
+          auto normalized_path = normalize_lowercase_path(score.path);
+          bool system_path = has_prefix(normalized_path, windows_dir_norm);
+          if (system_path) {
+            combined -= 0.2;
+          }
+          if (system_path && score.cpu_ratio < 0.02 && score.mem_mb < 48.0) {
+            combined -= 0.05;
+          }
+        } else if (score.cpu_ratio < 0.015 && score.mem_mb < 32.0) {
+          combined -= 0.05;
+        }
+
+        if (combined > best_score) {
+          best_score = combined;
+          best = &score;
+        }
+      }
+
+      if (!best) {
+        return std::nullopt;
+      }
+
+      lossless_selection selection;
+      selection.pid = best->pid;
+      selection.path_wide = best->path;
+      selection.path_utf8 = platf::dxgi::wide_to_utf8(best->path);
+      std::filesystem::path fs_path(best->path);
+      auto parent = fs_path.parent_path();
+      if (!parent.empty()) {
+        selection.directory_utf8 = platf::dxgi::wide_to_utf8(parent.wstring());
+      }
+
+      BOOST_LOG(debug) << "Lossless Scaling: candidate PID=" << selection.pid << " exe=" << selection.path_utf8
+                       << " cpu=" << best->cpu_ratio << " memMB=" << best->mem_mb;
+
+      return selection;
+    }
+#endif
+  }  // namespace
+
+#ifdef _WIN32
+  std::atomic<VDISPLAY::DRIVER_STATUS> vDisplayDriverStatus {VDISPLAY::DRIVER_STATUS::UNKNOWN};
+  std::atomic<VDISPLAY::DRIVER_SELECTION> vDisplayDriverSelection {VDISPLAY::DRIVER_SELECTION::UNKNOWN};
+  std::mutex vdisplay_driver_status_mutex;
+
+  namespace {
+    lifecycle::deferred_action_t deferred_display_revert;
+  }
+
+  void defer_display_revert() {
+    deferred_display_revert.defer();
+  }
+
+  bool consume_deferred_display_revert() {
+    return deferred_display_revert.consume();
+  }
+
+  void clear_deferred_display_revert() {
+    deferred_display_revert.clear();
+  }
+
+  vdisplay_driver_status_snapshot_t vDisplayDriverStatusSnapshot() {
+    std::lock_guard<std::mutex> lock(vdisplay_driver_status_mutex);
+    return {
+      vDisplayDriverStatus.load(std::memory_order_acquire),
+      vDisplayDriverSelection.load(std::memory_order_acquire),
+    };
+  }
+
+  void setVDisplayDriverStatus(const VDISPLAY::DRIVER_STATUS status) {
+    std::lock_guard<std::mutex> lock(vdisplay_driver_status_mutex);
+    vDisplayDriverStatus.store(status, std::memory_order_release);
+  }
+
+  void setVDisplayDriverStatus(
+    const VDISPLAY::DRIVER_STATUS status,
+    const VDISPLAY::DRIVER_SELECTION selection
+  ) {
+    std::lock_guard<std::mutex> lock(vdisplay_driver_status_mutex);
+    vDisplayDriverSelection.store(selection, std::memory_order_release);
+    vDisplayDriverStatus.store(status, std::memory_order_release);
+  }
+
+  void onVDisplayWatchdogFailed() {
+    setVDisplayDriverStatus(VDISPLAY::DRIVER_STATUS::WATCHDOG_FAILED);
+    VDISPLAY::closeVDisplayDevice();
+  }
+
+  void initVDisplayDriver() {
+    VDISPLAY::ensureVirtualDisplayRegistryDefaults();
+    setVDisplayDriverStatus(
+      VDISPLAY::DRIVER_STATUS::UNKNOWN,
+      VDISPLAY::DRIVER_SELECTION::UNKNOWN
+    );
+    if (!VDISPLAY::ensure_driver_is_ready()) {
+      BOOST_LOG(warning) << "Sunshine virtual display driver reported unavailable during initialization; attempting to continue.";
+    }
+    const auto status = VDISPLAY::openVDisplayDevice();
+    if (status == VDISPLAY::DRIVER_STATUS::OK) {
+      if (!VDISPLAY::startPingThread(onVDisplayWatchdogFailed)) {
+        onVDisplayWatchdogFailed();
+      }
+    }
+  }
+#endif
+
+  proc_t proc;
+
+  // Custom move operations to allow global proc replacement if ever needed
+  proc_t::proc_t(proc_t &&other) noexcept:
+      _app_id(other._app_id.load(std::memory_order_acquire)),
+      _env(std::move(other._env)),
+      _pending_catalog_environment(std::move(other._pending_catalog_environment)),
+      _stream_owned_environment_keys(std::move(other._stream_owned_environment_keys)),
+      _apps(std::move(other._apps)),
+      _app(std::move(other._app)),
+      _app_launch_time(other._app_launch_time),
+      _active_client_uuid(std::move(other._active_client_uuid)),
+      _active_client_vdd_identity_token(other._active_client_vdd_identity_token),
+      placebo(other.placebo),
+      _app_focus(std::move(other._app_focus)),
+      _steam_tracker(std::move(other._steam_tracker)),
+      _steam_process_controller(std::move(other._steam_process_controller)),
+      _steam_tracking_active(other._steam_tracking_active),
+      _steam_tracking_associated(other._steam_tracking_associated),
+      _steam_tracking_deadline(other._steam_tracking_deadline),
+      _steam_last_tracking_poll(other._steam_last_tracking_poll),
+      _process(std::move(other._process)),
+      _process_group(std::move(other._process_group)),
+#ifdef _WIN32
+      _dualsense_usbip_session(std::move(other._dualsense_usbip_session)),
+      _virtual_display_guid(other._virtual_display_guid),
+      _virtual_display_active(other._virtual_display_active),
+#endif
+      _pipe(std::move(other._pipe)),
+      _app_prep_it(other._app_prep_it),
+      _app_prep_begin(other._app_prep_begin)
+#ifdef _WIN32
+      ,
+      _lossless_thread(std::move(other._lossless_thread)),
+      _lossless_profile_applied(other._lossless_profile_applied),
+      _lossless_backup(other._lossless_backup),
+      _lossless_last_install_dir(std::move(other._lossless_last_install_dir)),
+      _lossless_last_exe_path(std::move(other._lossless_last_exe_path))
+#endif
+  {
+#ifdef _WIN32
+    _lossless_stop_requested.store(other._lossless_stop_requested.load(std::memory_order_acquire), std::memory_order_release);
+    _deferred_launch = other._deferred_launch.load(std::memory_order_acquire);
+    _dualsense_ready_deadline = other._dualsense_ready_deadline;
+    other._lossless_profile_applied = false;
+#endif
+  }
+
+  proc_t &proc_t::operator=(proc_t &&other) noexcept {
+    if (this != &other) {
+      std::scoped_lock lk(_apps_mutex, other._apps_mutex);
+#ifdef _WIN32
+      stop_lossless_scaling_support();
+#endif
+      catalog::move_state(catalog_state(), other.catalog_state());
+      _app_launch_time = other._app_launch_time;
+      _active_client_uuid = std::move(other._active_client_uuid);
+      _active_client_vdd_identity_token = other._active_client_vdd_identity_token;
+      placebo = other.placebo;
+      _app_focus = std::move(other._app_focus);
+      _steam_tracker = std::move(other._steam_tracker);
+      _steam_process_controller = std::move(other._steam_process_controller);
+      _steam_tracking_active = other._steam_tracking_active;
+      _steam_tracking_associated = other._steam_tracking_associated;
+      _steam_tracking_deadline = other._steam_tracking_deadline;
+      _steam_last_tracking_poll = other._steam_last_tracking_poll;
+      _process = std::move(other._process);
+      _process_group = std::move(other._process_group);
+      _pipe = std::move(other._pipe);
+      _app_prep_it = other._app_prep_it;
+      _app_prep_begin = other._app_prep_begin;
+#ifdef _WIN32
+      _dualsense_usbip_session = std::move(other._dualsense_usbip_session);
+      _dualsense_ready_deadline = other._dualsense_ready_deadline;
+      _deferred_launch = other._deferred_launch.load(std::memory_order_acquire);
+      _lossless_thread = std::move(other._lossless_thread);
+      _lossless_stop_requested.store(other._lossless_stop_requested.load(std::memory_order_acquire), std::memory_order_release);
+      _lossless_profile_applied = other._lossless_profile_applied;
+      _lossless_backup = other._lossless_backup;
+      _lossless_last_install_dir = std::move(other._lossless_last_install_dir);
+      _lossless_last_exe_path = std::move(other._lossless_last_exe_path);
+      _virtual_display_guid = other._virtual_display_guid;
+      _virtual_display_active = other._virtual_display_active;
+      other._lossless_profile_applied = false;
+#endif
+    }
+    return *this;
+  }
+
+#ifdef _WIN32
+  void proc_t::start_lossless_scaling_support(std::unordered_set<DWORD> baseline_pids, const playnite_launcher::lossless::lossless_scaling_app_metadata &metadata, std::string install_dir_hint_utf8, DWORD root_pid) {
+    stop_lossless_scaling_support();
+    _lossless_stop_requested.store(false, std::memory_order_release);
+
+    _lossless_thread = std::thread([this,
+                                    baseline = std::move(baseline_pids),
+                                    metadata,
+                                    install_dir_hint = std::move(install_dir_hint_utf8),
+                                    root_pid]() mutable {
+      try {
+        std::wstring preferred_directory;
+        if (!install_dir_hint.empty()) {
+          preferred_directory = platf::dxgi::utf8_to_wide(install_dir_hint);
+          preferred_directory = normalize_lowercase_path(preferred_directory);
+          while (!preferred_directory.empty() && preferred_directory.back() == L'\\') {
+            preferred_directory.pop_back();
+          }
+        }
+
+        BOOST_LOG(debug) << "Lossless Scaling: monitoring for new processes (baseline=" << baseline.size() << ", root_pid=" << root_pid << ")";
+
+        auto selection = detect_lossless_candidate(baseline, root_pid, preferred_directory, _lossless_stop_requested);
+        if (!selection || _lossless_stop_requested.load(std::memory_order_acquire)) {
+          BOOST_LOG(debug) << "Lossless Scaling: no candidate detected within bootstrap window";
+          return;
+        }
+
+        const int launch_delay_seconds = std::max(0, metadata.launch_delay_seconds);
+        if (launch_delay_seconds > 0) {
+          BOOST_LOG(info) << "Lossless Scaling: delaying launch by " << launch_delay_seconds << " seconds after game start";
+          auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(launch_delay_seconds);
+          while (std::chrono::steady_clock::now() < deadline) {
+            if (_lossless_stop_requested.load(std::memory_order_acquire)) {
+              return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+          }
+        }
+
+        auto options = playnite_launcher::lossless::read_lossless_scaling_options(metadata);
+        if (!options.enabled) {
+          BOOST_LOG(debug) << "Lossless Scaling: disabled by configuration, skipping auto launch";
+          return;
+        }
+
+        auto runtime = playnite_launcher::lossless::capture_lossless_scaling_state();
+  #ifdef _WIN32
+        if (!runtime.exe_path && metadata.configured_path) {
+          try {
+            runtime.exe_path = metadata.configured_path->wstring();
+          } catch (...) {
+          }
+        }
+  #endif
+        if (_lossless_stop_requested.load(std::memory_order_acquire)) {
+          return;
+        }
+        if (!runtime.running_pids.empty()) {
+          playnite_launcher::lossless::lossless_scaling_stop_processes(runtime);
+        }
+
+        playnite_launcher::lossless::lossless_scaling_profile_backup backup;
+        std::string install_dir = install_dir_hint.empty() ? selection->directory_utf8 : install_dir_hint;
+        bool changed = playnite_launcher::lossless::lossless_scaling_apply_global_profile(options, install_dir, selection->path_utf8, backup);
+
+        {
+          std::lock_guard lk(_lossless_mutex);
+          _lossless_backup = backup;
+          _lossless_profile_applied = backup.valid;
+          if (_lossless_profile_applied) {
+            _lossless_last_install_dir = install_dir;
+            _lossless_last_exe_path = selection->path_utf8;
+          } else {
+            _lossless_last_install_dir.clear();
+            _lossless_last_exe_path.clear();
+          }
+        }
+
+        if (_lossless_stop_requested.load(std::memory_order_acquire)) {
+          return;
+        }
+
+        playnite_launcher::lossless::lossless_scaling_restart_foreground(
+          runtime,
+          changed,
+          install_dir,
+          selection->path_utf8,
+          selection->pid,
+          metadata.legacy_auto_detect
+        );
+        BOOST_LOG(info) << "Lossless Scaling: launched helper for PID=" << selection->pid << " (" << selection->path_utf8 << ')';
+      } catch (const std::exception &e) {
+        BOOST_LOG(warning) << "Lossless Scaling: exception during auto launch: " << e.what();
+      } catch (...) {
+        BOOST_LOG(warning) << "Lossless Scaling: unknown exception during auto launch";
+      }
+    });
+  }
+
+  void proc_t::stop_lossless_scaling_support() {
+    _lossless_stop_requested.store(true, std::memory_order_release);
+    if (_lossless_thread.joinable()) {
+      _lossless_thread.join();
+    }
+    _lossless_stop_requested.store(false, std::memory_order_release);
+
+    bool restore = false;
+    playnite_launcher::lossless::lossless_scaling_profile_backup backup;
+    {
+      std::lock_guard lk(_lossless_mutex);
+      if (_lossless_profile_applied) {
+        backup = _lossless_backup;
+        restore = backup.valid;
+        _lossless_profile_applied = false;
+      }
+      _lossless_last_install_dir.clear();
+      _lossless_last_exe_path.clear();
+    }
+
+    if (restore) {
+      auto runtime = playnite_launcher::lossless::capture_lossless_scaling_state();
+      if (!runtime.running_pids.empty()) {
+        playnite_launcher::lossless::lossless_scaling_stop_processes(runtime);
+      }
+      if (playnite_launcher::lossless::lossless_scaling_restore_global_profile(backup)) {
+        BOOST_LOG(info) << "Lossless Scaling: restored previous profile";
+      }
+    }
+  }
+#endif
+
+  class deinit_t: public platf::deinit_t {
+  public:
+    deinit_t() {
+#ifdef _WIN32
+      playnite_integration_ = platf::playnite::start();
+      if (!playnite_integration_) {
+        BOOST_LOG(error) << "Playnite integration failed to initialize";
+      }
+#endif
+    }
+
+    ~deinit_t() {
+      proc.terminate();
+    }
+
+  private:
+#ifdef _WIN32
+    std::unique_ptr<platf::deinit_t> playnite_integration_;
+#endif
+  };
+
+  std::unique_ptr<platf::deinit_t> init() {
+    return std::make_unique<deinit_t>();
+  }
+
+  void terminate_process_group(bp::child &proc, bp::group &group, std::chrono::seconds exit_timeout) {
+    if (group.valid() && platf::process_group_running((std::uintptr_t) group.native_handle())) {
+      if (exit_timeout.count() > 0) {
+        // Request processes in the group to exit gracefully
+        if (platf::request_process_group_exit((std::uintptr_t) group.native_handle())) {
+          // If the request was successful, wait for a little while for them to exit.
+          BOOST_LOG(info) << "Successfully requested the app to exit. Waiting up to "sv << exit_timeout.count() << " seconds for it to close."sv;
+
+          // group::wait_for() and similar functions are broken and deprecated, so we use a simple polling loop
+          while (platf::process_group_running((std::uintptr_t) group.native_handle()) && (--exit_timeout).count() >= 0) {
+            std::this_thread::sleep_for(1s);
+          }
+
+          if (exit_timeout.count() < 0) {
+            BOOST_LOG(warning) << "App did not fully exit within the timeout. Terminating the app's remaining processes."sv;
+          } else {
+            BOOST_LOG(info) << "All app processes have successfully exited."sv;
+          }
+        } else {
+          BOOST_LOG(info) << "App did not respond to a graceful termination request. Forcefully terminating the app's processes."sv;
+        }
+      } else {
+        BOOST_LOG(info) << "No graceful exit timeout was specified for this app. Forcefully terminating the app's processes."sv;
+      }
+
+      // We always call terminate() even if we waited successfully for all processes above.
+      // This ensures the process group state is consistent with the OS in boost.
+      std::error_code ec;
+      group.terminate(ec);
+      group.detach();
+    }
+
+    if (proc.valid()) {
+      // avoid zombie process
+      proc.detach();
+    }
+  }
+
+  boost::filesystem::path find_working_directory(const std::string &cmd, bp::environment &env) {
+    // Parse the raw command string into parts to get the actual command portion
+#ifdef _WIN32
+    auto parts = boost::program_options::split_winmain(cmd);
+#else
+    auto parts = boost::program_options::split_unix(cmd);
+#endif
+    if (parts.empty()) {
+      BOOST_LOG(error) << "Unable to parse command: "sv << cmd;
+      return boost::filesystem::path();
+    }
+
+    BOOST_LOG(debug) << "Parsed target ["sv << parts.at(0) << "] from command ["sv << cmd << ']';
+
+    // If the target is a URL, don't parse any further here
+    if (parts.at(0).find("://") != std::string::npos) {
+      return boost::filesystem::path();
+    }
+
+    // If the cmd path is not an absolute path, resolve it using our PATH variable
+    boost::filesystem::path cmd_path(parts.at(0));
+    if (!cmd_path.is_absolute()) {
+      auto resolved = bp::search_path(parts.at(0));
+      cmd_path = boost::filesystem::path(resolved.string());
+      if (cmd_path.empty()) {
+        BOOST_LOG(error) << "Unable to find executable ["sv << parts.at(0) << "]. Is it in your PATH?"sv;
+        return boost::filesystem::path();
+      }
+    }
+
+    BOOST_LOG(debug) << "Resolved target ["sv << parts.at(0) << "] to path ["sv << cmd_path << ']';
+
+    // Now that we have a complete path, we can just use parent_path()
+    return cmd_path.parent_path();
+  }
+
+  int proc_t::execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session, bool config_read_gate_held) {
+    // Callers serialize app changes with lifecycle. Admission never waits, so
+    // a lifecycle-held caller can reject terminal cleanup without lock inversion.
+    // New startup is refused even from terminal-owned nested cleanup; an execute
+    // admitted before closure keeps its owner through startup and cleanup tails.
+    host_stream_control::start_guard_t admission {host_stream_control::request_ticket()};
+    if (!admission) return 503;
+    // Monitor profiles are admitted only by the authenticated role path. Fail
+    // before prepare_launch() can terminate a running game or run commands.
+    if (const auto selected = resolve_app(app_id); selected && selected->remote_monitor_profile) {
+      BOOST_LOG(error) << "Remote Monitor profiles require the paired-client Monitor launch path.";
+      return 400;
+    }
+    // Ensure starting from a clean slate
+    const bool skip_display_revert = launch_session &&
+                                    (launch_session->display_config_preapplied || launch_session->display_config_preapply_attempted);
+    catalog::prepare_launch(catalog_state(), [&]() {
+      terminate(skip_display_revert, true, config_read_gate_held);
+    });
+
+#ifdef __linux__
+    // proc_t retains its parsed environment across launches. Remove only the
+    // values that a prior stream supplied; never erase an apps.json value.
+    for (const auto &key : _stream_owned_environment_keys) {
+      _env[key] = "";
+    }
+    _stream_owned_environment_keys.clear();
+#endif
+
+#ifdef _WIN32
+    std::optional<std::filesystem::path> resolved_lossless_exe_path;
+    std::string resolved_lossless_exe_utf8;
+    _virtual_display_active = false;
+    _virtual_display_guid = GUID {};
+    _dualsense_usbip_session.reset();
+    _dualsense_ready_deadline = {};
+    _env["VIBESHINE_DUALSENSE_HAPTICS_MAPPING"] = "";
+    _env["VIBESHINE_DUALSENSE_HAPTICS_DLL"] = "";
+    _deferred_launch = false;
+    _lossless_should_start_support = false;
+    _lossless_metadata = {};
+#endif
+
+    auto resolved_app = resolve_app_from_snapshot(_apps, std::to_string(app_id), "");
+    if (!resolved_app) {
+      BOOST_LOG(error) << "Couldn't find app with ID ["sv << app_id << ']';
+      return 404;
+    }
+
+    _app = *resolved_app;
+    _app_id = (int) util::from_view(_app.id);
+    audio::app_started();
+#ifdef _WIN32
+    platf::dualsense_usbip_gamepad::set_application_active(true);
+    // A replacement app now owns the streaming display configuration. Any
+    // deferred revert from the previous app must not fire when this session ends.
+    clear_deferred_display_revert();
+#endif
+    _active_client_uuid = launch_session ? launch_session->client_uuid : std::string();
+    _active_client_vdd_identity_token = launch_session ? launch_session->normal_vdd_identity_token : 0;
+    launch_session->gen1_framegen_fix = _app.gen1_framegen_fix;
+    launch_session->gen2_framegen_fix = _app.gen2_framegen_fix;
+    launch_session->frame_generation_enabled = _app.frame_generation_enabled;
+    launch_session->lossless_scaling_framegen = _app.lossless_scaling_framegen;
+    launch_session->lossless_scaling_target_fps = _app.lossless_scaling_target_fps;
+    launch_session->lossless_scaling_rtss_limit = _app.lossless_scaling_rtss_limit;
+    launch_session->frame_generation_provider = _app.frame_generation_provider;
+    std::optional<int> effective_lossless_target = launch_session->lossless_scaling_target_fps;
+    if (
+      (!effective_lossless_target || *effective_lossless_target <= 0) &&
+      launch_session->fps > 0
+    ) {
+      effective_lossless_target = launch_session->fps;
+    }
+    launch_session->lossless_scaling_target_fps = effective_lossless_target;
+
+    std::optional<int> effective_lossless_rtss = launch_session->lossless_scaling_rtss_limit;
+    if (
+      (!effective_lossless_rtss || *effective_lossless_rtss <= 0) &&
+      effective_lossless_target && *effective_lossless_target > 0
+    ) {
+      int computed_limit = (int) std::lround(*effective_lossless_target * 0.5);
+      if (computed_limit > 0) {
+        effective_lossless_rtss = computed_limit;
+      } else {
+        effective_lossless_rtss.reset();
+      }
+    }
+    launch_session->lossless_scaling_rtss_limit = effective_lossless_rtss;
+
+    _app_prep_begin = std::begin(_app.prep_cmds);
+    _app_prep_it = _app_prep_begin;
+
+    // Add Stream-specific environment variables
+    const auto render_width = launch_session->resolution_override ? launch_session->resolution_override->width : launch_session->width;
+    const auto render_height = launch_session->resolution_override ? launch_session->resolution_override->height : launch_session->height;
+    _env["SUNSHINE_APP_ID"] = std::to_string(_app_id);
+    _env["SUNSHINE_APP_NAME"] = _app.name;
+    _env["SUNSHINE_CLIENT_WIDTH"] = std::to_string(render_width);
+    _env["SUNSHINE_CLIENT_HEIGHT"] = std::to_string(render_height);
+    _env["SUNSHINE_CLIENT_FPS"] = std::to_string(launch_session->fps);
+    const bool stream_hdr = rtsp_stream::effective_hdr_requested(*launch_session);
+    _env["SUNSHINE_CLIENT_HDR"] = stream_hdr ? "true" : "false";
+#ifdef __linux__
+    const bool source_hdr = rtsp_stream::hdr_capture_required(*launch_session, config::video);
+    const auto wayland_hdr_compatibility = platf::wayland_hdr_compatibility::resolve(
+      config::video.dd.wayland_hdr_compatibility,
+      platf::wayland_hdr_compatibility::selected_session_is_wayland(
+        window_system == window_system_e::WAYLAND
+      ),
+      source_hdr
+    );
+    auto set_stream_environment_default = [&](const char *key, const char *value) {
+      if (!_env[key].to_string().empty()) {
+        return false;
+      }
+      _env[key] = value;
+      _stream_owned_environment_keys.emplace(key);
+      return true;
+    };
+    if (config::input.proton_dualsense_compatibility) {
+      (void) set_stream_environment_default("PROTON_KEEP_SONY_AUDIO_ENDPOINT_VISIBLE", "1");
+      (void) set_stream_environment_default("PROTON_SONY_WINDOWS_DEVICE_NAMES", "1");
+    }
+    if (wayland_hdr_compatibility.enabled) {
+      (void) set_stream_environment_default("ENABLE_HDR_WSI", "1");
+      BOOST_LOG(info) << "Wayland HDR compatibility enabled for application launch.";
+      BOOST_LOG(debug) << "Wayland HDR compatibility applied ENABLE_HDR_WSI to the launch environment.";
+    } else if (config::video.dd.wayland_hdr_compatibility) {
+      if (launch_session->prefer_sdr_10bit) {
+        BOOST_LOG(debug) << "Wayland HDR compatibility skipped: 10-bit SDR preferred.";
+      } else if (launch_session->force_sdr) {
+        BOOST_LOG(debug) << "Wayland HDR compatibility skipped: HDR disabled by the final session/display policy.";
+      } else if (wayland_hdr_compatibility.suppression_reason ==
+                 platf::wayland_hdr_compatibility::suppression_reason_e::not_wayland) {
+        BOOST_LOG(debug) << "Wayland HDR compatibility skipped: the active session is not Wayland.";
+      } else {
+        BOOST_LOG(debug) << "Wayland HDR compatibility skipped: session resolved to SDR.";
+      }
+    }
+#endif
+    _env["SUNSHINE_CLIENT_GCMAP"] = std::to_string(launch_session->gcmap);
+    _env["SUNSHINE_CLIENT_HOST_AUDIO"] = launch_session->host_audio ? "true" : "false";
+    _env["SUNSHINE_CLIENT_ENABLE_SOPS"] = launch_session->enable_sops ? "true" : "false";
+
+#ifdef __linux__
+    const bool mangohud_uses_lossless_limit =
+      _app.lossless_scaling_framegen &&
+      boost::iequals(_app.frame_generation_provider, "lossless-scaling");
+    const auto mangohud_stream_policy = rtsp_stream::make_framegen_stream_start_policy(
+      *launch_session,
+      mangohud_uses_lossless_limit ? launch_session->lossless_scaling_rtss_limit : std::nullopt,
+      config::video.capture,
+      false,
+      config::frame_limiter.virtual_display_limiter_enabled(),
+      config::frame_limiter.fixed_virtual_display_refresh_multiplier(),
+      config::frame_limiter.fixed_virtual_display_refresh_millihz(launch_session->client_vrr_requested)
+    );
+    const auto mangohud_policy = platf::mangohud::make_launch_policy(
+      config::frame_limiter.provider,
+      config::frame_limiter.enable,
+      config::frame_limiter.virtual_display_limiter_enabled(),
+      mangohud_stream_policy,
+      config::frame_limiter.fps_limit_millihz
+    );
+    const bool proton_limiter = platf::mangohud::proton_provider_selected(config::frame_limiter.provider);
+    const bool proton_overlay_requested =
+      platf::mangohud::proton_overlay_provider_selected(config::frame_limiter.provider);
+    const bool mangohud_available = !bp::search_path("mangohud").empty();
+    const auto smooth_motion_policy = platf::smooth_motion::make_launch_policy(
+      _app.frame_generation_enabled,
+      _app.frame_generation_provider,
+      mangohud_policy.enabled && !proton_limiter
+    );
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+    const bool gamescope_steam_launch = !_app.steam_id.empty() && platf::gamescope_capture_selected();
+#else
+    const bool gamescope_steam_launch = false;
+#endif
+    if (gamescope_steam_launch) {
+      // Catalog commands may have been generated in Desktop Mode and contain
+      // a direct Proton launch. Resolve ownership at launch time so Steam can
+      // manage the game's window, focus and runtime in Gaming Mode.
+      _app.cmd = platf::steam::runtime_launch_command(_app.steam_id, _app.cmd, true);
+      if (_app.cmd.empty()) {
+        BOOST_LOG(error) << "Invalid Steam app ID for Gaming Mode launch: [" << _app.steam_id << "].";
+        return 400;
+      }
+      BOOST_LOG(info) << "Gaming Mode: handing Steam app " << _app.steam_id << " to the running Steam client.";
+      if (smooth_motion_policy.enabled) {
+        BOOST_LOG(warning) << "Smooth Motion cannot be injected through the running Gaming Mode Steam client.";
+      }
+    }
+    bool inherited_steam_environment_ready = !gamescope_steam_launch;
+    bool session_steam_direct_launch = false;
+    bool steam_proton_launch = false;
+    const bool effective_frame_limiter =
+      mangohud_policy.enabled && (proton_limiter || mangohud_available);
+    const bool direct_steam_launch_required =
+      !gamescope_steam_launch &&
+      !_app.steam_id.empty() &&
+      (config::input.proton_dualsense_compatibility || platf::steam::requires_direct_environment_launch(
+        effective_frame_limiter,
+        smooth_motion_policy.enabled,
+        stream_hdr
+      ));
+    if (direct_steam_launch_required) {
+      inherited_steam_environment_ready = false;
+      std::uint32_t steam_app_id = 0;
+      const auto *steam_id_begin = _app.steam_id.data();
+      const auto *steam_id_end = steam_id_begin + _app.steam_id.size();
+      const auto parsed_steam_id = std::from_chars(steam_id_begin, steam_id_end, steam_app_id);
+      if (parsed_steam_id.ec == std::errc {} && parsed_steam_id.ptr == steam_id_end && steam_app_id != 0) {
+        const auto games = platf::steam::discover();
+        const auto game = std::find_if(games.begin(), games.end(), [steam_app_id](const auto &candidate) {
+          return candidate.app_id == steam_app_id && candidate.installed;
+        });
+        if (game != games.end()) {
+          steam_proton_launch = game->launch_os == "windows";
+          if (std::getenv("VIBESHINE_MACHINE_HOST")) {
+            const bool proton_overlay_enabled =
+              effective_frame_limiter && proton_limiter &&
+              proton_overlay_requested && mangohud_available;
+            const bool mangohud_limiter_enabled =
+              effective_frame_limiter && !proton_limiter;
+            platf::steam::session_launch_policy_t policy {
+              .provider = proton_overlay_enabled ? "mangohud-proton" :
+                                                   (effective_frame_limiter && proton_limiter ? "proton" :
+                                                                                                (mangohud_limiter_enabled ? "mangohud" : "disabled")),
+              .limit_millihz = effective_frame_limiter ?
+                                 mangohud_policy.limit_millihz :
+                                 0,
+              .preset = "custom",
+              .always_show_graph = false,
+              .limiter_method = mangohud_limiter_enabled &&
+                                    config::frame_limiter.mangohud_limiter_method == "early" ?
+                                  "early" :
+                                  "late",
+              .smooth_motion = smooth_motion_policy.enabled,
+              .smooth_motion_graphics_queue = smooth_motion_policy.enabled &&
+                                              smooth_motion_policy.use_graphics_queue,
+              .hdr = source_hdr,
+              // The machine-side Steam catalog intentionally omits desktop
+              // Proton metadata. The session helper re-discovers the app and
+              // applies this policy only when its launch is actually Proton;
+              // carrying the resolved Wayland/HDR bit here is therefore
+              // required for the brokered direct launch to receive it.
+              .wayland_hdr_compatibility = wayland_hdr_compatibility.enabled,
+              .proton_dualsense_compatibility = config::input.proton_dualsense_compatibility,
+              .playstation_controller_attached = launch_session->playstation_gamepad_mask != 0,
+            };
+            const bool overlay = policy.provider == "mangohud" ||
+                                 policy.provider == "mangohud-proton";
+            if (overlay && (config::frame_limiter.mangohud_preset == "1" || config::frame_limiter.mangohud_preset == "2" || config::frame_limiter.mangohud_preset == "3" || config::frame_limiter.mangohud_preset == "4")) {
+              policy.preset = config::frame_limiter.mangohud_preset;
+            }
+            policy.always_show_graph =
+              overlay && config::frame_limiter.mangohud_always_show_graph;
+            const auto command = platf::steam::session_launch_command(steam_app_id, policy);
+            if (!command.empty()) {
+              _app.cmd = command;
+              inherited_steam_environment_ready = true;
+              session_steam_direct_launch = true;
+              BOOST_LOG(info)
+                << "Delegated direct Steam launch for app " << steam_app_id
+                << " to the selected desktop session; no user path or launch option entered the machine host.";
+            }
+          } else {
+            const auto direct_command = platf::steam::launch_command(*game);
+            const auto broker_command = platf::steam::launch_command(steam_app_id);
+            if (!direct_command.empty() && direct_command != broker_command) {
+              _app.cmd = direct_command;
+              if (!game->launch_working_dir.empty()) {
+                _app.working_dir = game->launch_working_dir.generic_string();
+              }
+              inherited_steam_environment_ready = true;
+              BOOST_LOG(info)
+                << "Resolved direct Steam launch for app " << steam_app_id
+                << "; stream-owned environment and inherited Steam Launch Options will be applied to the game process.";
+            }
+          }
+          if (!inherited_steam_environment_ready) {
+            BOOST_LOG(error)
+              << "Stream-owned launch features cannot activate for Steam app " << steam_app_id
+              << " because a safe direct-launch request could not be constructed; the already-running Steam broker cannot inherit their environment.";
+          }
+        } else {
+          const auto known = std::find_if(games.begin(), games.end(), [steam_app_id](const auto &candidate) {
+            return candidate.app_id == steam_app_id;
+          });
+          const std::string reason = games.empty() ?
+            "the Steam catalog scan returned no games" :
+            known == games.end() ?
+              "the app is absent from the " + std::to_string(games.size()) + " scanned games" :
+              "the app is present but not marked installed";
+          BOOST_LOG(error)
+            << "Stream-owned launch features cannot activate for Steam app " << steam_app_id
+            << " because the installed game could not be resolved from Steam metadata: " << reason << '.';
+#ifdef __linux__
+          if (const char *machine_host = std::getenv("VIBESHINE_MACHINE_HOST"); machine_host && *machine_host) {
+            // The raw apps.json command cannot run inside the machine host: it
+            // has no desktop, and the broker refuses unauthorized commands.
+            // Ask the Steam client in the desktop session to launch it instead.
+            _app.cmd = platf::steam::launch_command(steam_app_id);
+            BOOST_LOG(warning)
+              << "Falling back to a Steam client launch in the desktop session for app " << steam_app_id << '.';
+          }
+#endif
+        }
+      } else {
+        BOOST_LOG(error)
+          << "Stream-owned launch features cannot activate because the managed Steam app ID is invalid: ["
+          << _app.steam_id << "].";
+      }
+    }
+    if (steam_proton_launch) {
+      // Steam metadata is the reliable Proton discriminator. Native Steam and
+      // arbitrary direct executables do not receive these Proton HDR flags.
+      (void) set_stream_environment_default("PROTON_ENABLE_HDR", source_hdr ? "1" : "0");
+      (void) set_stream_environment_default("DXVK_HDR", source_hdr ? "1" : "0");
+      if (wayland_hdr_compatibility.enabled) {
+        (void) set_stream_environment_default("PROTON_ENABLE_WAYLAND", "1");
+        BOOST_LOG(debug) << "Wayland HDR compatibility applied Proton/DXVK launch flags.";
+      }
+    }
+    const bool smooth_motion_launch_ready = smooth_motion_policy.enabled && inherited_steam_environment_ready;
+    const bool mangohud_launch_ready = mangohud_policy.enabled && inherited_steam_environment_ready;
+    _env["NVPRESENT_ENABLE_SMOOTH_MOTION"] = smooth_motion_launch_ready ? "1" : "";
+    _env["NVPRESENT_QUEUE_FAMILY"] = smooth_motion_launch_ready && smooth_motion_policy.use_graphics_queue ? "1" : "";
+    if (smooth_motion_launch_ready) {
+      BOOST_LOG(info) << "NVIDIA Smooth Motion enabled for the application launch.";
+      if (!nvidia_present_layer_installed()) {
+        BOOST_LOG(error)
+          << "NVIDIA Smooth Motion was selected, but the VK_LAYER_NV_present implicit Vulkan layer "
+             "was not found. Install a current NVIDIA Linux driver before launching this app.";
+      }
+    }
+    const auto existing_preload = _env["LD_PRELOAD"].to_string();
+    if (mangohud_policy.enabled && !mangohud_launch_ready) {
+      _env["MANGOHUD"] = "";
+      _env["MANGOHUD_CONFIG"] = "";
+      _env["MANGOHUD_FPS_LIMIT"] = "";
+      _env["LD_PRELOAD"] = platf::mangohud::without_preload(existing_preload);
+      BOOST_LOG(error)
+        << "Linux frame limiter disabled for this launch because the game process cannot inherit its environment.";
+    } else if (mangohud_policy.enabled && proton_limiter) {
+      const bool proton_overlay_enabled = proton_overlay_requested && mangohud_available;
+      if (proton_overlay_enabled) {
+        _env["MANGOHUD"] = "1";
+        _env["MANGOHUD_CONFIG"] = platf::mangohud::overlay_config_override(
+          {},
+          config::frame_limiter.mangohud_preset,
+          config::frame_limiter.mangohud_always_show_graph
+        );
+        _env["MANGOHUD_FPS_LIMIT"] = "";
+        _env["LD_PRELOAD"] = platf::mangohud::with_preload(existing_preload);
+      } else {
+        _env["MANGOHUD"] = "";
+        _env["MANGOHUD_CONFIG"] = "";
+        _env["MANGOHUD_FPS_LIMIT"] = "";
+        _env["LD_PRELOAD"] = platf::mangohud::without_preload(existing_preload);
+        if (proton_overlay_requested) {
+          BOOST_LOG(warning)
+            << "MangoHUD + Proton was requested, but mangohud was not found in PATH; "
+               "continuing with the Proton renderer limiter only.";
+        }
+      }
+      if (!_app.steam_id.empty()) {
+        if (session_steam_direct_launch) {
+          BOOST_LOG(info) << "Proton DXVK/VKD3D frame limiter delegated at "
+                          << mangohud_policy.limit << " FPS for Steam app "
+                          << _app.steam_id
+                          << (proton_overlay_enabled ? " with the MangoHUD overlay." : ".");
+        } else {
+          const auto state_path = platf::mangohud::write_state(
+            _app.steam_id,
+            proton_overlay_enabled ? "mangohud-proton" : "proton",
+            mangohud_policy.limit,
+            config::frame_limiter.mangohud_preset,
+            proton_overlay_enabled && config::frame_limiter.mangohud_always_show_graph,
+            config::frame_limiter.mangohud_limiter_method
+          );
+          if (state_path.empty()) {
+            BOOST_LOG(warning) << "Could not write the Steam Proton limiter handoff state for app "
+                               << _app.steam_id << ".";
+          } else {
+            BOOST_LOG(info) << "Proton DXVK/VKD3D frame limiter ready at " << mangohud_policy.limit
+                            << " FPS for Steam app " << _app.steam_id
+                            << (proton_overlay_enabled ? " with the MangoHUD overlay." : ".");
+          }
+        }
+      } else {
+        BOOST_LOG(warning)
+          << "The Proton DXVK/VKD3D frame limiter requires a managed Steam Proton application.";
+      }
+    } else if (mangohud_policy.enabled) {
+      if (!mangohud_available) {
+        _env["MANGOHUD"] = "";
+        _env["MANGOHUD_CONFIG"] = "";
+        _env["MANGOHUD_FPS_LIMIT"] = "";
+        _env["LD_PRELOAD"] = platf::mangohud::without_preload(existing_preload);
+        BOOST_LOG(warning) << "MangoHUD frame limiting requested, but mangohud was not found in PATH.";
+      } else {
+        // MANGOHUD enables the implicit Vulkan layer; the shim preload covers
+        // native OpenGL. MANGOHUD_CONFIG survives Steam's container boundary;
+        // MANGOHUD_FPS_LIMIT is also set for direct and newer-runtime launches.
+        _env["MANGOHUD"] = "1";
+        _env["MANGOHUD_CONFIG"] = platf::mangohud::config_override(
+          mangohud_policy.limit,
+          config::frame_limiter.mangohud_preset,
+          config::frame_limiter.mangohud_always_show_graph,
+          config::frame_limiter.mangohud_limiter_method
+        );
+        _env["MANGOHUD_FPS_LIMIT"] = platf::mangohud::fps_limit_environment_override(
+          mangohud_policy.limit_millihz,
+          mangohud_policy.limit
+        );
+        _env["LD_PRELOAD"] = platf::mangohud::with_preload(existing_preload);
+        BOOST_LOG(info) << "MangoHUD frame limiter enabled at " << mangohud_policy.limit << " FPS.";
+        if (!_app.steam_id.empty()) {
+          if (session_steam_direct_launch) {
+            BOOST_LOG(info) << "Steam MangoHUD handoff delegated for app "
+                            << _app.steam_id << ".";
+          } else {
+            const auto state_path = platf::mangohud::write_state(
+              _app.steam_id,
+              "mangohud",
+              mangohud_policy.limit,
+              config::frame_limiter.mangohud_preset,
+              config::frame_limiter.mangohud_always_show_graph,
+              config::frame_limiter.mangohud_limiter_method
+            );
+            if (state_path.empty()) {
+              BOOST_LOG(warning) << "Could not write the Steam MangoHUD handoff state for app "
+                                 << _app.steam_id << ".";
+            } else {
+              BOOST_LOG(info) << "Steam MangoHUD handoff ready for app " << _app.steam_id
+                              << "; the direct game command will apply the stream limit after inherited Steam Launch Options.";
+            }
+          }
+        }
+      }
+    } else {
+      // proc_t reuses its environment between launches, so remove overrides
+      // owned by a previous Vibeshine-managed MangoHUD launch.
+      _env["MANGOHUD"] = "";
+      _env["MANGOHUD_CONFIG"] = "";
+      _env["MANGOHUD_FPS_LIMIT"] = "";
+      _env["LD_PRELOAD"] = platf::mangohud::without_preload(existing_preload);
+    }
+#endif
+    int channelCount = launch_session->surround_info & 65535;
+    switch (channelCount) {
+      case 2:
+        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "2.0";
+        break;
+      case 6:
+        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "5.1";
+        break;
+      case 8:
+        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "7.1";
+        break;
+    }
+    _env["SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS"] = launch_session->surround_params;
+
+#ifdef _WIN32
+    resolved_lossless_exe_path = resolve_lossless_executable_path();
+    if (resolved_lossless_exe_path) {
+      resolved_lossless_exe_utf8 = lossless_path_to_utf8(*resolved_lossless_exe_path);
+    }
+    _env["SUNSHINE_LOSSLESS_SCALING_EXE"] = !resolved_lossless_exe_utf8.empty() ? resolved_lossless_exe_utf8 : config::lossless_scaling.exe_path;
+#else
+    try {
+      _env["SUNSHINE_LOSSLESS_SCALING_EXE"] = config::lossless_scaling.exe_path;
+    } catch (...) {
+      _env["SUNSHINE_LOSSLESS_SCALING_EXE"] = "";
+    }
+#endif
+
+    auto clear_lossless_runtime_env = [&]() {
+      _env[ENV_LOSSLESS_ENABLED] = "";
+      _env[ENV_LOSSLESS_PROFILE] = "";
+      _env[ENV_LOSSLESS_CAPTURE_API] = "";
+      _env[ENV_LOSSLESS_QUEUE_TARGET] = "";
+      _env[ENV_LOSSLESS_HDR] = "";
+      _env[ENV_LOSSLESS_FLOW_SCALE] = "";
+      _env[ENV_LOSSLESS_PERFORMANCE_MODE] = "";
+      _env[ENV_LOSSLESS_RESOLUTION] = "";
+      _env[ENV_LOSSLESS_FRAMEGEN_MODE] = "";
+      _env[ENV_LOSSLESS_LSFG3_MODE] = "";
+      _env[ENV_LOSSLESS_SCALING_TYPE] = "";
+      _env[ENV_LOSSLESS_SHARPNESS] = "";
+      _env[ENV_LOSSLESS_LS1_SHARPNESS] = "";
+      _env[ENV_LOSSLESS_ANIME4K_TYPE] = "";
+      _env[ENV_LOSSLESS_ANIME4K_VRS] = "";
+      _env[ENV_LOSSLESS_LAUNCH_DELAY] = "";
+      _env[ENV_LOSSLESS_LEGACY_AUTO_DETECT] = "";
+    };
+
+#ifdef _WIN32
+    const bool lossless_scaling_enabled = playnite_launcher::lossless::policy::should_enable_runtime(
+      _app.lossless_scaling_enabled,
+      _app.lossless_scaling_framegen
+    );
+#else
+    const bool lossless_scaling_enabled = _app.lossless_scaling_enabled || _app.lossless_scaling_framegen;
+#endif
+    _env["SUNSHINE_FRAME_GENERATION_PROVIDER"] =
+      _app.frame_generation_enabled ? _app.frame_generation_provider : "";
+
+    const bool using_lossless_provider = _app.lossless_scaling_framegen &&
+                                         boost::iequals(_app.frame_generation_provider, "lossless-scaling");
+    if (lossless_scaling_enabled) {
+      _env[ENV_LOSSLESS_ENABLED] = "1";
+      _env["SUNSHINE_LOSSLESS_SCALING_FRAMEGEN"] = _app.lossless_scaling_framegen ? "1" : "";
+      if (using_lossless_provider && effective_lossless_target) {
+        _env["SUNSHINE_LOSSLESS_SCALING_TARGET_FPS"] = std::to_string(*effective_lossless_target);
+      } else {
+        _env["SUNSHINE_LOSSLESS_SCALING_TARGET_FPS"] = "";
+      }
+      if (using_lossless_provider && effective_lossless_rtss) {
+        _env["SUNSHINE_LOSSLESS_SCALING_RTSS_LIMIT"] = std::to_string(*effective_lossless_rtss);
+      } else {
+        _env["SUNSHINE_LOSSLESS_SCALING_RTSS_LIMIT"] = "";
+      }
+
+      const bool wants_lossless_framegen = using_lossless_provider;
+      auto runtime = compute_lossless_runtime(_app, wants_lossless_framegen);
+      if (rtsp_stream::rtx_hdr_conversion_requested(*launch_session, config::video)) {
+        runtime.hdr_enabled = false;
+        BOOST_LOG(info) << "Lossless Scaling: disabling HDR support because RTX HDR conversion is active.";
+      }
+#ifdef _WIN32
+      bool has_launch_commands = !_app.cmd.empty() || !_app.detached.empty();
+      _lossless_should_start_support = has_launch_commands && _app.playnite_id.empty() && !_app.playnite_fullscreen;
+      if (_lossless_should_start_support) {
+        _lossless_metadata.enabled = true;
+        if (using_lossless_provider) {
+          _lossless_metadata.target_fps = effective_lossless_target;
+          _lossless_metadata.rtss_limit = effective_lossless_rtss;
+        } else {
+          _lossless_metadata.target_fps.reset();
+          _lossless_metadata.rtss_limit.reset();
+        }
+        if (resolved_lossless_exe_path) {
+          _lossless_metadata.configured_path = *resolved_lossless_exe_path;
+        } else if (auto configured_path = lossless_to_path(config::lossless_scaling.exe_path)) {
+          _lossless_metadata.configured_path = *configured_path;
+        }
+        _lossless_metadata.active_profile = runtime.profile;
+        _lossless_metadata.capture_api = runtime.capture_api;
+        _lossless_metadata.queue_target = runtime.queue_target;
+        _lossless_metadata.hdr_enabled = runtime.hdr_enabled;
+        _lossless_metadata.flow_scale = runtime.flow_scale;
+        _lossless_metadata.performance_mode = runtime.performance_mode;
+        _lossless_metadata.resolution_scale_factor = runtime.resolution_scale_factor;
+        _lossless_metadata.frame_generation_mode = runtime.frame_generation;
+        _lossless_metadata.lsfg3_mode = runtime.lsfg3_mode;
+        _lossless_metadata.scaling_type = runtime.scaling_type;
+        _lossless_metadata.sharpness = runtime.sharpness;
+        _lossless_metadata.ls1_sharpness = runtime.ls1_sharpness;
+        _lossless_metadata.anime4k_type = runtime.anime4k_type;
+        _lossless_metadata.anime4k_vrs = runtime.anime4k_vrs;
+        _lossless_metadata.launch_delay_seconds = _app.lossless_scaling_launch_delay_seconds;
+        _lossless_metadata.legacy_auto_detect = _app.lossless_scaling_legacy_auto_detect;
+      }
+#endif
+
+#ifdef _WIN32
+      std::optional<int> rtss_warmup_limit;
+      if (using_lossless_provider) {
+        if (effective_lossless_rtss && *effective_lossless_rtss > 0) {
+          rtss_warmup_limit = *effective_lossless_rtss;
+        }
+        const auto warmup_policy = rtsp_stream::make_framegen_stream_start_policy(
+          *launch_session,
+          rtss_warmup_limit,
+          config::video.capture,
+          platf::dxgi::should_use_wgc_default(),
+          config::frame_limiter.virtual_display_limiter_enabled(),
+          config::frame_limiter.fixed_virtual_display_refresh_multiplier(),
+          config::frame_limiter.fixed_virtual_display_refresh_millihz(launch_session->client_vrr_requested)
+        );
+        platf::frame_limiter_prepare_launch(warmup_policy);
+      }
+#endif
+
+      auto set_string = [&](const char *key, const std::optional<std::string> &value) {
+        if (value && !value->empty()) {
+          _env[key] = *value;
+        } else {
+          _env[key] = "";
+        }
+      };
+      auto set_int = [&](const char *key, const std::optional<int> &value) {
+        if (value.has_value()) {
+          _env[key] = std::to_string(*value);
+        } else {
+          _env[key] = "";
+        }
+      };
+      auto set_double = [&](const char *key, const std::optional<double> &value) {
+        if (value.has_value()) {
+          std::ostringstream stream;
+          stream.setf(std::ios::fixed);
+          stream << std::setprecision(2) << *value;
+          _env[key] = stream.str();
+        } else {
+          _env[key] = "";
+        }
+      };
+      auto set_bool = [&](const char *key, const std::optional<bool> &value) {
+        if (value.has_value()) {
+          _env[key] = *value ? "1" : "0";
+        } else {
+          _env[key] = "";
+        }
+      };
+
+      _env[ENV_LOSSLESS_PROFILE] = runtime.profile;
+      set_string(ENV_LOSSLESS_CAPTURE_API, runtime.capture_api);
+      set_int(ENV_LOSSLESS_QUEUE_TARGET, runtime.queue_target);
+      set_bool(ENV_LOSSLESS_HDR, runtime.hdr_enabled);
+      set_int(ENV_LOSSLESS_FLOW_SCALE, runtime.flow_scale);
+      set_bool(ENV_LOSSLESS_PERFORMANCE_MODE, runtime.performance_mode);
+      set_double(ENV_LOSSLESS_RESOLUTION, runtime.resolution_scale_factor);
+      set_string(ENV_LOSSLESS_FRAMEGEN_MODE, runtime.frame_generation);
+      set_string(ENV_LOSSLESS_LSFG3_MODE, runtime.lsfg3_mode);
+      set_string(ENV_LOSSLESS_SCALING_TYPE, runtime.scaling_type);
+      set_int(ENV_LOSSLESS_SHARPNESS, runtime.sharpness);
+      set_int(ENV_LOSSLESS_LS1_SHARPNESS, runtime.ls1_sharpness);
+      set_string(ENV_LOSSLESS_ANIME4K_TYPE, runtime.anime4k_type);
+      set_bool(ENV_LOSSLESS_ANIME4K_VRS, runtime.anime4k_vrs);
+      set_int(ENV_LOSSLESS_LAUNCH_DELAY, std::optional<int>(_app.lossless_scaling_launch_delay_seconds));
+      set_bool(ENV_LOSSLESS_LEGACY_AUTO_DETECT, std::optional<bool>(_app.lossless_scaling_legacy_auto_detect));
+    } else {
+      _env[ENV_LOSSLESS_ENABLED] = "";
+      _env["SUNSHINE_LOSSLESS_SCALING_FRAMEGEN"] = "";
+      _env["SUNSHINE_LOSSLESS_SCALING_TARGET_FPS"] = "";
+      _env["SUNSHINE_LOSSLESS_SCALING_RTSS_LIMIT"] = "";
+      clear_lossless_runtime_env();
+    }
+
+    if (!_app.output.empty() && _app.output != "null"sv) {
+#ifdef _WIN32
+      // fopen() interprets the filename as an ANSI string on Windows, so we must convert it
+      // to UTF-16 and use the wchar_t variants for proper Unicode log file path support.
+      auto woutput = utf_utils::from_utf8(_app.output);
+
+      // Use _SH_DENYNO to allow us to open this log file again for writing even if it is
+      // still open from a previous execution. This is required to handle the case of a
+      // detached process executing again while the previous process is still running.
+      _pipe.reset(_wfsopen(woutput.c_str(), L"a", _SH_DENYNO));
+#else
+      _pipe.reset(fopen(_app.output.c_str(), "a"));
+#endif
+    }
+
+#ifdef _WIN32
+    const auto requires_user_session = [&]() {
+      return !_app.prep_cmds.empty() ||
+             !_app.detached.empty() ||
+             !_app.cmd.empty() ||
+             !_app.playnite_id.empty() ||
+             _app.playnite_fullscreen;
+    };
+    const auto user_session_ready = [&]() {
+      HANDLE user_token = platf::dxgi::retrieve_users_token(false);
+      if (!user_token) {
+        return false;
+      }
+      CloseHandle(user_token);
+      return true;
+    };
+
+    if (platf::is_running_as_system() && requires_user_session() && !user_session_ready()) {
+      BOOST_LOG(info) << "No active user session; deferring app launch until sign-in.";
+      _deferred_launch = true;
+      return 0;
+    }
+#endif
+
+#ifdef __linux__
+    if (!_app.steam_id.empty() && !session_steam_direct_launch &&
+        (wayland_hdr_compatibility.enabled || config::input.proton_dualsense_compatibility)) {
+      // A Steam URI is only a handoff to its already-running daemon. Prepare
+      // the session-owned Proton hook before its launch commands run, or the
+      // daemon would spawn the game with its old environment.
+      platf::frame_limiter_streaming_start(
+        platf::frame_limiter_owner::application,
+        mangohud_stream_policy,
+        {.color_mode = source_hdr ? platf::proton_color_mode::hdr :
+                                    (launch_session->prefer_sdr_10bit ? platf::proton_color_mode::sdr10 : platf::proton_color_mode::sdr),
+         .wayland_hdr_compatibility = wayland_hdr_compatibility.enabled}
+      );
+      BOOST_LOG(debug) << "Global Proton compatibility hook prepared before the running Steam handoff.";
+    }
+#endif
+
+    return launch_app_commands(true, config_read_gate_held);
+  }
+
+  int proc_t::launch_app_commands(bool stream_lifecycle_lock_held, bool config_read_gate_held) {
+    std::error_code ec;
+    // Executed when returning from function
+    auto fg = util::fail_guard([&]() {
+      terminate(false, stream_lifecycle_lock_held, config_read_gate_held);
+    });
+
+#ifdef _WIN32
+    if (_app.dualsense_haptics) {
+      if (!_dualsense_usbip_session) {
+        _dualsense_usbip_session = platf::dualsense_usbip_gamepad::start_session();
+        if (!_dualsense_usbip_session) {
+          BOOST_LOG(error) << "DualSense waveform haptics requires the optional DualSense USB audio and haptics driver component. Modify the Windows installation to enable it.";
+          return -1;
+        }
+      }
+      // Input arrives after the application request, through the new RTSP
+      // session. Return a live deferred application while USB/HID/audio
+      // enumerate; waiting here would prevent the client from connecting.
+      if (!platf::dualsense_usbip_gamepad::has_ready_controller()) {
+        _dualsense_ready_deadline = std::chrono::steady_clock::now() + 30s;
+        _deferred_launch = true;
+        BOOST_LOG(info) << "Waiting for the streamed DualSense controller and its Windows haptic audio endpoint before launching '" << _app.name << "'.";
+        fg.disable();
+        return 0;
+      }
+    }
+    std::unordered_set<DWORD> lossless_baseline_pids;
+    bool lossless_monitor_started = false;
+    std::string lossless_install_dir_hint;
+#endif
+
+    for (; _app_prep_it != std::end(_app.prep_cmds); ++_app_prep_it) {
+      auto &cmd = *_app_prep_it;
+
+      // Skip empty commands
+      if (cmd.do_cmd.empty()) {
+        continue;
+      }
+
+      boost::filesystem::path working_dir = _app.working_dir.empty() ?
+                                              find_working_directory(cmd.do_cmd, _env) :
+                                              boost::filesystem::path(_app.working_dir);
+      BOOST_LOG(info) << "Executing Do Cmd: ["sv << cmd.do_cmd << ']';
+      auto child = platf::run_command(cmd.elevated, true, cmd.do_cmd, working_dir, _env, _pipe.get(), ec, nullptr);
+
+      if (ec) {
+        BOOST_LOG(error) << "Couldn't run ["sv << cmd.do_cmd << "]: System: "sv << ec.message();
+        // We don't want any prep commands failing launch of the desktop.
+        // This is to prevent the issue where users reboot their PC and need to log in with Sunshine.
+        // permission_denied is typically returned when the user impersonation fails, which can happen when user is not signed in yet.
+        if (!(_app.cmd.empty() && ec == std::errc::permission_denied)) {
+          return -1;
+        }
+      }
+
+      child.wait(ec);
+      if (ec) {
+        BOOST_LOG(error) << '[' << cmd.do_cmd << "] wait failed with error code ["sv << ec << ']';
+        return -1;
+      }
+      auto ret = child.exit_code();
+      if (ret != 0) {
+        BOOST_LOG(error) << '[' << cmd.do_cmd << "] exited with code ["sv << ret << ']';
+        return -1;
+      }
+    }
+
+    for (auto &cmd : _app.detached) {
+      boost::filesystem::path working_dir = _app.working_dir.empty() ?
+                                              find_working_directory(cmd, _env) :
+                                              boost::filesystem::path(_app.working_dir);
+#ifdef _WIN32
+      if (_lossless_should_start_support && !lossless_monitor_started && lossless_baseline_pids.empty()) {
+        lossless_baseline_pids = capture_process_baseline_for_lossless();
+      }
+      if (_lossless_should_start_support && !lossless_monitor_started && lossless_install_dir_hint.empty()) {
+        try {
+          lossless_install_dir_hint = platf::dxgi::wide_to_utf8(working_dir.wstring());
+        } catch (...) {
+          lossless_install_dir_hint.clear();
+        }
+      }
+#endif
+      BOOST_LOG(info) << "Spawning ["sv << cmd << "] in ["sv << working_dir << ']';
+      auto child = platf::run_command(_app.elevated, true, cmd, working_dir, _env, _pipe.get(), ec, nullptr);
+#ifdef _WIN32
+      DWORD detached_pid = 0;
+      if (!ec) {
+        try {
+          detached_pid = static_cast<DWORD>(child.id());
+        } catch (...) {
+          detached_pid = 0;
+        }
+      }
+#endif
+      if (ec) {
+        BOOST_LOG(warning) << "Couldn't spawn ["sv << cmd << "]: System: "sv << ec.message();
+      } else {
+        child.detach();
+#ifdef _WIN32
+        if (_lossless_should_start_support && !lossless_monitor_started) {
+          if (lossless_baseline_pids.empty()) {
+            lossless_baseline_pids = capture_process_baseline_for_lossless();
+          }
+          start_lossless_scaling_support(std::move(lossless_baseline_pids), _lossless_metadata, std::move(lossless_install_dir_hint), detached_pid);
+          lossless_monitor_started = true;
+        }
+#endif
+      }
+    }
+
+    // Playnite-backed apps: invoke via Playnite and treat as placebo (lifetime managed via Playnite status)
+#ifdef _WIN32
+    if (!_app.playnite_id.empty() && _app.cmd.empty()) {
+      // Auto-update Playnite plugin if an update is available
+      try {
+        std::string installed_ver, packaged_ver;
+        bool have_installed = platf::playnite::get_installed_plugin_version(installed_ver);
+        bool have_packaged = platf::playnite::get_packaged_plugin_version(packaged_ver);
+
+        if (have_installed && have_packaged) {
+          // Simple version comparison: compare as strings (works for semantic versioning)
+          auto normalize_ver = [](std::string s) -> std::string {
+            // Strip leading 'v' if present
+            if (!s.empty() && (s[0] == 'v' || s[0] == 'V')) {
+              s = s.substr(1);
+            }
+            // Remove whitespace
+            s.erase(std::remove_if(s.begin(), s.end(), ::isspace), s.end());
+            return s;
+          };
+
+          std::string installed_normalized = normalize_ver(installed_ver);
+          std::string packaged_normalized = normalize_ver(packaged_ver);
+
+          if (installed_normalized < packaged_normalized) {
+            BOOST_LOG(info) << "Playnite plugin update available (" << installed_ver
+                            << " -> " << packaged_ver << "), auto-updating before launch";
+            std::string install_error;
+            if (platf::playnite::install_plugin(install_error, true)) {
+              BOOST_LOG(info) << "Playnite plugin auto-update succeeded";
+            } else {
+              BOOST_LOG(warning) << "Playnite plugin auto-update failed: " << install_error
+                                 << " (continuing with game launch)";
+            }
+          }
+        }
+      } catch (const std::exception &e) {
+        BOOST_LOG(warning) << "Exception during Playnite plugin auto-update check: " << e.what()
+                           << " (continuing with game launch)";
+      } catch (...) {
+        BOOST_LOG(warning) << "Unknown exception during Playnite plugin auto-update check (continuing with game launch)";
+      }
+
+      BOOST_LOG(info) << "Launching Playnite game via helper, id=" << _app.playnite_id;
+      _env["SUNSHINE_PLAYNITE_INSTALL_DIR"] = config::playnite.install_dir;
+      bool launched = false;
+      // Resolve launcher alongside sunshine.exe: tools\\playnite-launcher.exe
+      try {
+        WCHAR exePathW[MAX_PATH] = {};
+        GetModuleFileNameW(nullptr, exePathW, ARRAYSIZE(exePathW));
+        std::filesystem::path exeDir = std::filesystem::path(exePathW).parent_path();
+        std::filesystem::path launcher = exeDir / L"tools" / L"playnite-launcher.exe";
+        std::string lpath = launcher.string();
+        std::string cmd = std::string("\"") + lpath + "\" --game-id " + _app.playnite_id;
+        // Pass graceful-exit timeout to launcher for cleanup behavior
+        try {
+          int exit_to = (int) std::max<std::int64_t>(0, _app.exit_timeout.count());
+          if (exit_to > 0) {
+            cmd += std::string(" --exit-timeout ") + std::to_string(exit_to);
+          }
+        } catch (...) {}
+        // Pass focus attempts from config so the helper can try to bring Playnite/game to foreground
+        cmd += managed_app_focus::launcher_arguments(managed_app_focus::settings);
+        std::error_code fec;
+        boost::filesystem::path wd;  // empty wd
+        _process = platf::run_command(false, true, cmd, wd, _env, _pipe.get(), fec, &_process_group);
+        if (fec) {
+          BOOST_LOG(warning) << "Playnite helper launch failed: "sv << fec.message() << "; attempting URI fallback"sv;
+        } else {
+          BOOST_LOG(info) << "Playnite helper launched and is being monitored";
+          try {
+            auto pid = static_cast<uint32_t>(_process.id());
+            if (!platf::playnite::announce_launcher(pid, _app.playnite_id)) {
+              BOOST_LOG(debug) << "Playnite helper: announce_launcher reported inactive IPC";
+            }
+          } catch (...) {
+          }
+          launched = true;
+        }
+      } catch (...) {
+        launched = false;
+      }
+      if (!launched) {
+        // Best-effort fallback using Playnite URI protocol
+        std::string uri = std::string("playnite://playnite/start/") + _app.playnite_id;
+        std::error_code fec;
+        boost::filesystem::path wd;  // empty working dir as lvalue
+        auto child = platf::run_command(false, true, std::string("cmd /c start \"\" \"") + uri + "\"", wd, _env, _pipe.get(), fec, nullptr);
+        if (fec) {
+          BOOST_LOG(warning) << "Playnite URI launch failed: "sv << fec.message();
+        } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
+          child.detach();
+          launched = true;
+        }
+      }
+      if (!launched) {
+        BOOST_LOG(error) << "Failed to launch Playnite game."sv;
+        return -1;
+      }
+      // Start Playnite IPC client to receive game events (gameStopped, etc.)
+      platf::playnite::start_client_for_session();
+      // Track the helper process; when it exits, Sunshine will terminate the stream automatically
+      placebo = false;
+    } else
+#endif
+#ifdef _WIN32
+      if (_app.playnite_fullscreen) {
+      BOOST_LOG(info) << "Launching Playnite in fullscreen via helper";
+      _env["SUNSHINE_PLAYNITE_INSTALL_DIR"] = config::playnite.install_dir;
+      bool launched = false;
+      try {
+        WCHAR exePathW[MAX_PATH] = {};
+        GetModuleFileNameW(nullptr, exePathW, ARRAYSIZE(exePathW));
+        std::filesystem::path exeDir = std::filesystem::path(exePathW).parent_path();
+        std::filesystem::path launcher = exeDir / L"tools" / L"playnite-launcher.exe";
+        std::string lpath = launcher.string();
+        std::string cmd = std::string("\"") + lpath + "\" --fullscreen";
+        cmd += managed_app_focus::launcher_arguments(managed_app_focus::settings);
+        std::error_code fec;
+        boost::filesystem::path wd;  // empty wd
+        _process = platf::run_command(false, true, cmd, wd, _env, _pipe.get(), fec, &_process_group);
+        if (fec) {
+          BOOST_LOG(warning) << "Playnite fullscreen helper launch failed: "sv << fec.message();
+        } else {
+          BOOST_LOG(info) << "Playnite fullscreen helper launched";
+          try {
+            auto pid = static_cast<uint32_t>(_process.id());
+            if (!platf::playnite::announce_launcher(pid, std::string())) {
+              BOOST_LOG(debug) << "Playnite helper (fullscreen): announce_launcher reported inactive IPC";
+            }
+          } catch (...) {
+          }
+          launched = true;
+        }
+      } catch (...) {
+        launched = false;
+      }
+      if (!launched) {
+        BOOST_LOG(error) << "Failed to launch Playnite fullscreen."sv;
+        return -1;
+      }
+      // Start Playnite IPC client to receive game events (gameStopped, etc.)
+      platf::playnite::start_client_for_session();
+      placebo = false;
+    } else
+#endif
+      if (_app.cmd.empty()) {
+      BOOST_LOG(info) << "Executing [Desktop]"sv;
+      BOOST_LOG(info) << "Playnite launch path complete; treating app as placebo (status-driven).";
+      placebo = true;
+    } else {
+      boost::filesystem::path working_dir = _app.working_dir.empty() ?
+                                              find_working_directory(_app.cmd, _env) :
+                                              boost::filesystem::path(_app.working_dir);
+#ifdef _WIN32
+      if (_lossless_should_start_support && !lossless_monitor_started && lossless_baseline_pids.empty()) {
+        lossless_baseline_pids = capture_process_baseline_for_lossless();
+      }
+      if (_lossless_should_start_support && !lossless_monitor_started && lossless_install_dir_hint.empty()) {
+        try {
+          lossless_install_dir_hint = platf::dxgi::wide_to_utf8(working_dir.wstring());
+        } catch (...) {
+          lossless_install_dir_hint.clear();
+        }
+      }
+#endif
+      // Steam's xdg-open/cmd URI launcher is intentionally short-lived. Take
+      // the process baseline immediately before handing the URI to Steam so
+      // the game can be owned independently of that launcher process.
+      const auto provider_id = !_app.steam_id.empty() ? _app.steam_id : _app.lutris_id;
+      const auto provider_name = !_app.steam_id.empty() ? "Steam" : "Lutris";
+      const auto provider_directory = !_app.steam_install_dir.empty() ? _app.steam_install_dir : _app.lutris_directory;
+      if (!provider_id.empty() && !provider_directory.empty()) {
+        _steam_tracker.clear();
+        _steam_tracking_active = _steam_tracker.begin(provider_directory);
+        _steam_tracking_associated = false;
+        _steam_tracking_deadline = std::chrono::steady_clock::now() + 15s;
+        _steam_last_tracking_poll = {};
+        if (!_steam_tracking_active) {
+          BOOST_LOG(warning) << provider_name << " app " << provider_id
+                             << " could not capture a process baseline; continuing with untrackable detached behavior.";
+        } else {
+          BOOST_LOG(debug) << provider_name << " app " << provider_id
+                           << " process baseline captured for install directory ["
+                           << provider_directory << "]";
+        }
+      }
+      BOOST_LOG(info) << "Executing: ["sv << _app.cmd << "] in ["sv << working_dir << ']';
+      std::string launch_command = _app.cmd;
+      _process = platf::run_command(_app.elevated, true, launch_command, working_dir, _env, _pipe.get(), ec, &_process_group);
+      if (ec) {
+        BOOST_LOG(warning) << "Couldn't run ["sv << _app.cmd << "]: System: "sv << ec.message();
+        return -1;
+      }
+    }
+
+#ifdef _WIN32
+    if (_lossless_should_start_support && !lossless_monitor_started) {
+      if (lossless_baseline_pids.empty()) {
+        lossless_baseline_pids = capture_process_baseline_for_lossless();
+      }
+      if (lossless_install_dir_hint.empty() && !_app.working_dir.empty()) {
+        lossless_install_dir_hint = _app.working_dir;
+      }
+      if (lossless_baseline_pids.empty()) {
+        // still proceed; detection handles empty baseline
+      }
+      DWORD candidate_pid = 0;
+      if (_process) {
+        try {
+          candidate_pid = static_cast<DWORD>(_process.id());
+        } catch (...) {
+          candidate_pid = 0;
+        }
+      }
+      start_lossless_scaling_support(std::move(lossless_baseline_pids), _lossless_metadata, std::move(lossless_install_dir_hint), candidate_pid);
+      lossless_monitor_started = true;
+    }
+#endif
+
+    if (_app.playnite_id.empty() && (!_app.steam_id.empty() || !_app.lutris_id.empty())) {
+      const bool steam = !_app.steam_id.empty();
+      _app_focus = managed_app_focus::start({steam ? "steam" : "lutris",
+        steam ? _app.steam_id : _app.lutris_id,
+        steam ? _app.steam_install_dir : _app.lutris_directory}, managed_app_focus::settings);
+    }
+
+    _app_launch_time = std::chrono::steady_clock::now();
+
+    fg.disable();
+
+    return 0;
+  }
+
+  int proc_t::running() {
+    host_stream_control::activity_guard_t activity;
+    if (!activity) return current_app_id();
+#ifndef _WIN32
+    // Detached launchers still need collecting, but other children retain
+    // their own wait status (Boost, provider scans and GLib helpers).
+    auto reaper = util::fail_guard([]() {
+      bp::child::reap_detached();
+    });
+#endif
+
+#ifdef _WIN32
+    if (_deferred_launch) {
+      // Discovery and the control thread can observe readiness together.
+      // Admit exactly one launch/cleanup owner without blocking discovery
+      // behind another stream lifecycle operation.
+      std::unique_lock deferred_lock {nvhttp::stream_lifecycle_mutex(), std::try_to_lock};
+      if (!deferred_lock.owns_lock() || !_deferred_launch) {
+        return _app_id;
+      }
+      if (platf::is_running_as_system()) {
+        HANDLE user_token = platf::dxgi::retrieve_users_token(false);
+        if (!user_token) {
+          return _app_id;
+        }
+        CloseHandle(user_token);
+      }
+      const bool waiting_for_controller = static_cast<bool>(_dualsense_usbip_session);
+      const auto readiness = dualsense_launch::evaluate(
+        waiting_for_controller,
+        waiting_for_controller && platf::dualsense_usbip_gamepad::has_ready_controller(),
+        _dualsense_ready_deadline,
+        std::chrono::steady_clock::now()
+      );
+      if (readiness == dualsense_launch::decision::wait) {
+        return _app_id;
+      }
+      if (readiness == dualsense_launch::decision::timed_out) {
+        BOOST_LOG(error) << "DualSense launch timed out waiting for the streamed controller and its Windows haptic audio endpoint. Check the optional driver installation and use a compatible Moonlight client with a waveform-capable DualSense.";
+        terminate(false, true);
+        return 0;
+      }
+      std::optional<int> rtss_warmup_limit;
+      if (_lossless_metadata.enabled && _lossless_metadata.rtss_limit && *_lossless_metadata.rtss_limit > 0) {
+        rtss_warmup_limit = *_lossless_metadata.rtss_limit;
+      }
+      const bool wants_frame_limit = config::frame_limiter.enable ||
+                                     _app.frame_generation_enabled ||
+                                     _app.gen1_framegen_fix ||
+                                     _app.gen2_framegen_fix ||
+                                     (rtss_warmup_limit && *rtss_warmup_limit > 0);
+      if (wants_frame_limit) {
+        bool warmup_uses_virtual =
+          _app.virtual_screen ||
+          config::video.virtual_display_mode != config::video_t::virtual_display_mode_e::disabled;
+        if (_app.virtual_display_mode_override) {
+          warmup_uses_virtual = *_app.virtual_display_mode_override != config::video_t::virtual_display_mode_e::disabled;
+        }
+        if (_app.output_name_override && !_app.output_name_override->empty() && !VDISPLAY::is_virtual_display_selection(*_app.output_name_override)) {
+          warmup_uses_virtual = false;
+        }
+        const auto warmup_policy = framegen::make_stream_start_policy({
+          .fps = 0,
+          .frame_generation_enabled = _app.frame_generation_enabled,
+          .gen1_framegen_fix = _app.gen1_framegen_fix,
+          .gen2_framegen_fix = _app.gen2_framegen_fix,
+          .lossless_scaling_framegen = _app.lossless_scaling_framegen,
+          .lossless_rtss_limit = rtss_warmup_limit,
+          .frame_generation_provider = _app.frame_generation_provider,
+          .uses_virtual_display = warmup_uses_virtual,
+          .capture_mode = config::video.capture,
+          .auto_capture_uses_wgc = platf::dxgi::should_use_wgc_default(),
+          .auto_virtual_framegen_limiter = config::frame_limiter.virtual_display_limiter_enabled(),
+          .virtual_display_refresh_multiplier = config::frame_limiter.fixed_virtual_display_refresh_multiplier(),
+          .virtual_display_fixed_refresh_millihz = config::frame_limiter.fixed_virtual_display_refresh_millihz(),
+        });
+        platf::frame_limiter_prepare_launch(warmup_policy);
+        const bool provider_auto = config::frame_limiter.provider.empty() ||
+                                   boost::iequals(config::frame_limiter.provider, "auto");
+        const bool provider_rtss = boost::iequals(config::frame_limiter.provider, "rtss");
+        const bool should_wait_rtss = platf::rtss_is_configured() && (provider_auto || provider_rtss || _app.frame_generation_enabled || _app.gen1_framegen_fix || _app.gen2_framegen_fix);
+        if (should_wait_rtss) {
+          const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+          bool running = false;
+          while (std::chrono::steady_clock::now() < deadline) {
+            if (platf::rtss_get_status().process_running) {
+              running = true;
+              break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          }
+          BOOST_LOG(info) << "RTSS warmup " << (running ? "complete" : "timeout") << " after deferred login.";
+        }
+      }
+      BOOST_LOG(info) << "Deferred launch is ready; starting app '" << _app.name << "'.";
+      _deferred_launch = false;
+      int err = launch_app_commands(true);
+      if (err != 0) {
+        BOOST_LOG(error) << "Deferred launch failed; terminating session.";
+        return 0;
+      }
+      // A login-deferred launch may now be waiting for the first controller.
+      if (_deferred_launch) {
+        return _app_id;
+      }
+    }
+#endif
+
+    if (_steam_tracking_active) {
+      const auto now = std::chrono::steady_clock::now();
+      constexpr auto tracking_poll_interval = 100ms;
+      if (_steam_last_tracking_poll.time_since_epoch().count() == 0 || now - _steam_last_tracking_poll >= tracking_poll_interval) {
+        _steam_last_tracking_poll = now;
+        const auto tracking = _steam_tracker.finish();
+        if (tracking.associated()) {
+          if (!_steam_tracking_associated) {
+            const auto provider_name = !_app.steam_id.empty() ? "Steam" : "Lutris";
+            const auto provider_id = !_app.steam_id.empty() ? _app.steam_id : _app.lutris_id;
+            BOOST_LOG(info) << provider_name << " app " << provider_id
+                            << " associated with " << tracking.tree.processes.size()
+                            << " tracked process(es).";
+          }
+          _steam_tracking_associated = true;
+          placebo = false;
+        } else if (_steam_tracking_associated && tracking.reason.find("unavailable") == std::string::npos) {
+          // A complete snapshot with no retained PID means the tracked game
+          // tree has exited. Let the normal cleanup path run below.
+          _steam_tracking_associated = false;
+          _steam_tracking_active = false;
+        }
+      }
+
+      if (_steam_tracking_associated) {
+        return _app_id;
+      }
+      if (now < _steam_tracking_deadline) {
+        // Keep the stream alive while Steam is still starting the game. This
+        // preserves the existing detached/placebo behavior if association
+        // eventually fails, without turning polling into a blocking wait.
+        return _app_id;
+      }
+
+      BOOST_LOG(warning) << "Steam app " << _app.steam_id
+                         << " process tree remained untrackable after the 15 second launch window;"
+                            " retaining detached streaming behavior.";
+      _steam_tracking_active = false;
+      placebo = true;
+      return _app_id;
+    }
+
+    if (placebo) {
+      return _app_id;
+    } else if (_process.running()) {
+      // Checking the owned child is cheap and collects its exact exit status.
+      // Only inspect the rest of the group after this child has exited.
+      return _app_id;
+    } else if (_app.wait_all && _process_group && platf::process_group_running((std::uintptr_t) _process_group.native_handle())) {
+      // A launcher may exit before the game processes in its group.
+      return _app_id;
+    } else if (_app.auto_detach && _process.native_exit_code() == 0 && std::chrono::steady_clock::now() - _app_launch_time < 5s) {
+      BOOST_LOG(info) << "App exited gracefully within 5 seconds of launch. Treating the app as a detached command."sv;
+      BOOST_LOG(info) << "Adjust this behavior in the Applications tab or apps.json if this is not what you want."sv;
+      BOOST_LOG(info) << "Playnite launch path complete; treating app as placebo (status-driven).";
+      placebo = true;
+      return _app_id;
+    }
+
+    // Perform cleanup actions now if needed
+    if (_process) {
+      std::unique_lock<std::mutex> stream_lifecycle_lock {nvhttp::stream_lifecycle_mutex(), std::try_to_lock};
+      if (!stream_lifecycle_lock.owns_lock()) {
+        // Teardown is already in flight on another thread. Blocking here
+        // parks the caller - including the single serverinfo worker, which
+        // made the host undiscoverable for the whole teardown tail
+        // (vibepollo#326). The gate owner performs the cleanup; report
+        // not-running without waiting on it.
+        BOOST_LOG(debug) << "[running] App exited but stream teardown is already in flight; deferring cleanup to the gate owner.";
+        return 0;
+      }
+      BOOST_LOG(info) << "[running] _process.running() is false; calling terminate(). App exited with code ["sv << _process.native_exit_code() << "] for app '" << _app.name << "' (id=" << _app_id << ")";
+      terminate(false, true);
+    }
+
+    return 0;
+  }
+
+  int proc_t::current_app_id() const {
+    return _app_id.load(std::memory_order_acquire);
+  }
+
+  bool proc_t::foreground_window_matches_running_app() {
+#ifdef _WIN32
+    if (!has_trackable_running_app()) {
+      return false;
+    }
+
+    const auto foreground_pid = foreground_window_process_id();
+    if (!foreground_pid) {
+      return false;
+    }
+
+    try {
+      if (_process && static_cast<DWORD>(_process.id()) == *foreground_pid) {
+        return true;
+      }
+    } catch (...) {
+    }
+
+    try {
+      return process_group_contains_pid(_process_group, *foreground_pid);
+    } catch (...) {
+      return false;
+    }
+#else
+    return false;
+#endif
+  }
+
+#ifdef _WIN32
+  bool proc_t::running_app_contains_pid(uint32_t pid) {
+    if (!has_trackable_running_app() || pid == 0) {
+      return false;
+    }
+
+    const auto win_pid = static_cast<DWORD>(pid);
+    try {
+      if (_process && static_cast<DWORD>(_process.id()) == win_pid) {
+        return true;
+      }
+    } catch (...) {
+    }
+
+    try {
+      return process_group_contains_pid(_process_group, win_pid);
+    } catch (...) {
+      return false;
+    }
+  }
+
+  running_app_state_t proc_t::running_app_state() const {
+    running_app_state_t state;
+    state.has_active_app = _app_id > 0;
+    if (!state.has_active_app) {
+      return state;
+    }
+
+    state.trackable = !placebo && (_process || _process_group);
+    state.uses_playnite = !_app.playnite_id.empty();
+    state.playnite_id = _app.playnite_id;
+    state.name = _app.name;
+    state.command = _app.cmd;
+    state.working_dir = _app.working_dir;
+
+    try {
+      if (_process) {
+        state.root_pid = static_cast<uint32_t>(_process.id());
+      }
+    } catch (...) {
+      state.root_pid = 0;
+    }
+
+    return state;
+  }
+#endif
+
+  bool proc_t::has_trackable_running_app() const {
+#ifdef _WIN32
+    return _app_id > 0 && !placebo && (_process || _process_group);
+#else
+    return _app_id > 0 && !placebo && (_steam_tracking_associated || static_cast<bool>(_process));
+#endif
+  }
+
+  void proc_t::terminate(
+    bool skip_display_revert,
+    bool stream_lifecycle_lock_held,
+    bool config_read_gate_held
+  ) {
+    host_stream_control::activity_guard_t activity;
+    if (!activity) return;
+#ifdef __linux__
+    // This owner represents a running-Steam handoff. Dropping it when the
+    // app ends also prevents a later SDR launch from retaining HDR policy.
+    platf::frame_limiter_streaming_stop(platf::frame_limiter_owner::application);
+#endif
+    std::unique_lock<std::mutex> stream_lifecycle_lock;
+    if (!stream_lifecycle_lock_held) {
+      stream_lifecycle_lock =
+        std::unique_lock<std::mutex> {nvhttp::stream_lifecycle_mutex()};
+    }
+
+    // Stop launch-time focus work before tearing down the application.
+    _app_focus.reset();
+
+    // Mark termination before process teardown so a concurrent final audio
+    // owner restores directly instead of retaining state for the ended app.
+    audio::app_termination_requested();
+
+    // App termination can remove a display directly and can continue through
+    // process, undo-command, helper, watchdog, and deferred-config cleanup.
+    // Keep HTTP encoder probing out of that entire tail.
+    stream::session::cleanup_reservation_t cleanup_reservation;
+
+    std::error_code ec;
+    const bool had_active_app = _app_id > 0;
+#ifdef __linux__
+    if (!_app.steam_id.empty()) {
+      platf::mangohud::remove_state(_app.steam_id);
+    }
+#endif
+    placebo = false;
+    std::chrono::seconds remaining_timeout = _app.exit_timeout;
+#ifdef _WIN32
+    _dualsense_usbip_session.reset();
+    _dualsense_ready_deadline = {};
+    _env["VIBESHINE_DUALSENSE_HAPTICS_MAPPING"] = "";
+    _env["VIBESHINE_DUALSENSE_HAPTICS_DLL"] = "";
+    _deferred_launch = false;
+    _lossless_should_start_support = false;
+    stop_lossless_scaling_support();
+#endif
+    // For Playnite-managed apps, request a graceful stop via Playnite first
+#ifdef _WIN32
+    if (had_active_app && !_app.playnite_id.empty()) {
+      bool should_request_playnite_stop = true;
+      try {
+        if (_process && !_process.running() && _process.native_exit_code() == 0) {
+          // The launcher already exited cleanly (typically after receiving gameStopped).
+          // Avoid sending a redundant stop command that can race into the next launch.
+          should_request_playnite_stop = false;
+          BOOST_LOG(debug) << "Playnite: launcher exited cleanly; skipping redundant stop request";
+        }
+      } catch (...) {}
+      try {
+        if (should_request_playnite_stop) {
+          // Ask Playnite to stop the game; then wait up to exit-timeout to let it close.
+          platf::playnite::stop_game(_app.playnite_id);
+          while (remaining_timeout.count() > 0 && _process_group && platf::process_group_running((std::uintptr_t) _process_group.native_handle())) {
+            std::this_thread::sleep_for(1s);
+            remaining_timeout -= 1s;
+          }
+        }
+      } catch (...) {}
+      // Stop the IPC client since the Playnite session is ending
+      platf::playnite::stop_client_for_session();
+    } else if (had_active_app && _app.playnite_fullscreen) {
+      // For fullscreen mode, also stop the IPC client
+      platf::playnite::stop_client_for_session();
+    }
+#endif
+    // Provider URI launchers are not the game process and their process group
+    // does not own the Proton/Wine tree. Stop only identities retained by the
+    // tracker; Steam/Lutris client and runtime PIDs are never inserted.
+    if (!_steam_tracker.tree().empty()) {
+      if (!_steam_process_controller) {
+        _steam_process_controller = platf::steam::lifecycle::native_process_controller();
+      }
+      platf::steam::lifecycle::stop_options steam_stop_options;
+      steam_stop_options.grace_period = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::max(remaining_timeout, 0s)
+      );
+      const auto stopped = platf::steam::lifecycle::stop_tree(
+        _steam_tracker.tree(),
+        *_steam_process_controller,
+        steam_stop_options
+      );
+      const auto provider_name = !_app.steam_id.empty() ? "Steam" : "Lutris";
+      BOOST_LOG(info) << provider_name << " tracked tree termination requested: TERM=" << stopped.terminate_sent
+                      << ", KILL=" << stopped.kill_sent << ", skipped=" << stopped.skipped
+                      << ", complete=" << (stopped.complete ? "yes" : "no");
+      // The app timeout has been consumed by the Steam-owned tree. The URI
+      // launcher/group cleanup below remains best effort and must not extend
+      // the configured Steam app timeout a second time.
+      remaining_timeout = 0s;
+    }
+    _steam_tracker.clear();
+    _steam_tracking_active = false;
+    _steam_tracking_associated = false;
+    _steam_tracking_deadline = {};
+    _steam_last_tracking_poll = {};
+
+    // Regardless, ensure process group is terminated (graceful then forceful with remaining timeout)
+    terminate_process_group(_process, _process_group, remaining_timeout);
+    _process = bp::child();
+    _process_group = bp::group();
+
+    const bool has_run = had_active_app;
+    const bool should_dispatch_revert = has_run && !proc::proc.get_last_run_app_name().empty();
+    const auto undo_timeout = std::max(_app.exit_timeout, std::chrono::seconds(15));
+    const auto shutdown_event = mail::man ? mail::man->event<bool>(mail::shutdown) : nullptr;
+
+    for (; _app_prep_it != _app_prep_begin; --_app_prep_it) {
+      auto &cmd = *(_app_prep_it - 1);
+
+      if (cmd.undo_cmd.empty()) {
+        continue;
+      }
+
+      boost::filesystem::path working_dir = _app.working_dir.empty() ?
+                                              find_working_directory(cmd.undo_cmd, _env) :
+                                              boost::filesystem::path(_app.working_dir);
+      BOOST_LOG(info) << "Executing Undo Cmd: ["sv << cmd.undo_cmd << ']';
+      auto child = platf::run_command(cmd.elevated, true, cmd.undo_cmd, working_dir, _env, _pipe.get(), ec, nullptr);
+
+      if (ec) {
+        BOOST_LOG(warning) << "System: "sv << ec.message();
+        ec.clear();
+        continue;
+      }
+
+      const auto deadline = std::chrono::steady_clock::now() + undo_timeout;
+      // Undo commands still run during shutdown, but their normal app-stop
+      // timeout can outlast the process shutdown watchdog. Leave a running
+      // command independent so display/audio teardown can finish in time.
+      while (child.running() && !(shutdown_event && shutdown_event->peek()) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(100ms);
+      }
+
+      if (child.running()) {
+        if (shutdown_event && shutdown_event->peek()) {
+          BOOST_LOG(info) << "Process shutdown requested; continuing teardown without waiting for undo command completion.";
+        } else {
+          BOOST_LOG(warning) << "Undo command timed out after " << undo_timeout.count()
+                             << " seconds; continuing teardown without waiting for completion.";
+        }
+        try {
+          child.detach();
+        } catch (...) {
+        }
+        continue;
+      }
+
+      child.wait(ec);
+      if (ec) {
+        BOOST_LOG(warning) << '[' << cmd.undo_cmd << "] wait failed with error code ["sv << ec << ']';
+        ec.clear();
+        continue;
+      }
+      auto ret = child.exit_code();
+
+      if (ret != 0) {
+        BOOST_LOG(warning) << "Return code ["sv << ret << ']';
+      }
+    }
+
+    _pipe.reset();
+
+#if defined(_WIN32) || defined(__linux__)
+    // End the app's role; the coordinator keeps its display while capture
+    // references are draining or a Remote Monitor still owns the identity.
+    if (!_active_client_uuid.empty() && _active_client_vdd_identity_token != 0) {
+      remote_display_topology::instance().release_normal_game_identity(
+        _active_client_uuid,
+        _active_client_vdd_identity_token
+      );
+    }
+#endif
+
+    // A draining normal capture or retained Remote Monitor keeps cleanup and
+    // REVERT pending until the final capture reference has been released.
+    const bool other_streaming_session_active =
+      stream::session::has_shared_runtime_owner();
+
+#ifdef _WIN32
+    if (_virtual_display_active) {
+      if (!other_streaming_session_active) {
+        const auto cleanup = platf::virtual_display_cleanup::run("app_termination", false);
+        if (!cleanup.virtual_displays_removed) {
+          BOOST_LOG(warning) << "Failed to remove virtual display after app termination.";
+        } else {
+          BOOST_LOG(info) << "Virtual display cleanup completed after app termination.";
+        }
+      } else {
+        BOOST_LOG(info) << "Deferring virtual display removal after app termination because shared stream runtime is still owned.";
+      }
+      std::memset(&_virtual_display_guid, 0, sizeof(_virtual_display_guid));
+      _virtual_display_active = false;
+    }
+#endif
+
+    // Only show the Stopped notification if we actually have an app to stop
+    // Since terminate() is always run when a new app has started
+    if (should_dispatch_revert) {
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+      system_tray::update_tray_stopped(proc::proc.get_last_run_app_name());
+#endif
+    }
+
+    if (should_dispatch_revert && skip_display_revert) {
+#ifdef _WIN32
+      clear_deferred_display_revert();
+      BOOST_LOG(info) << "Skipping display revert during app replacement because the new session owns startup display setup.";
+#endif
+    } else if (should_dispatch_revert && !other_streaming_session_active) {
+#ifdef _WIN32
+      clear_deferred_display_revert();
+      const bool reverted = display_helper_integration::revert();
+      if (reverted && rtsp_stream::session_count_no_cleanup() == 0) {
+        BOOST_LOG(debug) << "Display helper: stopping watchdog after app termination.";
+        display_helper_integration::stop_watchdog();
+      }
+#elif defined(__linux__)
+      platf::linux_display::backend().cancel_scheduled_revert();
+      if (config::video.dd.config_revert_delay.count() > 0) {
+        platf::linux_display::backend().schedule_revert(
+          config::video.dd.config_revert_delay,
+          "app-end delay"
+        );
+      } else {
+        (void) display_helper_integration::revert();
+      }
+#endif
+    } else if (should_dispatch_revert && other_streaming_session_active) {
+#ifdef _WIN32
+      defer_display_revert();
+#endif
+      BOOST_LOG(info) << "Deferring display revert after app termination because another streaming session is still active.";
+    }
+
+    _active_client_uuid.clear();
+    _active_client_vdd_identity_token = 0;
+    _app_launch_time = {};
+    _app_id = -1;
+#ifdef _WIN32
+    platf::dualsense_usbip_gamepad::set_application_active(false);
+#endif
+
+    // Clear any per-app runtime config overrides now that the app is terminating.
+    // If we can safely hot-apply immediately, restore global config now; otherwise defer.
+    if (has_run) {
+      config::clear_runtime_config_overrides();
+      // A failed launch can reach this tail while its caller still holds the
+      // configuration read gate. Applying here would deadlock on the write
+      // gate and retain the lifecycle mutex, blocking every subsequent launch.
+      // The caller restores config after releasing its read gate on failure;
+      // otherwise the deferred reload waits for the next idle transition.
+      if (!other_streaming_session_active && !config_read_gate_held) {
+        config::apply_config_now();
+      } else {
+        config::mark_deferred_reload();
+      }
+    }
+  }
+
+  active_session_guard_t proc_t::active_session_guard() const {
+    std::scoped_lock lk(_apps_mutex);
+    active_session_guard_t guard;
+    guard.has_active_app = _app_id > 0;
+    guard.playnite_id = guard.has_active_app ? _app.playnite_id : std::string();
+    guard.uses_playnite = guard.has_active_app && !_app.playnite_id.empty();
+    guard.client_uuid = guard.has_active_app ? _active_client_uuid : std::string();
+    guard.normal_vdd_identity_token = guard.has_active_app ? _active_client_vdd_identity_token : 0;
+    guard.launch_started_at = _app_launch_time;
+    return guard;
+  }
+
+  std::vector<ctx_t> proc_t::get_apps() const {
+    std::scoped_lock lk(_apps_mutex);
+    return _apps;
+  }
+
+  // Gets application image from application list.
+  // Returns image from assets directory if found there.
+  // Returns default image if image configuration is not set.
+  // Returns http content-type header compatible image type.
+  std::string proc_t::get_app_image(int app_id) {
+    std::scoped_lock lk(_apps_mutex);
+    auto resolved_app = resolve_app_from_snapshot(_apps, std::to_string(app_id), "");
+    auto app_image_path = resolved_app ? resolved_app->image_path : std::string();
+
+    return validate_app_image_path(app_image_path);
+  }
+
+  std::optional<ctx_t> proc_t::resolve_app(const std::string &appid, const std::string &appuuid) const {
+    std::scoped_lock lk(_apps_mutex);
+    return resolve_app_from_snapshot(_apps, appid, appuuid);
+  }
+
+  std::optional<ctx_t> proc_t::resolve_app(int app_id) const {
+    if (app_id <= 0) {
+      return std::nullopt;
+    }
+    return resolve_app(std::to_string(app_id), "");
+  }
+
+  std::optional<ctx_t> proc_t::active_app_snapshot() const {
+    // Encode teardown can join a foreground observer while holding the stream
+    // lifecycle gate. An observer must never wait for either producer lock.
+    std::unique_lock stream_lock(nvhttp::stream_lifecycle_mutex(), std::try_to_lock);
+    if (!stream_lock.owns_lock()) return std::nullopt;
+    std::unique_lock app_lock(_apps_mutex, std::try_to_lock);
+    if (!app_lock.owns_lock()) return std::nullopt;
+    if (_app_id <= 0) return std::nullopt;
+    // The editable catalog can change during streaming. Foreground ownership
+    // belongs to the application actually launched, until it is replaced.
+    return _app;
+  }
+
+  std::string proc_t::get_last_run_app_name() {
+    return _app.name;
+  }
+
+  bool proc_t::last_run_app_frame_gen_limiter_fix() const {
+    return _app.frame_gen_limiter_fix;
+  }
+
+  bool proc_t::is_launch_deferred() const {
+#ifdef _WIN32
+    std::scoped_lock lk(_apps_mutex);
+    return _deferred_launch;
+#else
+    return false;
+#endif
+  }
+
+  proc_t::~proc_t() {
+    // It's not safe to call terminate() here because our proc_t is a static variable
+    // that may be destroyed after the Boost loggers have been destroyed. Instead,
+    // we return a deinit_t to main() to handle termination when we're exiting.
+    // Once we reach this point here, termination must have already happened.
+    assert(!placebo);
+    assert(!_process.running());
+  }
+
+  std::string_view::iterator find_match(std::string_view::iterator begin, std::string_view::iterator end) {
+    int stack = 0;
+
+    --begin;
+    do {
+      ++begin;
+      switch (*begin) {
+        case '(':
+          ++stack;
+          break;
+        case ')':
+          --stack;
+      }
+    } while (begin != end && stack != 0);
+
+    if (begin == end) {
+      throw std::out_of_range("Missing closing bracket \')\'");
+    }
+    return begin;
+  }
+
+  std::string parse_env_val(bp::native_environment &env, const std::string_view &val_raw) {
+    auto pos = std::begin(val_raw);
+    auto dollar = std::find(pos, std::end(val_raw), '$');
+
+    std::stringstream ss;
+
+    while (dollar != std::end(val_raw)) {
+      auto next = dollar + 1;
+      if (next != std::end(val_raw)) {
+        switch (*next) {
+          case '(':
+            {
+              ss.write(pos, (dollar - pos));
+              auto var_begin = next + 1;
+              auto var_end = find_match(next, std::end(val_raw));
+              auto var_name = std::string {var_begin, var_end};
+
+#ifdef _WIN32
+              // Windows treats environment variable names in a case-insensitive manner,
+              // so we look for a case-insensitive match here. This is critical for
+              // correctly appending to PATH on Windows.
+              auto itr = std::find_if(env.cbegin(), env.cend(), [&](const auto &e) {
+                return boost::iequals(e.get_name(), var_name);
+              });
+              if (itr != env.cend()) {
+                // Use an existing case-insensitive match
+                var_name = itr->get_name();
+              }
+#endif
+
+              ss << env[var_name].to_string();
+
+              pos = var_end + 1;
+              next = var_end;
+
+              break;
+            }
+          case '$':
+            ss.write(pos, (next - pos));
+            pos = next + 1;
+            ++next;
+            break;
+        }
+
+        dollar = std::find(next, std::end(val_raw), '$');
+      } else {
+        BOOST_LOG(info) << "Playnite URI launch started";
+        dollar = next;
+      }
+    }
+
+    ss.write(pos, (dollar - pos));
+
+    return ss.str();
+  }
+
+  bp::native_environment configured_app_environment(const pt::ptree &env_vars) {
+      auto this_env = bp::this_process::env();
+#if defined(__linux__)
+      // Keep the daemon's own HOME pointed at the machine-owned profile while
+      // giving desktop applications the environment of the session account
+      // that the capability helper will actually enter.
+      if (std::getenv("VIBESHINE_MACHINE_HOST")) {
+        const auto *session_home = std::getenv("VIBESHINE_SESSION_HOME");
+        const auto *session_user = std::getenv("VIBESHINE_SESSION_USER");
+        if (session_home && *session_home && session_user && *session_user) {
+          this_env["HOME"] = session_home;
+          this_env["USER"] = session_user;
+          this_env["LOGNAME"] = session_user;
+          this_env["XDG_CONFIG_HOME"] = std::string {session_home} + "/.config";
+          this_env["XDG_DATA_HOME"] = std::string {session_home} + "/.local/share";
+        }
+      }
+#endif
+
+      for (auto &[name, val] : env_vars) {
+        if (!is_valid_env_key(name)) {
+          BOOST_LOG(warning) << "Skipping invalid environment variable name ["sv << name << ']';
+          continue;
+        }
+        this_env[name] = parse_env_val(this_env, val.get_value<std::string>());
+      }
+
+      return this_env;
+  }
+
+  std::string configured_app_uuid(bp::native_environment &env, const pt::ptree &app) {
+    const auto uuid = app.get_optional<std::string>("uuid");
+    return uuid ? parse_env_val(env, *uuid) : std::string {};
+  }
+
+  std::vector<std::string> configured_app_uuids(bp::native_environment &env, const pt::ptree &apps, const nlohmann::json &json_apps) {
+    std::vector<std::string> result;
+    std::size_t index = 0;
+    for (const auto &[_, app] : apps) {
+      // Marked UUIDs are literal input. Invalid marked expressions are omitted
+      // by admission and must never execute expansion before that rejection.
+      if (json_apps.is_array() && index < json_apps.size() && remote_session::marked_monitor_profile(json_apps[index])) {
+        const auto value = json_apps[index].find("uuid");
+        result.push_back(value != json_apps[index].end() && value->is_string() ? value->get<std::string>() : std::string {});
+      } else {
+        result.push_back(configured_app_uuid(env, app));
+      }
+      ++index;
+    }
+    return result;
+  }
+
+  std::vector<std::string> configured_app_uuids_from_text(const std::string &content, const nlohmann::json &json_apps) {
+    // Decode through property_tree exactly as parse() does. The JSON object
+    // order here is the order that saveApp will persist and refresh.
+    pt::ptree tree;
+    std::istringstream input(content);
+    pt::read_json(input, tree);
+    const pt::ptree empty;
+    auto env = configured_app_environment(tree.get_child("env", empty));
+    return configured_app_uuids(env, tree.get_child("apps", empty), json_apps);
+  }
+
+  std::vector<std::string> configured_app_uuids(const nlohmann::json &file_tree) {
+    return configured_app_uuids_from_text(file_tree.dump(), file_tree.value("apps", nlohmann::json::array()));
+  }
+
+  std::string_view configured_monitor_profile_error_from_file(const nlohmann::json &app, const nlohmann::json &file_tree, const std::string_view content) {
+    if (!remote_session::marked_monitor_profile(app)) return {};
+    const auto identities = configured_app_uuids_from_text(std::string {content}, file_tree.value("apps", nlohmann::json::array()));
+    std::vector<std::string_view> views;
+    for (const auto &uuid : identities) views.push_back(uuid);
+    return remote_session::monitor_profile_json_error(app, views);
+  }
+
+  std::string_view configured_monitor_profile_error(const nlohmann::json &app, const nlohmann::json &file_tree) {
+    if (!remote_session::marked_monitor_profile(app)) return {};
+    return configured_monitor_profile_error_from_file(app, file_tree, file_tree.dump());
+  }
+
+  std::string_view monitor_profile_changes_error(const nlohmann::json &before, const nlohmann::json &after, const std::string_view before_file) {
+    if (!after.contains("apps") || !after["apps"].is_array()) return {};
+    if (std::none_of(after["apps"].begin(), after["apps"].end(), remote_session::marked_monitor_profile)) return {};
+    const auto before_ids = before_file.empty() ? configured_app_uuids(before) : configured_app_uuids_from_text(std::string {before_file}, before.value("apps", nlohmann::json::array()));
+    std::vector<std::string_view> before_views;
+    for (const auto &uuid : before_ids) before_views.push_back(uuid);
+    for (const auto &app : after["apps"]) {
+      const auto error = configured_monitor_profile_error(app, after);
+      if (error.empty()) continue;
+      // Existing invalid marked rows stay available for explicit repair.
+      // An unrelated ordinary edit may preserve them, but cannot invalidate
+      // a previously valid profile by changing an effective ordinary UUID.
+      bool unchanged_invalid = false;
+      if (before.contains("apps") && before["apps"].is_array()) {
+        for (const auto &old : before["apps"]) {
+          if (old == app && remote_session::monitor_profile_json_error(old, before_views) == error) {
+            unchanged_invalid = true;
+            break;
+          }
+        }
+      }
+      if (!unchanged_invalid) return error;
+    }
+    return {};
+  }
+
+  /**
+   * @brief Validates a path whether it is a valid PNG.
+   * @param path The path to the PNG file.
+   * @return true if the file has a valid PNG signature, false otherwise.
+   */
+  bool check_valid_png(const std::filesystem::path &path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+      return false;
+    }
+    std::array<std::uint8_t, 8> header {};
+    file.read(reinterpret_cast<char *>(header.data()), static_cast<std::streamsize>(header.size()));
+    return file.gcount() == static_cast<std::streamsize>(header.size()) && catalog::has_png_signature(header);
+  }
+
+  namespace {
+    constexpr std::size_t maximum_machine_cover_bytes = catalog::maximum_image_bytes;
+
+    [[maybe_unused]] bool machine_host_runtime() {
+      const char *value = std::getenv("VIBESHINE_MACHINE_HOST");
+      return value && std::string_view {value} == "1";
+    }
+
+#if defined(__linux__)
+    bool same_file_snapshot(const struct stat &before, const struct stat &after) {
+      return before.st_dev == after.st_dev && before.st_ino == after.st_ino &&
+             before.st_mode == after.st_mode && before.st_uid == after.st_uid &&
+             before.st_gid == after.st_gid && before.st_size == after.st_size &&
+             before.st_mtim.tv_sec == after.st_mtim.tv_sec &&
+             before.st_mtim.tv_nsec == after.st_mtim.tv_nsec &&
+             before.st_ctim.tv_sec == after.st_ctim.tv_sec &&
+             before.st_ctim.tv_nsec == after.st_ctim.tv_nsec;
+    }
+
+    std::optional<std::filesystem::path> confined_relative_path(
+      const std::filesystem::path &candidate,
+      const std::filesystem::path &root
+    ) {
+      const auto normalized_candidate = candidate.lexically_normal();
+      const auto normalized_root = root.lexically_normal();
+      auto relative = normalized_candidate.lexically_relative(normalized_root);
+      if (relative.empty() || relative.is_absolute()) {
+        return std::nullopt;
+      }
+      for (const auto &component : relative) {
+        if (component == ".." || component == ".") {
+          return std::nullopt;
+        }
+      }
+      return relative;
+    }
+
+    std::optional<catalog::byte_buffer_t> read_machine_image(
+      const std::string &path,
+      const bool complete
+    ) {
+      const std::filesystem::path candidate {path};
+      const std::filesystem::path assets_root {SUNSHINE_ASSETS_DIR};
+      const std::filesystem::path covers_root = platf::appdata() / "covers";
+      if (!candidate.is_absolute() || !catalog::machine_image_path_is_confined(path, assets_root.string(), covers_root.string())) {
+        return std::nullopt;
+      }
+
+      bool immutable_assets = false;
+      auto relative = confined_relative_path(candidate, assets_root);
+      auto root = assets_root;
+      if (relative) {
+        immutable_assets = true;
+      } else {
+        relative = confined_relative_path(candidate, covers_root);
+        root = covers_root;
+      }
+      if (!relative) {
+        return std::nullopt;
+      }
+
+      const int root_descriptor = open(root.c_str(), O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+      if (root_descriptor < 0) {
+        return std::nullopt;
+      }
+      struct stat root_attributes {};
+      const bool safe_root = fstat(root_descriptor, &root_attributes) == 0 &&
+                             S_ISDIR(root_attributes.st_mode) &&
+                             (root_attributes.st_mode & 07777) ==
+                               (immutable_assets ? 0755 : 0700) &&
+                             root_attributes.st_uid ==
+                               (immutable_assets ? uid_t {0} : geteuid());
+      if (!safe_root) {
+        close(root_descriptor);
+        return std::nullopt;
+      }
+
+      const auto relative_string = relative->string();
+      const struct open_how how {
+        .flags = O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW,
+        .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS |
+                   RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+      };
+      int descriptor = static_cast<int>(syscall(
+        SYS_openat2,
+        root_descriptor,
+        relative_string.c_str(),
+        &how,
+        sizeof(how)
+      ));
+      if (descriptor < 0 && errno == ENOSYS) {
+        descriptor = platf::linux_security::open_readonly_beneath(
+          root_descriptor,
+          *relative,
+          root_attributes.st_dev,
+          immutable_assets ? uid_t {0} : geteuid(),
+          !immutable_assets
+        );
+      }
+      close(root_descriptor);
+      if (descriptor < 0) {
+        return std::nullopt;
+      }
+
+      struct stat before {}, after {};
+      if (fstat(descriptor, &before) != 0 || !S_ISREG(before.st_mode) || before.st_size < 8 || static_cast<std::uint64_t>(before.st_size) > maximum_machine_cover_bytes || (before.st_mode & 07777) != (immutable_assets ? 0644 : 0600) || (immutable_assets ? before.st_uid != 0 : before.st_uid != geteuid())) {
+        close(descriptor);
+        return std::nullopt;
+      }
+
+      const auto bytes_to_read = complete ? static_cast<std::size_t>(before.st_size) : std::size_t {8};
+      catalog::byte_buffer_t bytes(bytes_to_read);
+      std::size_t offset = 0;
+      while (offset < bytes.size()) {
+        const auto received = read(descriptor, bytes.data() + offset, bytes.size() - offset);
+        if (received < 0 && errno == EINTR) {
+          continue;
+        }
+        if (received <= 0) {
+          close(descriptor);
+          return std::nullopt;
+        }
+        offset += static_cast<std::size_t>(received);
+      }
+      const bool stable = fstat(descriptor, &after) == 0 &&
+                          same_file_snapshot(before, after);
+      close(descriptor);
+      if (!stable || !catalog::has_png_signature(bytes)) {
+        return std::nullopt;
+      }
+      return bytes;
+    }
+#endif
+
+    std::optional<catalog::byte_buffer_t> read_image_for_validation(const std::string &path) {
+#if defined(__linux__)
+      if (machine_host_runtime()) {
+        return read_machine_image(path, false);
+      }
+#endif
+      std::ifstream file(path, std::ios::binary);
+      if (!file) {
+        return std::nullopt;
+      }
+      catalog::byte_buffer_t header(8);
+      file.read(reinterpret_cast<char *>(header.data()), static_cast<std::streamsize>(header.size()));
+      if (file.gcount() != static_cast<std::streamsize>(header.size())) {
+        return std::nullopt;
+      }
+      return header;
+    }
+  }  // namespace
+
+  std::string validate_app_image_path(std::string app_image_path) {
+    return catalog::validate_image_path(
+      std::move(app_image_path),
+      SUNSHINE_ASSETS_DIR,
+      DEFAULT_APP_IMAGE_PATH,
+      read_image_for_validation
+    );
+  }
+
+  std::optional<std::string> read_validated_app_image(const std::string &validated_path) {
+#if defined(__linux__)
+    if (machine_host_runtime()) {
+      const auto bytes = read_machine_image(validated_path, true);
+      if (!bytes) {
+        return std::nullopt;
+      }
+      return std::string {
+        reinterpret_cast<const char *>(bytes->data()),
+        bytes->size()
+      };
+    }
+#endif
+    std::ifstream file(validated_path, std::ios::binary | std::ios::ate);
+    if (!file) {
+      return std::nullopt;
+    }
+    const auto size = file.tellg();
+    if (size < 8 || size > static_cast<std::streamoff>(maximum_machine_cover_bytes)) {
+      return std::nullopt;
+    }
+    std::string bytes(static_cast<std::size_t>(size), '\0');
+    file.seekg(0);
+    const auto stream_size = static_cast<std::streamsize>(size);
+    file.read(bytes.data(), stream_size);
+    if (file.gcount() != stream_size || !catalog::has_png_signature(std::span<const std::uint8_t> {reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()})) {
+      return std::nullopt;
+    }
+    return bytes;
+  }
+
+  std::optional<std::string> read_configured_app_image(const std::string &image_path) {
+    return catalog::read_configured_image(
+      image_path, SUNSHINE_ASSETS_DIR, read_image_for_validation, read_validated_app_image);
+  }
+
+  std::string configured_app_image_version(const ctx_t &app) {
+    return catalog::configured_image_version(
+      app.image_path, SUNSHINE_ASSETS_DIR, app.art_version, read_image_for_validation,
+      [](const std::string &path) -> std::optional<std::string> {
+        std::error_code ec;
+        const auto modified = std::filesystem::last_write_time(path, ec);
+        if (ec) return std::nullopt;
+        const auto size = std::filesystem::file_size(path, ec);
+        if (ec) return std::nullopt;
+        return std::to_string(modified.time_since_epoch().count()) + "-" + std::to_string(size);
+      });
+  }
+
+  std::optional<std::string> calculate_sha256(const std::string &filename) {
+    crypto::md_ctx_t ctx {EVP_MD_CTX_create()};
+    if (!ctx) {
+      return std::nullopt;
+    }
+
+    if (!EVP_DigestInit_ex(ctx.get(), EVP_sha256(), nullptr)) {
+      return std::nullopt;
+    }
+
+#if defined(__linux__)
+    if (machine_host_runtime()) {
+      const auto bytes = read_machine_image(filename, true);
+      if (!bytes || !EVP_DigestUpdate(ctx.get(), bytes->data(), bytes->size())) {
+        return std::nullopt;
+      }
+      unsigned char result[SHA256_DIGEST_LENGTH];
+      if (!EVP_DigestFinal_ex(ctx.get(), result, nullptr)) {
+        return std::nullopt;
+      }
+      std::stringstream ss;
+      ss << std::hex << std::setfill('0');
+      for (const auto &byte : result) {
+        ss << std::setw(2) << static_cast<int>(byte);
+      }
+      return ss.str();
+    }
+#endif
+
+    // Read file and update calculated SHA
+    char buf[1024 * 16];
+    std::ifstream file(filename, std::ifstream::binary);
+    while (file.good()) {
+      file.read(buf, sizeof(buf));
+      if (!EVP_DigestUpdate(ctx.get(), buf, file.gcount())) {
+        return std::nullopt;
+      }
+    }
+    file.close();
+
+    unsigned char result[SHA256_DIGEST_LENGTH];
+    if (!EVP_DigestFinal_ex(ctx.get(), result, nullptr)) {
+      return std::nullopt;
+    }
+
+    // Transform byte-array to string
+    std::stringstream ss;
+    ss << std::hex << std::setfill('0');
+    for (const auto &byte : result) {
+      ss << std::setw(2) << (int) byte;
+    }
+    return ss.str();
+  }
+
+  uint32_t calculate_crc32(const std::string &input) {
+    boost::crc_32_type result;
+    result.process_bytes(input.data(), input.length());
+    return result.checksum();
+  }
+
+  using app_id_alias_state_t = catalog::alias_state_t;
+
+  std::string calculate_numeric_id_from_parts(const std::vector<std::string> &parts, int index) {
+    std::stringstream ss;
+    for (const auto &part : parts) {
+      ss << part;
+    }
+    ss << index;
+    return std::to_string(abs((int32_t) calculate_crc32(ss.str())));
+  }
+
+  std::string calculate_numeric_id_from_parts(const std::vector<std::string> &parts) {
+    std::stringstream ss;
+    for (const auto &part : parts) {
+      ss << part;
+    }
+    return std::to_string(abs((int32_t) calculate_crc32(ss.str())));
+  }
+
+  std::tuple<std::string, std::string> calculate_cover_versioned_app_id(const std::string &app_uuid, const std::string &cover_fingerprint, int index) {
+    return catalog::calculate_versioned_ids(app_uuid, cover_fingerprint, index);
+  }
+
+  std::string calculate_app_cover_fingerprint(std::string app_image_path) {
+    const auto file_path = validate_app_image_path(std::move(app_image_path));
+    if (file_path == DEFAULT_APP_IMAGE_PATH) {
+      return "default";
+    }
+
+    auto file_hash = calculate_sha256(file_path);
+    if (file_hash) {
+      return "sha256:" + file_hash.value();
+    }
+
+    BOOST_LOG(warning) << "Failed to compute SHA256 for image ["sv << file_path << "], falling back to path for app art version";
+    return "path:" + file_path;
+  }
+
+  std::map<std::string, app_id_alias_state_t> load_app_id_alias_state() {
+    std::map<std::string, app_id_alias_state_t> result;
+
+    statefile::migrate_recent_state_keys();
+    const auto &path = statefile::vibeshine_state_path();
+    if (path.empty()) {
+      return result;
+    }
+
+    std::lock_guard<std::mutex> lock(statefile::state_mutex());
+    pt::ptree tree;
+    if (!statefile::load_json_for_update(path, tree)) {
+      BOOST_LOG(warning) << "Unable to load state file for app ID aliases; using in-memory app IDs for this refresh.";
+      return result;
+    }
+
+    const auto aliases_root = tree.get_child_optional("root.app_id_aliases");
+    if (!aliases_root) {
+      return result;
+    }
+
+    for (const auto &app_node : *aliases_root) {
+      const auto &app_uuid = app_node.first;
+      if (app_uuid.empty()) {
+        continue;
+      }
+
+      app_id_alias_state_t state;
+      state.current_id = app_node.second.get<std::string>("current_id", "");
+      state.cover_fingerprint = app_node.second.get<std::string>("cover_fingerprint", "");
+      if (const auto aliases = app_node.second.get_child_optional("aliases")) {
+        for (const auto &alias_node : *aliases) {
+          auto alias = alias_node.second.get_value<std::string>("");
+          boost::algorithm::trim(alias);
+          if (!alias.empty()) {
+            state.aliases.insert(std::move(alias));
+          }
+        }
+      }
+
+      if (!state.current_id.empty()) {
+        result.emplace(app_uuid, std::move(state));
+      }
+    }
+
+    return result;
+  }
+
+  bool save_app_id_alias_state(const std::map<std::string, app_id_alias_state_t> &state) {
+    statefile::migrate_recent_state_keys();
+    const auto &path = statefile::vibeshine_state_path();
+    if (path.empty()) {
+      return false;
+    }
+
+    std::lock_guard<std::mutex> lock(statefile::state_mutex());
+    pt::ptree tree;
+    if (!statefile::load_json_for_update(path, tree)) {
+      BOOST_LOG(warning) << "Unable to update state file with app ID aliases.";
+      return false;
+    }
+
+    pt::ptree aliases_root;
+    for (const auto &[app_uuid, entry] : state) {
+      if (app_uuid.empty() || entry.current_id.empty()) {
+        continue;
+      }
+
+      pt::ptree app_node;
+      app_node.put("current_id", entry.current_id);
+      app_node.put("cover_fingerprint", entry.cover_fingerprint);
+
+      pt::ptree aliases_node;
+      for (const auto &alias : entry.aliases) {
+        if (alias.empty() || alias == entry.current_id) {
+          continue;
+        }
+        pt::ptree alias_node;
+        alias_node.put_value(alias);
+        aliases_node.push_back(std::make_pair("", std::move(alias_node)));
+      }
+      app_node.put_child("aliases", aliases_node);
+      aliases_root.push_back(std::make_pair(app_uuid, std::move(app_node)));
+    }
+
+    pt::ptree empty_root;
+    pt::ptree root = tree.get_child("root", empty_root);
+    root.put_child("app_id_aliases", std::move(aliases_root));
+    tree.put_child("root", std::move(root));
+
+    try {
+      statefile::write_json_atomic(path, tree);
+      return true;
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Failed to persist app ID aliases: " << e.what();
+      return false;
+    }
+  }
+
+  void remember_alias(app_id_alias_state_t &state, const std::string &alias) {
+    if (!alias.empty() && alias != state.current_id) {
+      state.aliases.insert(alias);
+    }
+  }
+
+  void assign_compatible_app_id(
+    ctx_t &ctx,
+    const std::string &app_name,
+    int index,
+    std::set<std::string> &ids,
+    std::map<std::string, app_id_alias_state_t> &alias_state,
+    std::set<std::string> &active_uuids,
+    bool &alias_state_changed
+  ) {
+    catalog::app_identity_t identity;
+    identity.name = app_name;
+    identity.uuid = ctx.uuid;
+    if (ctx.uuid.empty()) {
+      const auto validated = validate_app_image_path(ctx.image_path);
+      if (validated != DEFAULT_APP_IMAGE_PATH) {
+        identity.legacy_image_identity = calculate_sha256(validated).value_or(validated);
+      }
+    } else {
+      identity.art_version = calculate_app_cover_fingerprint(ctx.image_path);
+    }
+    catalog::assign_compatible_id(identity, index, ids, alias_state, active_uuids, alias_state_changed);
+    ctx.id = std::move(identity.id);
+    ctx.art_version = std::move(identity.art_version);
+    ctx.id_aliases = std::move(identity.aliases);
+  }
+
+  void prune_and_filter_app_id_alias_state(
+    std::vector<ctx_t> &apps,
+    std::map<std::string, app_id_alias_state_t> &alias_state,
+    const std::set<std::string> &active_uuids,
+    bool &alias_state_changed
+  ) {
+    std::vector<catalog::app_identity_t> identities;
+    identities.reserve(apps.size());
+    for (const auto &app : apps) {
+      identities.push_back({app.name, app.uuid, {}, app.art_version, app.id, app.id_aliases});
+    }
+    catalog::prune_and_filter_aliases(identities, alias_state, active_uuids, alias_state_changed);
+    for (std::size_t i = 0; i < apps.size(); ++i) {
+      apps[i].id_aliases = std::move(identities[i].aliases);
+    }
+  }
+
+  std::optional<ctx_t> resolve_app_from_snapshot(const std::vector<ctx_t> &apps, const std::string &appid, const std::string &appuuid) {
+    std::vector<catalog::app_identity_t> identities;
+    identities.reserve(apps.size());
+    for (const auto &app : apps) {
+      identities.push_back({app.name, app.uuid, {}, app.art_version, app.id, app.id_aliases});
+    }
+    const auto resolved = catalog::resolve_app(identities, appid, appuuid);
+    return resolved ? std::optional<ctx_t> {apps[*resolved]} : std::nullopt;
+  }
+
+  std::tuple<std::string, std::string> calculate_app_id(const std::string &app_name, const std::string &app_uuid, std::string app_image_path, int index) {
+    // Prefer the persistent app UUID for stable client-facing IDs. Artwork can be
+    // refreshed by Playnite sync, so image bytes must not affect launch identity.
+    std::vector<std::string> to_hash;
+    if (!app_uuid.empty()) {
+      to_hash.push_back(app_uuid);
+    } else {
+      // Legacy fallback for app entries that predate UUID normalization.
+      to_hash.push_back(app_name);
+      auto file_path = validate_app_image_path(app_image_path);
+      if (file_path != DEFAULT_APP_IMAGE_PATH) {
+        auto file_hash = calculate_sha256(file_path);
+        if (file_hash) {
+          to_hash.push_back(file_hash.value());
+        } else {
+          BOOST_LOG(warning) << "Failed to compute SHA256 for image ["sv << file_path << "], falling back to path for app ID hash";
+          // Fallback to just hashing image path
+          to_hash.push_back(file_path);
+        }
+      }
+    }
+
+    const std::string legacy_image_identity = to_hash.size() > 1 ? to_hash[1] : std::string {};
+    return catalog::calculate_ids(app_name, app_uuid, legacy_image_identity, index);
+  }
+
+  std::optional<proc::proc_t> parse(const std::string &file_name) {
+    pt::ptree tree;
+    nlohmann::json json_tree;
+    std::string file_content;
+
+    try {
+      {
+        std::ifstream in(file_name, std::ios::binary);
+        if (!in) {
+          BOOST_LOG(error) << "Unable to open apps file: "sv << file_name;
+          return std::nullopt;
+        }
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        file_content = ss.str();
+      }
+
+      try {
+        json_tree = nlohmann::json::parse(file_content);
+      } catch (...) {
+        // Ignore JSON parsing failures for the supplemental view; property_tree parse below is authoritative.
+        json_tree = nlohmann::json();
+      }
+
+      {
+        std::istringstream in(file_content);
+        pt::read_json(in, tree);
+      }
+
+      auto &apps_node = tree.get_child("apps"s);
+      auto &env_vars = tree.get_child("env"s);
+
+      auto this_env = configured_app_environment(env_vars);
+      const auto configured_uuids = configured_app_uuids(this_env, apps_node, json_tree.is_object() ? json_tree.value("apps", nlohmann::json::array()) : nlohmann::json::array());
+      std::vector<std::string_view> configured_uuid_views;
+      for (const auto &uuid : configured_uuids) configured_uuid_views.push_back(uuid);
+
+      std::set<std::string> ids;
+      std::vector<proc::ctx_t> apps;
+      auto app_id_alias_state = load_app_id_alias_state();
+      std::set<std::string> active_app_uuids;
+      bool app_id_alias_state_changed = false;
+      int i = 0;
+      for (auto &[_, app_node] : apps_node) {
+        const int json_index = i++;
+        if (json_tree.is_object() && json_tree.contains("apps") && json_tree["apps"].is_array() &&
+            json_index < static_cast<int>(json_tree["apps"].size())) {
+          const auto &json_apps = json_tree["apps"];
+          const auto error = remote_session::monitor_profile_json_error(json_apps[json_index], configured_uuid_views);
+          if (!error.empty()) {
+            BOOST_LOG(warning) << "Skipping configured Remote Monitor profile at JSON index " << json_index << ": " << error;
+            continue;
+          }
+        }
+        proc::ctx_t ctx;
+        ctx.configured_index = static_cast<std::size_t>(json_index);
+
+        auto prep_nodes_opt = app_node.get_child_optional("prep-cmd"s);
+        auto detached_nodes_opt = app_node.get_child_optional("detached"s);
+        auto exclude_global_prep = app_node.get_optional<bool>("exclude-global-prep-cmd"s);
+        auto output = app_node.get_optional<std::string>("output"s);
+        auto display_output = app_node.get_optional<std::string>("display-output"s);
+        auto name = parse_env_val(this_env, app_node.get<std::string>("name"s));
+        auto cmd = app_node.get_optional<std::string>("cmd"s);
+        auto image_path = app_node.get_optional<std::string>("image-path"s);
+        auto working_dir = app_node.get_optional<std::string>("working-dir"s);
+        auto steam_id = app_node.get_optional<std::string>("steam-id"s);
+        auto steam_install_dir = app_node.get_optional<std::string>("steam-install-dir"s);
+        auto lutris_id = app_node.get_optional<std::string>("lutris-id"s);
+        auto lutris_directory = app_node.get_optional<std::string>("lutris-directory"s);
+        auto playnite_id = app_node.get_optional<std::string>("playnite-id"s);
+        auto elevated = app_node.get_optional<bool>("elevated"s);
+        auto auto_detach = app_node.get_optional<bool>("auto-detach"s);
+        auto wait_all = app_node.get_optional<bool>("wait-all"s);
+        auto exit_timeout = app_node.get_optional<int>("exit-timeout"s);
+        auto gen1_framegen_fix = app_node.get_optional<bool>("gen1-framegen-fix"s);
+        auto gen2_framegen_fix = app_node.get_optional<bool>("gen2-framegen-fix"s);
+        // Backward compatibility: check old field name if new one not present
+        if (!gen1_framegen_fix) {
+          gen1_framegen_fix = app_node.get_optional<bool>("dlss-framegen-capture-fix"s);
+        }
+        auto lossless_scaling_enabled = app_node.get_optional<bool>("lossless-scaling-enabled"s);
+        auto lossless_scaling_framegen = app_node.get_optional<bool>("lossless-scaling-framegen"s);
+        auto lossless_scaling_launch_delay = app_node.get_optional<int>("lossless-scaling-launch-delay"s);
+        auto frame_generation_provider = app_node.get_optional<std::string>("frame-generation-provider"s);
+        auto frame_generation_mode = app_node.get_optional<std::string>("frame-generation-mode"s);
+        auto virtual_display_mode = app_node.get_optional<std::string>("virtual-display-mode"s);
+        auto virtual_display_layout = app_node.get_optional<std::string>("virtual-display-layout"s);
+        auto dd_config_override = app_node.get_optional<std::string>("dd-configuration-option"s);
+        if (const auto prefer_10bit_sdr = app_node.get_optional<bool>("prefer-10bit-sdr"s)) {
+          ctx.prefer_10bit_sdr = *prefer_10bit_sdr;
+        }
+
+        // Parse per-app global config overrides from the JSON view (preserves types for nested values).
+        // We keep values in the raw config-file representation (strings are raw, non-strings use JSON dump).
+        try {
+          if (json_tree.is_object() && json_tree.contains("apps") && json_tree["apps"].is_array()) {
+            const auto &japps = json_tree["apps"];
+            if (json_index >= 0 && json_index < static_cast<int>(japps.size()) && japps[json_index].is_object()) {
+              const auto &japp = japps[json_index];
+              ctx.remote_monitor_profile = japp.contains("remote-monitor-profile") &&
+                japp["remote-monitor-profile"].is_boolean() && japp["remote-monitor-profile"].get<bool>();
+              if (ctx.remote_monitor_profile) ctx.monitor_target = remote_session::monitor_target_from_json(japp);
+              if (japp.contains("config-overrides") && japp["config-overrides"].is_object()) {
+                for (const auto &item : japp["config-overrides"].items()) {
+                  const std::string &key = item.key();
+                  const auto &val = item.value();
+                  if (val.is_null()) {
+                    continue;
+                  }
+                  std::string encoded;
+                  if (val.is_string()) {
+                    encoded = parse_env_val(this_env, val.get<std::string>());
+                  } else {
+                    encoded = val.dump();
+                  }
+                  if (!encoded.empty()) {
+                    ctx.config_overrides.emplace(key, std::move(encoded));
+                  }
+                }
+              }
+            }
+          }
+          std::unordered_map<std::string, std::string> normalized_overrides;
+          config::merge_config_overrides(normalized_overrides, ctx.config_overrides);
+          ctx.config_overrides = std::move(normalized_overrides);
+        } catch (...) {
+          // ignore overrides parse errors; continue without them
+        }
+
+        ctx.dualsense_haptics = app_node.get<bool>("dualsense-haptics", false);
+        ctx.lossless_scaling_enabled = lossless_scaling_enabled.value_or(false);
+        ctx.lossless_scaling_framegen = lossless_scaling_framegen.value_or(false);
+        if (!lossless_scaling_enabled) {
+          ctx.lossless_scaling_enabled = ctx.lossless_scaling_framegen;
+        }
+        ctx.frame_generation_provider = frame_generation_provider ? normalize_frame_generation_provider(*frame_generation_provider) : "lossless-scaling";
+        bool frame_generation_explicitly_off = false;
+        if (frame_generation_mode) {
+          const auto trimmed_mode = boost::algorithm::trim_copy(*frame_generation_mode);
+          if (boost::iequals(trimmed_mode, "off") || boost::iequals(trimmed_mode, "none") || boost::iequals(trimmed_mode, "disabled")) {
+            ctx.frame_generation_enabled = false;
+            ctx.lossless_scaling_framegen = false;
+            ctx.frame_generation_provider = "lossless-scaling";
+            frame_generation_explicitly_off = true;
+          } else {
+            ctx.frame_generation_provider = normalize_frame_generation_provider(trimmed_mode);
+            ctx.frame_generation_enabled = true;
+            ctx.lossless_scaling_framegen = ctx.frame_generation_provider == "lossless-scaling";
+          }
+        } else {
+          ctx.frame_generation_enabled =
+            ctx.lossless_scaling_framegen ||
+            ctx.frame_generation_provider == "game-provided" ||
+            ctx.frame_generation_provider == "nvidia-smooth-motion" ||
+            gen1_framegen_fix.value_or(false) ||
+            gen2_framegen_fix.value_or(false);
+        }
+        ctx.lossless_scaling_target_fps.reset();
+        ctx.lossless_scaling_rtss_limit.reset();
+        if (auto ls_target = app_node.get_optional<int>("lossless-scaling-target-fps"s)) {
+          if (*ls_target > 0) {
+            ctx.lossless_scaling_target_fps = *ls_target;
+          }
+        }
+        if (auto ls_rtss = app_node.get_optional<int>("lossless-scaling-rtss-limit"s)) {
+          if (*ls_rtss > 0) {
+            ctx.lossless_scaling_rtss_limit = *ls_rtss;
+          }
+        }
+
+        ctx.lossless_scaling_profile = LOSSLESS_PROFILE_CUSTOM;
+        if (auto profile = app_node.get_optional<std::string>("lossless-scaling-profile"s)) {
+          if (boost::iequals(*profile, LOSSLESS_PROFILE_RECOMMENDED)) {
+            ctx.lossless_scaling_profile = LOSSLESS_PROFILE_RECOMMENDED;
+          }
+        }
+        if (auto recommended_node = app_node.get_child_optional("lossless-scaling-recommended"s)) {
+          populate_lossless_overrides(*recommended_node, ctx.lossless_scaling_recommended);
+        }
+        if (auto custom_node = app_node.get_child_optional("lossless-scaling-custom"s)) {
+          populate_lossless_overrides(*custom_node, ctx.lossless_scaling_custom);
+        }
+        ctx.lossless_scaling_launch_delay_seconds =
+          std::max(0, lossless_scaling_launch_delay.value_or(kLosslessScalingDefaultLaunchDelaySeconds));
+        const auto legacy_override = app_node.get_optional<bool>("lossless-scaling-legacy-auto-detect"s);
+        ctx.lossless_scaling_legacy_auto_detect = legacy_override.value_or(config::lossless_scaling.legacy_auto_detect);
+        if (dd_config_override && !dd_config_override->empty()) {
+          const auto trimmed = boost::algorithm::trim_copy(*dd_config_override);
+          if (boost::iequals(trimmed, "verify_only")) {
+            ctx.dd_config_option_override = config::video_t::dd_t::config_option_e::verify_only;
+          } else if (boost::iequals(trimmed, "ensure_active")) {
+            ctx.dd_config_option_override = config::video_t::dd_t::config_option_e::ensure_active;
+          } else if (boost::iequals(trimmed, "ensure_primary")) {
+            ctx.dd_config_option_override = config::video_t::dd_t::config_option_e::ensure_primary;
+          } else if (boost::iequals(trimmed, "ensure_only_display")) {
+            ctx.dd_config_option_override = config::video_t::dd_t::config_option_e::ensure_only_display;
+          } else if (boost::iequals(trimmed, "disabled")) {
+            ctx.dd_config_option_override = config::video_t::dd_t::config_option_e::disabled;
+          } else {
+            ctx.dd_config_option_override.reset();
+          }
+        }
+
+        std::vector<proc::cmd_t> prep_cmds;
+        if (!exclude_global_prep.value_or(false)) {
+          prep_cmds.reserve(config::sunshine.prep_cmds.size());
+          for (auto &prep_cmd : config::sunshine.prep_cmds) {
+            auto do_cmd = parse_env_val(this_env, prep_cmd.do_cmd);
+            auto undo_cmd = parse_env_val(this_env, prep_cmd.undo_cmd);
+
+            prep_cmds.emplace_back(
+              std::move(do_cmd),
+              std::move(undo_cmd),
+              std::move(prep_cmd.elevated)
+            );
+          }
+        }
+
+        if (prep_nodes_opt) {
+          auto &prep_nodes = *prep_nodes_opt;
+
+          prep_cmds.reserve(prep_cmds.size() + prep_nodes.size());
+          for (auto &[_, prep_node] : prep_nodes) {
+            auto do_cmd = prep_node.get_optional<std::string>("do"s);
+            auto undo_cmd = prep_node.get_optional<std::string>("undo"s);
+            auto elevated = prep_node.get_optional<bool>("elevated");
+
+            prep_cmds.emplace_back(
+              parse_env_val(this_env, do_cmd.value_or("")),
+              parse_env_val(this_env, undo_cmd.value_or("")),
+              std::move(elevated.value_or(false))
+            );
+          }
+        }
+
+        std::vector<std::string> detached;
+        if (detached_nodes_opt) {
+          auto &detached_nodes = *detached_nodes_opt;
+
+          detached.reserve(detached_nodes.size());
+          for (auto &[_, detached_val] : detached_nodes) {
+            detached.emplace_back(parse_env_val(this_env, detached_val.get_value<std::string>()));
+          }
+        }
+
+        if (output) {
+          ctx.output = parse_env_val(this_env, *output);
+        }
+
+        if (display_output) {
+          // `output` is the app command-log path, not a display selection. Only
+          // the dedicated field represents an explicit per-app display override.
+          ctx.output_name_override = parse_env_val(this_env, *display_output);
+        }
+
+        if (cmd) {
+          ctx.cmd = parse_env_val(this_env, *cmd);
+        }
+
+        if (working_dir) {
+          ctx.working_dir = parse_env_val(this_env, *working_dir);
+#ifdef _WIN32
+          // The working directory, unlike the command itself, should not be quoted
+          // when it contains spaces. Unlike POSIX, Windows forbids quotes in paths,
+          // so we can safely strip them all out here to avoid confusing the user.
+          boost::erase_all(ctx.working_dir, "\"");
+#endif
+        }
+
+        if (steam_id) {
+          ctx.steam_id = parse_env_val(this_env, *steam_id);
+        }
+        if (steam_install_dir) {
+          ctx.steam_install_dir = parse_env_val(this_env, *steam_install_dir);
+        }
+        if (lutris_id) {
+          ctx.lutris_id = parse_env_val(this_env, *lutris_id);
+        }
+        if (lutris_directory) {
+          ctx.lutris_directory = parse_env_val(this_env, *lutris_directory);
+        }
+
+        if (image_path) {
+          ctx.image_path = parse_env_val(this_env, *image_path);
+        }
+
+        ctx.uuid = configured_app_uuid(this_env, app_node);
+
+        if (playnite_id) {
+          ctx.playnite_id = parse_env_val(this_env, *playnite_id);
+        }
+        // Optional Playnite fullscreen launcher flag
+        try {
+          auto pfs = app_node.get_optional<bool>("playnite-fullscreen"s);
+          ctx.playnite_fullscreen = pfs.value_or(false);
+        } catch (...) {
+          ctx.playnite_fullscreen = false;
+        }
+
+        try {
+          auto fgfix = app_node.get_optional<bool>("frame-gen-limiter-fix"s);
+          ctx.frame_gen_limiter_fix = fgfix.value_or(false);
+        } catch (...) {
+          ctx.frame_gen_limiter_fix = false;
+        }
+
+        ctx.elevated = elevated.value_or(false);
+        ctx.virtual_screen = app_node.get_optional<bool>("virtual-screen"s).value_or(false);
+        if (virtual_display_mode) {
+          auto normalized = boost::algorithm::to_lower_copy(*virtual_display_mode);
+          if (normalized == "disabled") {
+            ctx.virtual_display_mode_override = config::video_t::virtual_display_mode_e::disabled;
+          } else if (normalized == "per_client") {
+            ctx.virtual_display_mode_override = config::video_t::virtual_display_mode_e::per_client;
+          } else if (normalized == "shared") {
+            ctx.virtual_display_mode_override = config::video_t::virtual_display_mode_e::shared;
+          }
+        }
+        if (virtual_display_layout) {
+          auto normalized = boost::algorithm::to_lower_copy(*virtual_display_layout);
+          if (normalized == "exclusive") {
+            ctx.virtual_display_layout_override = config::video_t::virtual_display_layout_e::exclusive;
+          } else if (normalized == "extended") {
+            ctx.virtual_display_layout_override = config::video_t::virtual_display_layout_e::extended;
+          } else if (normalized == "extended_primary") {
+            ctx.virtual_display_layout_override = config::video_t::virtual_display_layout_e::extended_primary;
+          } else if (normalized == "extended_isolated") {
+            ctx.virtual_display_layout_override = config::video_t::virtual_display_layout_e::extended_isolated;
+          } else if (normalized == "extended_primary_isolated") {
+            ctx.virtual_display_layout_override = config::video_t::virtual_display_layout_e::extended_primary_isolated;
+          }
+        }
+        ctx.auto_detach = auto_detach.value_or(true);
+        ctx.wait_all = wait_all.value_or(true);
+        // Default graceful-exit timeout: 10s (Playnite-managed apps are written with this value)
+        ctx.exit_timeout = std::chrono::seconds {exit_timeout.value_or(10)};
+        bool used_pure_framegen_parser = false;
+        if (json_tree.is_object() && json_tree.contains("apps") && json_tree["apps"].is_array()) {
+          const auto &json_apps = json_tree["apps"];
+          if (json_index >= 0 && json_index < static_cast<int>(json_apps.size())) {
+            if (const auto parsed_framegen = app_config::parse_framegen_json(json_apps[json_index].dump())) {
+              ctx.frame_generation_enabled = parsed_framegen->enabled;
+              ctx.gen1_framegen_fix = parsed_framegen->gen1_capture_fix;
+              ctx.gen2_framegen_fix = parsed_framegen->gen2_capture_fix;
+              ctx.lossless_scaling_framegen = parsed_framegen->lossless_scaling_framegen;
+              ctx.frame_generation_provider = parsed_framegen->provider;
+              used_pure_framegen_parser = true;
+            }
+          }
+        }
+        if (!used_pure_framegen_parser) {
+          ctx.gen1_framegen_fix =
+            !frame_generation_explicitly_off && (gen1_framegen_fix.value_or(false) || gen2_framegen_fix.value_or(false));
+          ctx.gen2_framegen_fix = false;
+        }
+        if (!ctx.lossless_scaling_framegen) {
+          ctx.lossless_scaling_target_fps.reset();
+          ctx.lossless_scaling_rtss_limit.reset();
+        }
+
+        assign_compatible_app_id(ctx, name, json_index, ids, app_id_alias_state, active_app_uuids, app_id_alias_state_changed);
+
+        ctx.name = std::move(name);
+        ctx.prep_cmds = std::move(prep_cmds);
+        ctx.detached = std::move(detached);
+
+        apps.emplace_back(std::move(ctx));
+      }
+
+      prune_and_filter_app_id_alias_state(apps, app_id_alias_state, active_app_uuids, app_id_alias_state_changed);
+      if (app_id_alias_state_changed) {
+        save_app_id_alias_state(app_id_alias_state);
+      }
+
+      return std::optional<proc::proc_t>(std::in_place, std::move(this_env), std::move(apps));
+    } catch (std::exception &e) {
+      BOOST_LOG(error) << e.what();
+    }
+
+    return std::nullopt;
+  }
+
+  void refresh(const std::string &file_name) {
+    catalog::refresh(file_name,
+      {nvhttp::stream_lifecycle_mutex(), config::apply_gate_mutex(), confighttp::apps_file_mutex()}, proc.catalog_state(),
+      [](const std::string &path) -> std::optional<catalog::snapshot_t> {
+        auto parsed = proc::parse(path);
+        if (!parsed) {
+          return std::nullopt;
+        }
+        return catalog::snapshot_t {parsed->release_env(), parsed->release_apps()};
+      },
+      [](catalog::snapshot_t &&parsed) {
+        proc = proc_t {std::move(parsed.environment), std::move(parsed.apps)};
+      },
+      [](std::function<void()> retry, std::chrono::milliseconds delay) {
+        task_pool.pushDelayed(std::move(retry), delay);
+      });
+  }
+
+  catalog::state_view_t proc_t::catalog_state() {
+    return {_app_id, _env, _pending_catalog_environment, _stream_owned_environment_keys, _apps, _app, _apps_mutex};
+  }
+
+  void proc_t::update_apps(std::vector<ctx_t> &&apps, bp::environment &&env) {
+    catalog::update_apps(catalog_state(), std::move(apps), std::move(env));
+  }
+
+#if defined(_WIN32) || defined(__linux__)
+  bool proc_t::update_active_app_live_rtx_hdr_overrides(const std::string &app_uuid) {
+    if (app_uuid.empty()) {
+      return false;
+    }
+
+    std::unordered_map<std::string, std::string> runtime_overrides;
+    bool changed = false;
+    {
+      std::scoped_lock lk(_apps_mutex);
+      if (_app_id <= 0 || _app.uuid != app_uuid) {
+        return false;
+      }
+
+      const auto updated = std::find_if(_apps.begin(), _apps.end(), [&](const auto &app) {
+        return app.uuid == app_uuid;
+      });
+      if (updated == _apps.end()) {
+        return false;
+      }
+
+      runtime_overrides = config::runtime_config_overrides_snapshot();
+      for (const auto key_view : RTX_HDR_LIVE_KEYS) {
+        const std::string key {key_view};
+        const auto old_app_value = _app.config_overrides.find(key);
+        const auto new_app_value = updated->config_overrides.find(key);
+        const auto runtime_value = runtime_overrides.find(key);
+
+        if (old_app_value == _app.config_overrides.end()) {
+          if (runtime_value != runtime_overrides.end()) {
+            continue;
+          }
+          if (new_app_value != updated->config_overrides.end()) {
+            runtime_overrides.emplace(key, new_app_value->second);
+            _app.config_overrides[key] = new_app_value->second;
+            changed = true;
+          }
+          continue;
+        }
+
+        if (runtime_value != runtime_overrides.end() && runtime_value->second != old_app_value->second) {
+          continue;
+        }
+
+        if (new_app_value != updated->config_overrides.end()) {
+          if (runtime_value == runtime_overrides.end() || runtime_value->second != new_app_value->second) {
+            runtime_overrides[key] = new_app_value->second;
+            changed = true;
+          }
+          _app.config_overrides[key] = new_app_value->second;
+        } else {
+          if (runtime_value != runtime_overrides.end()) {
+            runtime_overrides.erase(key);
+            changed = true;
+          }
+          _app.config_overrides.erase(key);
+        }
+      }
+    }
+
+    if (!changed) {
+      return false;
+    }
+
+    config::set_runtime_config_overrides(std::move(runtime_overrides));
+    config::apply_config_now();
+    return true;
+  }
+
+  bool proc_t::update_active_app_live_rtx_hdr_overrides(
+    const std::string &app_uuid,
+    const std::unordered_map<std::string, std::string> &rtx_hdr_overrides
+  ) {
+    if (app_uuid.empty()) {
+      return false;
+    }
+
+    std::unordered_map<std::string, std::string> runtime_overrides;
+    bool changed = false;
+    {
+      std::scoped_lock lk(_apps_mutex);
+      if (_app_id <= 0 || _app.uuid != app_uuid) {
+        return false;
+      }
+
+      runtime_overrides = config::runtime_config_overrides_snapshot();
+      for (const auto key_view : RTX_HDR_LIVE_KEYS) {
+        const std::string key {key_view};
+        const auto old_app_value = _app.config_overrides.find(key);
+        const auto new_app_value = rtx_hdr_overrides.find(key);
+        const auto runtime_value = runtime_overrides.find(key);
+
+        if (old_app_value == _app.config_overrides.end()) {
+          if (runtime_value != runtime_overrides.end()) {
+            continue;
+          }
+          if (new_app_value != rtx_hdr_overrides.end()) {
+            runtime_overrides.emplace(key, new_app_value->second);
+            _app.config_overrides[key] = new_app_value->second;
+            changed = true;
+          }
+          continue;
+        }
+
+        if (runtime_value != runtime_overrides.end() && runtime_value->second != old_app_value->second) {
+          continue;
+        }
+
+        if (new_app_value != rtx_hdr_overrides.end()) {
+          if (runtime_value == runtime_overrides.end() || runtime_value->second != new_app_value->second) {
+            runtime_overrides[key] = new_app_value->second;
+            changed = true;
+          }
+          _app.config_overrides[key] = new_app_value->second;
+        } else {
+          if (runtime_value != runtime_overrides.end()) {
+            runtime_overrides.erase(key);
+            changed = true;
+          }
+          _app.config_overrides.erase(key);
+        }
+      }
+    }
+
+    if (!changed) {
+      return false;
+    }
+
+    config::set_runtime_config_overrides(std::move(runtime_overrides));
+    config::apply_config_now();
+    return true;
+  }
+#endif
+
+  std::vector<ctx_t> proc_t::release_apps() {
+    return std::move(_apps);
+  }
+
+  bp::environment proc_t::release_env() {
+    return std::move(_env);
+  }
+}  // namespace proc

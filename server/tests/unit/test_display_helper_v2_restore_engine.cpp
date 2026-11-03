@@ -1,0 +1,1614 @@
+/**
+ * @file tests/unit/test_display_helper_v2_restore_engine.cpp
+ * @brief Invariant tests for the display helper v2 restore engine internals
+ *        (snapshot codec, filtering rules, golden health) ported from the
+ *        battle-tested legacy helper.
+ */
+#ifdef _WIN32
+
+  #include "../tests_common.h"
+
+  #include "src/platform/windows/display_helper_v2/golden_health.h"
+  #include "src/platform/windows/display_helper_v2/operations.h"
+  #include "src/platform/windows/display_helper_v2/snapshot.h"
+  #include "src/platform/windows/display_helper_v2/snapshot_codec.h"
+  #include "src/platform/windows/display_helper_v2/topology_policy.h"
+
+  #include <algorithm>
+  #include <chrono>
+  #include <functional>
+
+  #include <nlohmann/json.hpp>
+
+namespace codec = display_helper::v2::codec;
+
+namespace {
+  display_device::DisplaySettingsSnapshot make_snapshot(const std::vector<std::vector<std::string>> &topology) {
+    display_device::DisplaySettingsSnapshot snapshot;
+    snapshot.m_topology = topology;
+    for (const auto &group : topology) {
+      for (const auto &id : group) {
+        display_device::DisplayMode mode;
+        mode.m_resolution.m_width = 1920;
+        mode.m_resolution.m_height = 1080;
+        mode.m_refresh_rate.m_numerator = 60000;
+        mode.m_refresh_rate.m_denominator = 1000;
+        snapshot.m_modes[id] = mode;
+        snapshot.m_hdr_states[id] = std::nullopt;
+      }
+    }
+    if (!topology.empty() && !topology.front().empty()) {
+      snapshot.m_primary_device = topology.front().front();
+    }
+    return snapshot;
+  }
+
+  display_device::EnumeratedDevice make_device(
+    const std::string &device_id,
+    const std::string &display_name,
+    bool active,
+    const std::string &edid_manufacturer = {},
+    const std::string &friendly_name = "Generic Monitor") {
+    display_device::EnumeratedDevice device;
+    device.m_device_id = device_id;
+    device.m_display_name = display_name;
+    device.m_friendly_name = friendly_name;
+    if (!edid_manufacturer.empty()) {
+      display_device::EdidData edid {};
+      edid.m_manufacturer_id = edid_manufacturer;
+      device.m_edid = edid;
+    }
+    if (active) {
+      device.m_info = display_device::EnumeratedDevice::Info {};
+    }
+    return device;
+  }
+}  // namespace
+
+// --- canonical topology comparison (fd98755b: MPO-scrambling endless restore loop) ---
+
+TEST(DisplayHelperV2Codec, CanonicalTopologyEquality) {
+  auto a = make_snapshot({{"A"}, {"B", "C"}});
+  auto b = make_snapshot({{"C", "B"}, {"A"}});
+  b.m_primary_device = a.m_primary_device;
+
+  EXPECT_TRUE(codec::equal_snapshots_strict(a, b));
+
+  auto c = make_snapshot({{"A", "B"}, {"C"}});  // different grouping
+  c.m_primary_device = a.m_primary_device;
+  EXPECT_FALSE(codec::equal_snapshots_strict(a, c));
+}
+
+TEST(DisplayHelperV2Codec, StrictSnapshotModeComparisonUsesExactRefreshFrequencies) {
+  const auto baseline = make_snapshot({{"A"}});
+
+  auto equivalent = baseline;
+  equivalent.m_modes.at("A").m_refresh_rate = display_device::Rational {120, 2};
+  EXPECT_TRUE(codec::equal_snapshots_strict(baseline, equivalent));
+
+  auto different_rate = baseline;
+  different_rate.m_modes.at("A").m_refresh_rate = display_device::Rational {120, 1};
+  EXPECT_FALSE(codec::equal_snapshots_strict(baseline, different_rate));
+
+  auto fractional_rate = baseline;
+  fractional_rate.m_modes.at("A").m_refresh_rate = display_device::Rational {60000, 1001};
+  EXPECT_FALSE(codec::equal_snapshots_strict(baseline, fractional_rate));
+
+  auto invalid_rate = baseline;
+  invalid_rate.m_modes.at("A").m_refresh_rate = display_device::Rational {60, 0};
+  EXPECT_FALSE(codec::equal_snapshots_strict(baseline, invalid_rate));
+}
+
+TEST(DisplayHelperV2Codec, SignatureIsOrderIndependent) {
+  auto a = make_snapshot({{"A"}, {"B", "C"}});
+  auto b = make_snapshot({{"C", "B"}, {"A"}});
+  b.m_primary_device = a.m_primary_device;
+
+  EXPECT_EQ(codec::signature(a), codec::signature(b));
+}
+
+TEST(DisplayHelperV2Codec, EqualSnapshotsToleratesMissingOrigins) {
+  auto a = make_snapshot({{"A"}});
+  auto b = a;
+  a.m_origins["A"] = display_device::Point {100, 200};
+  // b has no origins (older snapshot): still equal
+  EXPECT_TRUE(codec::equal_snapshots_strict(a, b));
+
+  b.m_origins["A"] = display_device::Point {0, 0};
+  EXPECT_FALSE(codec::equal_snapshots_strict(a, b));
+}
+
+// --- legacy on-disk format compatibility ---
+
+TEST(DisplayHelperV2Codec, SerializeParseRoundTrip) {
+  auto snap = make_snapshot({{"A"}, {"B"}});
+  snap.m_hdr_states["A"] = display_device::HdrState::Enabled;
+  snap.m_hdr_states["B"] = display_device::HdrState::Disabled;
+  snap.m_origins["A"] = display_device::Point {0, 0};
+  snap.m_origins["B"] = display_device::Point {-1920, 0};
+
+  codec::layout_rotation_map_t layouts {{"A", 0}, {"B", 90}};
+  const auto text = codec::serialize_snapshot(snap, layouts);
+  const auto loaded = codec::parse_snapshot_text(text);
+
+  EXPECT_EQ(loaded.snapshot_version, codec::kSnapshotLayoutVersionLatest);
+  EXPECT_TRUE(loaded.has_layout_data);
+  EXPECT_EQ(loaded.layout_rotations, layouts);
+  EXPECT_TRUE(codec::equal_snapshots_strict(loaded.snapshot, snap));
+  EXPECT_TRUE(display_helper::v2::topology::equal_origins(loaded.snapshot.m_origins, snap.m_origins));
+}
+
+TEST(DisplayHelperV2Codec, LegacyV1SchemaParsesWithoutLayouts) {
+  // Hand-written fixture in the original (pre-layouts, pre-origins) schema.
+  const std::string fixture = R"({
+  "topology": [["A"],["B"]],
+  "modes": {
+    "A": { "w": 2560, "h": 1440, "num": 240000, "den": 1000 },
+    "B": { "w": 1920, "h": 1080, "num": 60000, "den": 1000 }
+  },
+  "hdr": {
+    "A": "on",
+    "B": null
+  },
+  "primary": "A"
+})";
+
+  const auto loaded = codec::parse_snapshot_text(fixture);
+  EXPECT_EQ(loaded.snapshot_version, 1);
+  EXPECT_FALSE(loaded.has_layout_data);
+  EXPECT_TRUE(loaded.layout_rotations.empty());
+  ASSERT_EQ(loaded.snapshot.m_topology.size(), 2u);
+  EXPECT_EQ(loaded.snapshot.m_primary_device, "A");
+  ASSERT_EQ(loaded.snapshot.m_modes.count("A"), 1u);
+  EXPECT_EQ(loaded.snapshot.m_modes.at("A").m_resolution.m_width, 2560u);
+  EXPECT_EQ(loaded.snapshot.m_modes.at("A").m_refresh_rate.m_numerator, 240000u);
+  ASSERT_EQ(loaded.snapshot.m_hdr_states.count("A"), 1u);
+  EXPECT_EQ(loaded.snapshot.m_hdr_states.at("A"), display_device::HdrState::Enabled);
+  EXPECT_EQ(loaded.snapshot.m_hdr_states.at("B"), std::nullopt);
+  EXPECT_TRUE(codec::snapshot_text_has_restore_payload(fixture));
+}
+
+// --- virtual display classification (f3841ad8: baseline poisoning) ---
+
+TEST(DisplayHelperV2Codec, VirtualDisplayClassifier) {
+  EXPECT_TRUE(codec::is_virtual_display_device(make_device("ID1", "\\\\.\\DISPLAY9", true, "", "SunshineVirtualDisplay 4K")));
+  EXPECT_TRUE(codec::is_virtual_display_device(make_device("ID2", "\\\\.\\DISPLAY9", true, "", "Sunshine Virtual Display Driver")));
+  EXPECT_TRUE(codec::is_virtual_display_device(make_device("ID3", "\\\\.\\DISPLAY9", true, "SMK")));  // SudoVDA EDID
+  EXPECT_TRUE(codec::is_virtual_display_device(make_device("ID4", "\\\\.\\DISPLAY9", true, "SDD")));  // bundled driver EDID
+  EXPECT_FALSE(codec::is_virtual_display_device(make_device("ID5", "\\\\.\\DISPLAY1", true, "DEL", "DELL U2723QE")));
+}
+
+// --- load-side filtering (f3841ad8 / 8f2d0632) ---
+
+TEST(DisplayHelperV2Codec, FilterLoadRejectsSnapshotReferencingActiveVirtual) {
+  codec::ParsedSnapshot loaded;
+  loaded.snapshot = make_snapshot({{"PHYS", "VDD"}});
+
+  display_device::EnumeratedDeviceList devices {
+    make_device("PHYS", "\\\\.\\DISPLAY1", true),
+    make_device("VDD", "\\\\.\\DISPLAY2", true, "SMK"),
+  };
+
+  auto result = codec::filter_loaded_snapshot(std::move(loaded), devices, {}, "test");
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST(DisplayHelperV2Codec, FilterLoadRejectsAllExcluded) {
+  codec::ParsedSnapshot loaded;
+  loaded.snapshot = make_snapshot({{"A"}});
+
+  display_device::EnumeratedDeviceList devices {
+    make_device("A", "\\\\.\\DISPLAY1", true),
+  };
+
+  // Exclusions are matched case-insensitively via normalize_device_id.
+  auto result = codec::filter_loaded_snapshot(std::move(loaded), devices, {"a"}, "test");
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST(DisplayHelperV2Codec, FilterLoadRejectsWhenNoValidDevices) {
+  codec::ParsedSnapshot loaded;
+  loaded.snapshot = make_snapshot({{"A"}});
+
+  auto result = codec::filter_loaded_snapshot(std::move(loaded), {}, {}, "test");
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST(DisplayHelperV2Codec, FilterLoadRejectsMissingNonExcludedBaselineDevice) {
+  codec::ParsedSnapshot loaded;
+  loaded.snapshot = make_snapshot({{"A"}, {"B"}});
+  loaded.has_layout_data = true;
+  loaded.layout_rotations = {{"A", 0}, {"B", 90}};
+
+  display_device::EnumeratedDeviceList devices {
+    make_device("A", "\\\\.\\DISPLAY1", true),
+    // B not present anymore
+  };
+
+  auto result = codec::filter_loaded_snapshot(std::move(loaded), devices, {}, "test");
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST(DisplayHelperV2Codec, FilterLoadDropsExplicitlyExcludedMissingBaselineDevice) {
+  codec::ParsedSnapshot loaded;
+  loaded.snapshot = make_snapshot({{"A"}, {"B"}});
+  loaded.has_layout_data = true;
+  loaded.layout_rotations = {{"A", 0}, {"B", 90}};
+
+  display_device::EnumeratedDeviceList devices {
+    make_device("A", "\\\\.\\DISPLAY1", true),
+    // B is intentionally excluded and need not be present.
+  };
+
+  auto result = codec::filter_loaded_snapshot(std::move(loaded), devices, {"b"}, "test");
+  ASSERT_TRUE(result.has_value());
+  ASSERT_EQ(result->snapshot.m_topology.size(), 1u);
+  EXPECT_EQ(result->snapshot.m_topology.front().front(), "A");
+  EXPECT_EQ(result->snapshot.m_modes.count("B"), 0u);
+  EXPECT_EQ(result->snapshot.m_hdr_states.count("B"), 0u);
+  EXPECT_EQ(result->layout_rotations.count("B"), 0u);
+  EXPECT_TRUE(result->has_layout_data);
+}
+
+TEST(DisplayHelperV2Codec, FilterLoadAllowsInactiveButConnectedDevices) {
+  // m_display_name is only populated for active displays; restore must still
+  // target inactive-but-connected monitors by device id alone.
+  codec::ParsedSnapshot loaded;
+  loaded.snapshot = make_snapshot({{"A"}});
+
+  display_device::EnumeratedDeviceList devices {
+    make_device("A", "", false),  // connected but inactive
+  };
+
+  auto result = codec::filter_loaded_snapshot(std::move(loaded), devices, {}, "test");
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->snapshot.m_topology.front().front(), "A");
+}
+
+// --- save-side filtering ---
+
+TEST(DisplayHelperV2Codec, FilterSaveExcludesActiveVirtualDisplay) {
+  auto snap = make_snapshot({{"PHYS1"}, {"PHYS2"}, {"VDD"}});
+  snap.m_origins["PHYS1"] = display_device::Point {0, 0};
+  snap.m_origins["PHYS2"] = display_device::Point {1920, 0};
+  snap.m_origins["VDD"] = display_device::Point {3840, 0};
+  display_device::EnumeratedDeviceList devices {
+    make_device("PHYS1", "\\\\.\\DISPLAY1", true),
+    make_device("PHYS2", "\\\\.\\DISPLAY2", true),
+    make_device("VDD", "\\\\.\\DISPLAY3", true, "SDD"),
+  };
+
+  std::string reason;
+  auto result = codec::filter_snapshot_for_save(snap, devices, {}, reason);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_EQ(result->m_topology.size(), 2u);
+  EXPECT_EQ(result->m_topology[0].front(), "PHYS1");
+  EXPECT_EQ(result->m_topology[1].front(), "PHYS2");
+  EXPECT_EQ(result->m_modes.count("VDD"), 0u);
+  EXPECT_EQ(result->m_hdr_states.count("VDD"), 0u);
+  EXPECT_EQ(result->m_origins.count("VDD"), 0u);
+  EXPECT_EQ(result->m_primary_device, "PHYS1");
+  EXPECT_TRUE(reason.empty());
+}
+
+TEST(DisplayHelperV2Codec, FilterSaveRejectsVirtualOnlySnapshot) {
+  auto snap = make_snapshot({{"VDD"}});
+  display_device::EnumeratedDeviceList devices {
+    make_device("VDD", "\\\\.\\DISPLAY1", true, "SDD"),
+  };
+
+  std::string reason;
+  auto result = codec::filter_snapshot_for_save(snap, devices, {}, reason);
+  EXPECT_FALSE(result.has_value());
+  EXPECT_EQ(reason, "no devices with valid display_name");
+}
+
+TEST(DisplayHelperV2Codec, FilterSaveRejectsPhysicalPathLosingDisplayName) {
+  auto snap = make_snapshot({{"A", "B"}});
+  display_device::EnumeratedDeviceList devices {
+    make_device("A", "\\\\.\\DISPLAY1", true),
+    make_device("B", "", false),  // changed since the active topology query
+  };
+
+  std::string reason;
+  auto result = codec::filter_snapshot_for_save(snap, devices, {}, reason);
+  EXPECT_FALSE(result.has_value());
+  EXPECT_EQ(reason, "physical topology device lost during capture: B");
+}
+
+TEST(DisplayHelperV2Codec, FilterSaveRejectsAllExcluded) {
+  auto snap = make_snapshot({{"A"}});
+  display_device::EnumeratedDeviceList devices {
+    make_device("A", "\\\\.\\DISPLAY1", true),
+  };
+
+  std::string reason;
+  auto result = codec::filter_snapshot_for_save(snap, devices, {"a"}, reason);
+  EXPECT_FALSE(result.has_value());
+  EXPECT_EQ(reason, "all devices are excluded");
+}
+
+TEST(DisplayHelperV2Codec, PrimaryDisappearingBetweenQueriesMustNotNarrowBaseline) {
+  auto snap = make_snapshot({{"ASUS"}, {"DENON"}, {"AOC"}});
+  display_device::EnumeratedDeviceList devices {
+    make_device("DENON", "\\\\.\\DISPLAY2", true),
+    make_device("AOC", "\\\\.\\DISPLAY3", true),
+  };
+  std::string reason;
+  auto result = codec::filter_snapshot_for_save(snap, devices, {}, reason);
+  EXPECT_FALSE(result.has_value()) << "Partial capture would disable the primary at restore";
+}
+
+TEST(DisplayHelperV2Codec, IntentionalExclusionStillAllowsNarrowPhysicalBaseline) {
+  auto snap = make_snapshot({{"ASUS"}, {"DENON"}, {"AOC"}});
+  display_device::EnumeratedDeviceList devices {
+    make_device("ASUS", "", false),
+    make_device("DENON", "\\\\.\\DISPLAY2", true),
+    make_device("AOC", "\\\\.\\DISPLAY3", true),
+  };
+  std::string reason;
+  auto result = codec::filter_snapshot_for_save(snap, devices, {"asus"}, reason);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->m_topology, (display_device::ActiveTopology {{"DENON"}, {"AOC"}}));
+}
+
+TEST(DisplayHelperV2Codec, AlreadyInactivePhysicalDeviceDoesNotGetEnabledByCapture) {
+  auto snap = make_snapshot({{"DENON"}, {"AOC"}});
+  display_device::EnumeratedDeviceList devices {
+    make_device("ASUS", "", false),
+    make_device("DENON", "\\\\.\\DISPLAY2", true),
+    make_device("AOC", "\\\\.\\DISPLAY3", true),
+  };
+  std::string reason;
+  auto result = codec::filter_snapshot_for_save(snap, devices, {}, reason);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->m_topology, snap.m_topology);
+}
+
+// --- golden health (8f062f99: stale warnings only after failures persist) ---
+
+TEST(DisplayHelperV2GoldenHealth, WarnsOnlyAfterThresholdAndWindow) {
+  display_helper::v2::InMemoryTextStorage status_storage;
+  const std::string status_key = "display_golden_restore_status.json";
+
+  long long fake_now_ms = 1'000'000;
+  display_helper::v2::GoldenHealth health(status_storage, status_key, [&]() {
+    return fake_now_ms;
+  });
+
+  auto read_status = [&]() {
+    const auto text = status_storage.read(status_key);
+    return text ? nlohmann::json::parse(*text, nullptr, false) : nlohmann::json {};
+  };
+
+  // No issue noted: nothing written.
+  health.register_unresolved("noop");
+  EXPECT_FALSE(status_storage.exists(status_key));
+
+  // Two failures inside the window: marker exists but no out-of-date warning.
+  health.note_issue("restore_not_confirmed");
+  health.register_unresolved("test");
+  health.note_issue("restore_not_confirmed");
+  health.register_unresolved("test");
+
+  ASSERT_TRUE(status_storage.exists(status_key));
+  auto status = read_status();
+  ASSERT_TRUE(status.is_object());
+  EXPECT_FALSE(status["snapshot_out_of_date"].get<bool>());
+  EXPECT_EQ(status["unresolved_restore_attempts"].get<int>(), 2);
+
+  // Third failure past the 72h window: now flagged out of date.
+  fake_now_ms += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::hours(73)).count();
+  health.note_issue("restore_not_confirmed");
+  health.register_unresolved("test");
+
+  status = read_status();
+  EXPECT_TRUE(status["snapshot_out_of_date"].get<bool>());
+  EXPECT_EQ(status["unresolved_restore_attempts"].get<int>(), 3);
+
+  // Confirmed restore clears the marker.
+  health.clear_status("restore confirmed");
+  EXPECT_FALSE(status_storage.exists(status_key));
+}
+
+// --- recovery engine semantics (legacy try_restore_once_if_valid) ---
+
+namespace {
+  class EngineClock final : public display_helper::v2::IClock {
+  public:
+    std::chrono::steady_clock::time_point now() override {
+      return now_;
+    }
+
+    void sleep_for(std::chrono::milliseconds duration) override {
+      now_ += duration;
+    }
+
+    void advance(std::chrono::milliseconds duration) {
+      now_ += duration;
+    }
+
+  private:
+    std::chrono::steady_clock::time_point now_ {std::chrono::steady_clock::now() + std::chrono::hours(1)};
+  };
+
+  /// Stateful display fake: topology and settings are distinct operations so
+  /// recovery tests can assert the Windows activation stair-step.
+  class EngineDisplayFake final : public display_helper::v2::IDisplaySettings {
+  public:
+    using ApplyStatus = display_helper::v2::ApplyStatus;
+
+    ApplyStatus apply(const display_device::SingleDisplayConfiguration &) override {
+      return ApplyStatus::Ok;
+    }
+
+    ApplyStatus apply_topology(const display_device::ActiveTopology &topology) override {
+      ++topology_calls;
+      transition_order.push_back("topology:" + first_id(topology));
+      if (topology_result != ApplyStatus::Ok) return topology_result;
+      current.m_topology = topology;
+      if (on_topology_applied) {
+        on_topology_applied();
+      }
+      return ApplyStatus::Ok;
+    }
+
+    display_device::EnumeratedDeviceList enumerate(display_device::DeviceEnumerationDetail) override {
+      ++enumerate_calls;
+      if (on_enumerate) {
+        on_enumerate();
+      }
+      return devices;
+    }
+
+    display_device::ActiveTopology capture_topology() override {
+      return current.m_topology;
+    }
+
+    bool validate_topology(const display_device::ActiveTopology &) override {
+      return true;
+    }
+
+    display_device::DisplaySettingsSnapshot capture_snapshot() override {
+      if (on_capture_snapshot) {
+        on_capture_snapshot();
+      }
+      return current;
+    }
+
+    bool apply_snapshot(const display_device::DisplaySettingsSnapshot &snapshot) override {
+      return apply_snapshot_settings(snapshot);
+    }
+
+    bool apply_snapshot_settings(const display_device::DisplaySettingsSnapshot &snapshot) override {
+      ++apply_calls;
+      const auto id = first_id(snapshot);
+      apply_order.push_back(id);
+      transition_order.push_back("settings:" + id);
+      if (!ineffective_ids.contains(id)) {
+        if (native_compatible_partial_restore) {
+          current.m_topology = snapshot.m_topology;
+          current.m_modes = snapshot.m_modes;
+          if (!snapshot.m_primary_device.empty() && !ineffective_primary) {
+            current.m_primary_device = snapshot.m_primary_device;
+          }
+          if (!ineffective_origins) {
+            for (const auto &[origin_id, origin] : snapshot.m_origins) {
+              current.m_origins[origin_id] = origin;
+            }
+          }
+        } else {
+          current = snapshot;
+        }
+      }
+      return true;
+    }
+
+    bool apply_snapshot_hdr_states(const display_device::DisplaySettingsSnapshot &snapshot) override {
+      restore_stage_order.push_back("hdr");
+      ++hdr_apply_calls;
+      if (!hdr_apply_result) return false;
+      if (!ineffective_hdr) {
+        for (const auto &[id, state] : snapshot.m_hdr_states) {
+          if (state) current.m_hdr_states[id] = state;
+        }
+      }
+      if (on_hdr_applied) on_hdr_applied();
+      return true;
+    }
+
+    bool snapshot_matches_current(const display_device::DisplaySettingsSnapshot &snapshot) override {
+      return codec::equal_snapshots_strict(current, snapshot);
+    }
+
+    bool configuration_matches(const display_device::SingleDisplayConfiguration &) override {
+      return true;
+    }
+
+    bool set_display_origin(const std::string &, const display_device::Point &) override {
+      return true;
+    }
+
+    bool is_topology_same(const display_device::ActiveTopology &lhs, const display_device::ActiveTopology &rhs) override {
+      return codec::canonical_topology(lhs) == codec::canonical_topology(rhs);
+    }
+
+    bool reset_staged_apply_state() override {
+      ++reset_staged_apply_state_calls;
+      return reset_staged_apply_state_result;
+    }
+
+    bool apply_layout_rotations(const codec::layout_rotation_map_t &layout_rotations) override {
+      restore_stage_order.push_back("rotation");
+      rotation_apply_calls.push_back(layout_rotations);
+      if (on_rotation_applied) on_rotation_applied();
+      return apply_layout_rotations_result;
+    }
+
+    bool current_layout_matches(const codec::layout_rotation_map_t &) override {
+      ++current_layout_matches_calls;
+      if (on_current_layout_matches) {
+        on_current_layout_matches();
+      }
+      return layout_matches_result;
+    }
+
+    bool reassert_layout_rotations(const codec::layout_rotation_map_t &layout_rotations) override {
+      restore_stage_order.push_back("reassert");
+      reassert_calls.push_back(layout_rotations);
+      if (on_rotation_applied) on_rotation_applied();
+      return reassert_result;
+    }
+
+    static std::string first_id(const display_device::DisplaySettingsSnapshot &snapshot) {
+      return first_id(snapshot.m_topology);
+    }
+
+    static std::string first_id(const display_device::ActiveTopology &topology) {
+      if (!topology.empty() && !topology.front().empty()) {
+        return topology.front().front();
+      }
+      return {};
+    }
+
+    display_device::DisplaySettingsSnapshot current;
+    display_device::EnumeratedDeviceList devices;
+    std::set<std::string> ineffective_ids;
+    std::vector<std::string> apply_order;
+    std::vector<std::string> transition_order;
+    std::vector<std::string> restore_stage_order;
+    std::vector<codec::layout_rotation_map_t> rotation_apply_calls;
+    std::vector<codec::layout_rotation_map_t> reassert_calls;
+    int apply_calls = 0;
+    int hdr_apply_calls = 0;
+    int topology_calls = 0;
+    int enumerate_calls = 0;
+    int reset_staged_apply_state_calls = 0;
+    int current_layout_matches_calls = 0;
+    bool reset_staged_apply_state_result = true;
+    bool native_compatible_partial_restore = false;
+    bool ineffective_primary = false;
+    bool ineffective_origins = false;
+    bool apply_layout_rotations_result = true;
+    bool layout_matches_result = true;
+    bool reassert_result = true;
+    bool hdr_apply_result = true;
+    bool ineffective_hdr = false;
+    ApplyStatus topology_result = ApplyStatus::Ok;
+    std::function<void()> on_rotation_applied;
+    std::function<void()> on_hdr_applied;
+    std::function<void()> on_capture_snapshot;
+    std::function<void()> on_topology_applied;
+    std::function<void()> on_enumerate;
+    std::function<void()> on_current_layout_matches;
+  };
+
+  /// In-memory storage that also carries layout-rotation metadata so tests can
+  /// drive the layout branches of RecoveryOperation (the plain in-memory
+  /// storage always reports has_layout_data=false).
+  class LayoutSnapshotStorage final : public display_helper::v2::InMemorySnapshotStorage {
+  public:
+    using display_helper::v2::InMemorySnapshotStorage::save;
+
+    bool save(
+      display_helper::v2::SnapshotTier tier,
+      const display_device::DisplaySettingsSnapshot &snapshot,
+      const codec::layout_rotation_map_t &layout_rotations) override {
+      layouts_[tier] = layout_rotations;
+      return display_helper::v2::InMemorySnapshotStorage::save(tier, snapshot);
+    }
+
+    std::optional<codec::ParsedSnapshot> load_with_metadata(display_helper::v2::SnapshotTier tier) override {
+      auto loaded = display_helper::v2::ISnapshotStorage::load_with_metadata(tier);
+      if (!loaded) {
+        return std::nullopt;
+      }
+      const auto it = layouts_.find(tier);
+      if (it != layouts_.end() && !it->second.empty()) {
+        loaded->layout_rotations = it->second;
+        loaded->has_layout_data = true;
+      }
+      return loaded;
+    }
+
+  private:
+    std::map<display_helper::v2::SnapshotTier, codec::layout_rotation_map_t> layouts_;
+  };
+
+  struct RecoveryHarness {
+    EngineClock clock;
+    EngineDisplayFake display;
+    LayoutSnapshotStorage storage;
+    display_helper::v2::InMemoryTextStorage golden_status_storage;
+    display_helper::v2::GoldenHealth golden_health {golden_status_storage, "golden_status.json"};
+    display_helper::v2::RestoreState state;
+    display_helper::v2::RecoveryOperation recovery {display, storage, golden_health, state, clock};
+    display_helper::v2::CancellationSource cancellation;
+
+    void add_device(const std::string &id) {
+      display.devices.push_back(make_device(id, "\\\\.\\DISPLAY_" + id, true));
+    }
+  };
+}  // namespace
+
+// Reboot logs for #285 show an already healthy ASUS/DENON/AOC desktop
+// narrowed by a stale session snapshot that only includes DENON/AOC.
+TEST(DisplayHelperV2RecoveryEngine, BootPreservesPhysicalPrimaryOmittedFromSessionBaseline) {
+  for (const auto tier : {display_helper::v2::SnapshotTier::Current, display_helper::v2::SnapshotTier::Previous}) {
+    RecoveryHarness harness;
+    harness.state.preserve_active_physical_primary.store(true);
+    harness.add_device("ASUS");
+    harness.add_device("DENON");
+    harness.add_device("AOC");
+    const auto live = make_snapshot({{"ASUS"}, {"DENON"}, {"AOC"}});
+    const auto narrowed = make_snapshot({{"DENON"}, {"AOC"}});
+    harness.display.current = live;
+    ASSERT_TRUE(harness.storage.save(tier, narrowed));
+    const auto other_tier = tier == display_helper::v2::SnapshotTier::Current ?
+                              display_helper::v2::SnapshotTier::Previous :
+                              display_helper::v2::SnapshotTier::Current;
+    const auto other_baseline = make_snapshot({{"MISSING"}});
+    ASSERT_TRUE(harness.storage.save(other_tier, other_baseline));
+
+    const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+    ASSERT_TRUE(outcome.success);
+    ASSERT_TRUE(outcome.snapshot);
+    EXPECT_EQ(outcome.snapshot->m_primary_device, "ASUS");
+    EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(harness.display.current, live));
+    EXPECT_EQ(harness.display.topology_calls, 0);
+    EXPECT_EQ(harness.display.apply_calls, 0);
+    EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 1);
+    // The accepted live desktop must never promote/delete the stale tier or
+    // overwrite a history entry with that stale baseline.
+    ASSERT_TRUE(harness.storage.load(tier));
+    EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(*harness.storage.load(tier), narrowed));
+    ASSERT_TRUE(harness.storage.load(other_tier));
+    EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(*harness.storage.load(other_tier), other_baseline));
+  }
+}
+
+// A physical HDMI dummy plug or TV is not a virtual-driver device. A
+// persisted stream desktop can therefore have an apparently healthy physical
+// primary while still omitting the real desktop's baseline monitors.
+TEST(DisplayHelperV2RecoveryEngine, BootRestoresInterruptedPhysicalTargetStream) {
+  for (const auto tier : {display_helper::v2::SnapshotTier::Current, display_helper::v2::SnapshotTier::Previous}) {
+    for (const bool one_baseline_member_active : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(tier));
+      SCOPED_TRACE(one_baseline_member_active);
+      RecoveryHarness harness;
+      harness.state.preserve_active_physical_primary.store(true);
+      harness.display.devices = {
+        make_device("ASUS", "", false),
+        make_device("DENON", one_baseline_member_active ? "\\\\.\\DISPLAY_DENON" : "", one_baseline_member_active),
+        make_device("AOC", "", false),
+        make_device("DUMMY", "\\\\.\\DISPLAY_DUMMY", true, "GSM", "HDMI dummy plug"),
+      };
+      const auto baseline = make_snapshot({{"ASUS"}, {"DENON"}, {"AOC"}});
+      harness.display.on_topology_applied = [&]() {
+        // Model CCD publishing the paths activated by SetDisplayConfig.
+        const auto active = codec::topology_device_set(harness.display.current.m_topology);
+        for (auto &device : harness.display.devices) {
+          if (active.contains(device.m_device_id)) {
+            device.m_info = display_device::EnumeratedDevice::Info {};
+            device.m_display_name = "\\\\.\\DISPLAY_" + device.m_device_id;
+          } else {
+            device.m_info.reset();
+            device.m_display_name.clear();
+          }
+        }
+      };
+      harness.display.current = one_baseline_member_active ?
+                                  make_snapshot({{"DUMMY"}, {"DENON"}}) :
+                                  make_snapshot({{"DUMMY"}});
+      ASSERT_TRUE(harness.storage.save(tier, baseline));
+
+      const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+      ASSERT_TRUE(outcome.success);
+      ASSERT_TRUE(outcome.snapshot);
+      EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(*outcome.snapshot, baseline));
+      EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(harness.display.current, baseline));
+      EXPECT_GT(harness.display.topology_calls, 0);
+      EXPECT_GT(harness.display.apply_calls, 0);
+      EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 1);
+    }
+  }
+}
+
+TEST(DisplayHelperV2RecoveryEngine, BootPrimaryGuardRetriesWithoutMutationWhenLiveDesktopDrifts) {
+  RecoveryHarness harness;
+  harness.state.preserve_active_physical_primary.store(true);
+  harness.add_device("ASUS");
+  harness.add_device("DENON");
+  harness.display.current = make_snapshot({{"ASUS"}, {"DENON"}});
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, make_snapshot({{"DENON"}})));
+  int captures = 0;
+  harness.display.on_capture_snapshot = [&]() {
+    if (++captures > 1) {
+      harness.display.current.m_modes["ASUS"].m_resolution.m_width = 2560;
+    }
+  };
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_EQ(harness.display.topology_calls, 0);
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+}
+
+TEST(DisplayHelperV2RecoveryEngine, BootPrimaryGuardKeepsExactStreamAndGoldenRestorePolicies) {
+  enum class Case { Stream, VirtualPrimary, ActiveVirtual, ExcludedPrimary, GoldenFirst, PrimaryInBaseline };
+  for (const auto test_case : {Case::Stream, Case::VirtualPrimary, Case::ActiveVirtual,
+                              Case::ExcludedPrimary, Case::GoldenFirst, Case::PrimaryInBaseline}) {
+    SCOPED_TRACE(static_cast<int>(test_case));
+    RecoveryHarness harness;
+    harness.state.preserve_active_physical_primary.store(test_case != Case::Stream);
+    harness.add_device("ASUS");
+    harness.add_device("DENON");
+    harness.add_device("AOC");
+    harness.display.current = make_snapshot({{"ASUS"}, {"DENON"}, {"AOC"}});
+    auto baseline = make_snapshot({{"DENON"}, {"AOC"}});
+    if (test_case == Case::VirtualPrimary || test_case == Case::ActiveVirtual) {
+      harness.display.devices.push_back(make_device("VDD", "\\\\.\\DISPLAY_VDD", true, "SDD"));
+      harness.display.current.m_topology.push_back({"VDD"});
+      harness.display.current.m_modes["VDD"] = display_device::DisplayMode {};
+      if (test_case == Case::VirtualPrimary) {
+        harness.display.current.m_primary_device = "VDD";
+      }
+    } else if (test_case == Case::ExcludedPrimary) {
+      harness.state.set_exclusions({"asus"});
+    } else if (test_case == Case::GoldenFirst) {
+      harness.state.always_restore_from_golden.store(true);
+      ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, baseline));
+    } else if (test_case == Case::PrimaryInBaseline) {
+      baseline = make_snapshot({{"DENON"}, {"ASUS"}});
+    }
+    ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, baseline));
+
+    const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+    ASSERT_TRUE(outcome.success);
+    EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(harness.display.current, baseline));
+    EXPECT_GT(harness.display.topology_calls, 0);
+    EXPECT_GT(harness.display.apply_calls, 0);
+  }
+}
+
+// fd98755b: once the current state matches the baseline (order-independently),
+// the restore must confirm WITHOUT touching the display stack again.
+TEST(DisplayHelperV2RecoveryEngine, TerminatesWithoutApplyOnFirstConfirmedMatch) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+
+  auto baseline = make_snapshot({{"A"}, {"B"}});
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, baseline));
+
+  // Same state, but topology groups enumerated in a different order.
+  harness.display.current = make_snapshot({{"B"}, {"A"}});
+  harness.display.current.m_primary_device = baseline.m_primary_device;
+
+  auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_EQ(harness.display.topology_calls, 0);
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 1);
+  // No layout metadata -> nothing to reassert.
+  EXPECT_TRUE(harness.display.reassert_calls.empty());
+}
+
+// Recovery writes only known HDR values and a non-empty saved primary. An
+// unknown/omitted saved value must not cause a healthy live desktop to be
+// repeatedly re-applied or have its unrequested state cleared.
+TEST(DisplayHelperV2RecoveryEngine, ConfirmsUnknownHdrAndEmptyPrimaryWithoutApply) {
+  {
+    RecoveryHarness harness;
+    harness.add_device("A");
+
+    auto requested = make_snapshot({{"A"}});
+    requested.m_hdr_states["A"] = std::nullopt;
+    requested.m_origins.clear();  // Legacy snapshot: origins were not recorded.
+    ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, requested));
+
+    harness.display.native_compatible_partial_restore = true;
+    harness.display.current = make_snapshot({{"A"}});
+    harness.display.current.m_hdr_states["A"] = display_device::HdrState::Enabled;
+
+    const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+    EXPECT_TRUE(outcome.success);
+    EXPECT_EQ(harness.display.topology_calls, 0);
+    EXPECT_EQ(harness.display.apply_calls, 0);
+    EXPECT_EQ(harness.display.current.m_hdr_states.at("A"), display_device::HdrState::Enabled);
+  }
+
+  {
+    RecoveryHarness harness;
+    harness.add_device("A");
+    harness.add_device("B");
+    auto requested = make_snapshot({{"A"}, {"B"}});
+    requested.m_primary_device.clear();
+    ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, requested));
+
+    harness.display.native_compatible_partial_restore = true;
+    harness.display.current = make_snapshot({{"A"}, {"B"}});
+    harness.display.current.m_primary_device = "B";
+
+    const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+    EXPECT_TRUE(outcome.success);
+    EXPECT_EQ(harness.display.topology_calls, 0);
+    EXPECT_EQ(harness.display.apply_calls, 0);
+    EXPECT_EQ(harness.display.current.m_primary_device, "B");
+  }
+}
+
+// The old symmetric comparator considered an empty actual origin map equal to
+// any saved origin map. Recovery must instead prove every saved origin; a
+// missing value triggers a restore attempt and cannot be accepted as a match.
+TEST(DisplayHelperV2RecoveryEngine, MissingSavedOriginCannotPassConfirmation) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+
+  auto requested = make_snapshot({{"A"}});
+  requested.m_origins["A"] = display_device::Point {100, 200};
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, requested));
+
+  harness.display.native_compatible_partial_restore = true;
+  harness.display.ineffective_origins = true;
+  harness.display.current = requested;
+  harness.display.current.m_origins.clear();
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_EQ(harness.display.apply_calls, 2);
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+}
+
+TEST(DisplayHelperV2RecoveryEngine, KnownHdrAndExplicitPrimaryRemainRequired) {
+  {
+    RecoveryHarness harness;
+    harness.add_device("A");
+    auto requested = make_snapshot({{"A"}});
+    requested.m_hdr_states["A"] = display_device::HdrState::Enabled;
+    ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, requested));
+    harness.display.native_compatible_partial_restore = true;
+    harness.display.hdr_apply_result = false;
+    harness.display.current = requested;
+    harness.display.current.m_hdr_states["A"] = display_device::HdrState::Disabled;
+
+    EXPECT_FALSE(harness.recovery.run(harness.cancellation.token()).success);
+    EXPECT_EQ(harness.display.apply_calls, 2);
+    EXPECT_GT(harness.display.hdr_apply_calls, 0);
+  }
+
+  {
+    RecoveryHarness harness;
+    harness.add_device("A");
+    auto requested = make_snapshot({{"A"}});
+    ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, requested));
+    harness.display.native_compatible_partial_restore = true;
+    harness.display.ineffective_primary = true;
+    harness.display.current = requested;
+    harness.display.current.m_primary_device = "OTHER";
+
+    EXPECT_FALSE(harness.recovery.run(harness.cancellation.token()).success);
+    EXPECT_EQ(harness.display.apply_calls, 2);
+    EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
+  }
+
+  {
+    RecoveryHarness harness;
+    harness.add_device("A");
+    auto requested = make_snapshot({{"A"}});
+    requested.m_hdr_states["A"] = display_device::HdrState::Enabled;
+    ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, requested));
+    harness.display.native_compatible_partial_restore = true;
+    harness.display.ineffective_hdr = true;
+    harness.display.current = requested;
+    harness.display.current.m_hdr_states.erase("A");
+
+    EXPECT_FALSE(harness.recovery.run(harness.cancellation.token()).success);
+    EXPECT_EQ(harness.display.apply_calls, 2);
+    EXPECT_GT(harness.display.hdr_apply_calls, 0);
+    EXPECT_EQ(harness.display.current.m_hdr_states.count("A"), 0u);
+  }
+}
+
+TEST(DisplayHelperV2RecoveryEngine, RestoresModeAndPreservesUnknownHdrAndEmptyPrimary) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+
+  auto requested = make_snapshot({{"A"}, {"B"}});
+  requested.m_primary_device.clear();
+  requested.m_hdr_states["A"] = std::nullopt;
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, requested));
+
+  // Model the documented partial restore contract: only a known saved HDR
+  // value and a non-empty saved primary are written. A mode mismatch still
+  // requires one real settings application before confirmation can succeed.
+  harness.display.native_compatible_partial_restore = true;
+  harness.display.current = requested;
+  harness.display.current.m_modes.at("A").m_resolution.m_width = 2560;
+  harness.display.current.m_primary_device = "B";
+  harness.display.current.m_hdr_states["A"] = display_device::HdrState::Enabled;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_EQ(harness.display.apply_calls, 1);
+  EXPECT_EQ(harness.display.current.m_modes.at("A").m_resolution.m_width, 1920u);
+  EXPECT_EQ(harness.display.current.m_primary_device, "B");
+  EXPECT_EQ(harness.display.current.m_hdr_states.at("A"), display_device::HdrState::Enabled);
+}
+
+TEST(DisplayHelperV2RecoveryEngine, ReappliesWhenModeDriftsDuringPostApplyQuietWindow) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  const auto requested = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, requested));
+  harness.display.current = requested;
+  harness.display.current.m_modes.at("A").m_resolution.m_width = 2560;
+
+  int captures = 0;
+  harness.display.on_capture_snapshot = [&] {
+    ++captures;
+    // capture 1 is before_sig; captures 2-3 are the initial fast-path read;
+    // captures 4-5 are the first post-apply verify read; captures 6-7 form
+    // quiet_period's first stable sample. Drift only after the first settings
+    // apply, then keep the wrong mode stable so only the post-quiet requested-
+    // state check can reject this apparently quiet result.
+    if (harness.display.apply_calls == 1 && captures == 6) {
+      harness.display.current.m_modes.at("A").m_resolution.m_width = 2560;
+    }
+  };
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_EQ(harness.display.apply_calls, 2);
+  EXPECT_GE(captures, 6);
+  EXPECT_EQ(harness.display.current.m_modes.at("A").m_resolution.m_width, 1920u);
+}
+
+TEST(DisplayHelperV2RecoveryEngine, FilteredEmptyModeMapCannotConfirm) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+  auto requested = make_snapshot({{"A", "B"}});
+  requested.m_modes.erase("B");
+  harness.state.set_exclusions({"A"});
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, requested));
+  codec::ParsedSnapshot saved;
+  saved.snapshot = requested;
+  const auto filtered = codec::filter_loaded_snapshot(saved, harness.display.devices, {"A"}, "empty-mode-fixture");
+  ASSERT_TRUE(filtered);
+  EXPECT_TRUE(filtered->snapshot.m_modes.empty());
+  ASSERT_EQ(filtered->snapshot.m_topology.size(), 1u);
+  ASSERT_EQ(filtered->snapshot.m_topology.front().size(), 1u);
+  EXPECT_EQ(filtered->snapshot.m_topology.front().front(), "B");
+  // The real load filter removes A's only saved mode while leaving B in the
+  // requested topology. Recovery must fail before topology/settings/HDR
+  // mutation and leave the still-active B desktop unchanged.
+  harness.display.native_compatible_partial_restore = true;
+  const auto live = make_snapshot({{"B"}});
+  harness.display.current = live;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_EQ(harness.display.topology_calls, 0);
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_EQ(harness.display.hdr_apply_calls, 0);
+  EXPECT_TRUE(harness.display.rotation_apply_calls.empty());
+  EXPECT_TRUE(harness.display.reassert_calls.empty());
+  EXPECT_EQ(harness.display.current_layout_matches_calls, 0);
+  EXPECT_TRUE(codec::equal_snapshots_strict(harness.display.current, live));
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
+  EXPECT_TRUE(outcome.display_may_have_changed);
+  EXPECT_TRUE(harness.state.restore_attempted_unconfirmed.load());
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+}
+
+TEST(DisplayHelperV2RecoveryEngine, RequestedModesAreRecheckedAfterQuietPeriod) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  const auto requested = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, requested));
+  harness.display.current = requested;
+
+  int captures = 0;
+  harness.display.on_capture_snapshot = [&] {
+    // Capture 1 is apply_and_confirm's pre-state signature; captures 2-3
+    // satisfy the initial stable check. Drift at capture 4, the first
+    // quiet-period sample, then keep the wrong mode stable.
+    if (++captures == 4) {
+      harness.display.current.m_modes.at("A").m_resolution.m_width = 2560;
+    }
+  };
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_GT(harness.display.apply_calls, 0);
+  EXPECT_EQ(harness.display.current.m_modes.at("A").m_resolution.m_width, 1920u);
+}
+
+TEST(DisplayHelperV2RecoveryEngine, StopsBeforeSettingsWhenTopologyStageIsCancelled) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, baseline));
+  harness.display.current = make_snapshot({{"B"}});
+  harness.display.on_enumerate = [&] {
+    if (harness.display.enumerate_calls >= 2) {
+      harness.cancellation.cancel();
+    }
+  };
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_TRUE(outcome.display_may_have_changed);
+  EXPECT_EQ(harness.display.topology_calls, 1);
+  EXPECT_EQ(harness.display.apply_calls, 0);
+}
+
+TEST(DisplayHelperV2RecoveryEngine, ReportsFailedStagedStateReset) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  const auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, baseline));
+  harness.display.current = baseline;
+  harness.display.reset_staged_apply_state_result = false;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_TRUE(outcome.staged_state_reset_attempted);
+  EXPECT_FALSE(outcome.staged_state_reset_succeeded);
+}
+
+// 79681014 / 8f2d0632: when the current session snapshot is missing, golden is
+// preferred over the previous session snapshot.
+TEST(DisplayHelperV2RecoveryEngine, PrefersGoldenWhenCurrentMissing) {
+  RecoveryHarness harness;
+  harness.add_device("G");
+  harness.add_device("P");
+
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Previous, make_snapshot({{"P"}})));
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, make_snapshot({{"G"}})));
+  harness.display.current = make_snapshot({{"X"}});
+
+  auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  ASSERT_TRUE(outcome.snapshot.has_value());
+  EXPECT_EQ(EngineDisplayFake::first_id(*outcome.snapshot), "G");
+  ASSERT_FALSE(harness.display.apply_order.empty());
+  EXPECT_EQ(harness.display.apply_order.front(), "G");
+  ASSERT_GE(harness.display.transition_order.size(), 2u);
+  EXPECT_EQ(harness.display.transition_order[0], "topology:G");
+  EXPECT_EQ(harness.display.transition_order[1], "settings:G");
+  // Confirmed golden restore clears the session snapshot chain.
+  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
+}
+
+TEST(DisplayHelperV2RecoveryEngine, PreviousSuccessRetainsUnconfirmedCurrentSnapshot) {
+  RecoveryHarness harness;
+  harness.add_device("CURRENT");
+  harness.add_device("PREVIOUS");
+
+  const auto current = make_snapshot({{"CURRENT"}});
+  const auto previous = make_snapshot({{"PREVIOUS"}});
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, current));
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Previous, previous));
+  harness.display.current = make_snapshot({{"OTHER"}});
+  harness.display.ineffective_ids.insert("CURRENT");
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  ASSERT_TRUE(outcome.snapshot.has_value());
+  EXPECT_EQ(EngineDisplayFake::first_id(*outcome.snapshot), "PREVIOUS");
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_TRUE(codec::equal_snapshots_strict(
+    harness.storage.load(display_helper::v2::SnapshotTier::Current).value(), current));
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
+  EXPECT_TRUE(codec::equal_snapshots_strict(
+    harness.storage.load(display_helper::v2::SnapshotTier::Previous).value(), previous));
+}
+
+// A usable session fallback is only a bootstrap state. The configured golden
+// snapshot remains authoritative until every baseline device can be restored.
+TEST(DisplayHelperV2RecoveryEngine, GoldenFirstKeepsCompleteBaselinePendingAfterRepeatedFallbacks) {
+  RecoveryHarness harness;
+  harness.add_device("G");
+  harness.add_device("C");
+
+  harness.state.always_restore_from_golden.store(true);
+
+  // Golden applies without effect (never confirms); session snapshots work.
+  harness.display.ineffective_ids.insert("G");
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, make_snapshot({{"G"}})));
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, make_snapshot({{"C"}})));
+  harness.display.current = make_snapshot({{"X"}});
+
+  auto first = harness.recovery.run(harness.cancellation.token());
+  EXPECT_FALSE(first.success);  // session fallback applied, golden still pending
+  EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), 1u);
+
+  // The session restore landed and current was promoted to previous.
+  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
+
+  // Step past the 60 s session-restore cooldown so every run genuinely
+  // attempts golden instead of being skipped by should_skip_golden.
+  harness.clock.advance(std::chrono::seconds(61));
+  harness.display.current = make_snapshot({{"X"}});  // drift again before next attempt
+  auto second = harness.recovery.run(harness.cancellation.token());
+  EXPECT_FALSE(second.success);
+  EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), 2u);
+
+  harness.clock.advance(std::chrono::seconds(61));
+  harness.display.current = make_snapshot({{"X"}});
+  auto third = harness.recovery.run(harness.cancellation.token());
+  EXPECT_FALSE(third.success);
+  EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), 3u);
+}
+
+// The golden file must remain pending when a required baseline device is
+// temporarily unavailable. A filtered load rejects that golden snapshot, but
+// the unfiltered snapshot is still present and must keep recovery unresolved.
+TEST(DisplayHelperV2RecoveryEngine, KeepsGoldenPendingWhenBaselineDeviceIsMissing) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+
+  harness.state.always_restore_from_golden.store(true);
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, make_snapshot({{"A"}, {"B"}})));
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, make_snapshot({{"A"}})));
+  harness.display.current = make_snapshot({{"X"}});
+
+  for (std::size_t attempt = 1; attempt <= 4; ++attempt) {
+    harness.display.current = make_snapshot({{"X"}});
+    const auto outcome = harness.recovery.run(harness.cancellation.token());
+    EXPECT_FALSE(outcome.success);
+    EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), attempt);
+  }
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Golden));
+}
+
+// Powered-off monitors can reappear while short recovery polls repeatedly
+// restore a usable primary-only session snapshot. That fallback must not renew
+// a cooldown that prevents the configured complete golden baseline from landing.
+TEST(DisplayHelperV2RecoveryEngine, GoldenFirstRestoresReturningMonitorDuringSessionCooldown) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.state.always_restore_from_golden.store(true);
+
+  auto golden = make_snapshot({{"A"}, {"B"}});
+  golden.m_origins["B"] = display_device::Point {1920, 0};
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, golden));
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, make_snapshot({{"A"}})));
+  harness.display.current = make_snapshot({{"X"}});
+
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    EXPECT_FALSE(harness.recovery.run(harness.cancellation.token()).success);
+    ASSERT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Golden));
+    harness.clock.advance(std::chrono::seconds(5));
+  }
+  ASSERT_NE(harness.state.last_session_restore_success_ms.load(), 0);
+
+  harness.add_device("B");
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+  ASSERT_TRUE(outcome.success);
+  ASSERT_TRUE(outcome.snapshot);
+  EXPECT_TRUE(codec::equal_snapshots_strict(harness.display.current, golden));
+  EXPECT_EQ(harness.display.current.m_origins.at("B").m_x, golden.m_origins.at("B").m_x);
+  EXPECT_EQ(harness.display.current.m_origins.at("B").m_y, golden.m_origins.at("B").m_y);
+  EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), 0u);
+  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
+}
+
+// A pending golden-first request must retry the authoritative baseline as
+// soon as its missing monitor returns, even after a recent usable fallback.
+TEST(DisplayHelperV2RecoveryEngine, GoldenFirstRestoresReturnedBaselineAfterRecentSessionFallback) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.state.always_restore_from_golden.store(true);
+  const auto session = make_snapshot({{"A"}});
+  const auto golden = make_snapshot({{"A"}, {"B"}});
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, session));
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, golden));
+  harness.display.current = session;
+
+  const auto fallback = harness.recovery.run(harness.cancellation.token());
+  ASSERT_FALSE(fallback.success);
+  ASSERT_EQ(harness.state.golden_pending_session_fallbacks.load(), 1u);
+  ASSERT_GT(harness.state.last_session_restore_success_ms.load(), 0);
+  EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(harness.display.current, session));
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
+
+  harness.add_device("B");
+  harness.clock.advance(std::chrono::milliseconds(1000));
+  const auto restored = harness.recovery.run(harness.cancellation.token());
+
+  ASSERT_TRUE(restored.success);
+  ASSERT_TRUE(restored.snapshot);
+  EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(*restored.snapshot, golden));
+  EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(harness.display.current, golden));
+  EXPECT_GT(harness.display.apply_calls, 0);
+  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
+}
+
+TEST(DisplayHelperV2RecoveryEngine, DefaultRestoreRetainsRecentSessionCooldownForGolden) {
+  RecoveryHarness harness;
+  harness.add_device("C");
+  harness.add_device("G");
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, make_snapshot({{"C"}})));
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, make_snapshot({{"G"}})));
+  harness.display.current = make_snapshot({{"X"}});
+  ASSERT_TRUE(harness.recovery.run(harness.cancellation.token()).success);
+
+  harness.clock.advance(std::chrono::seconds(5));
+  harness.display.ineffective_ids.insert("C");
+  harness.display.current = make_snapshot({{"X"}});
+  harness.display.apply_order.clear();
+  EXPECT_FALSE(harness.recovery.run(harness.cancellation.token()).success);
+  EXPECT_EQ(std::count(harness.display.apply_order.begin(), harness.display.apply_order.end(), "G"), 0);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Golden));
+}
+
+TEST(DisplayHelperV2RecoveryEngine, SessionFirstKeepsCooldownWhenGoldenDeviceReturns) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  const auto session = make_snapshot({{"A"}});
+  const auto golden = make_snapshot({{"A"}, {"B"}});
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, session));
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, golden));
+  harness.display.current = session;
+  ASSERT_TRUE(harness.recovery.run(harness.cancellation.token()).success);
+  ASSERT_GT(harness.state.last_session_restore_success_ms.load(), 0);
+
+  harness.add_device("B");
+  harness.clock.advance(std::chrono::milliseconds(1000));
+  const auto restored = harness.recovery.run(harness.cancellation.token());
+
+  ASSERT_TRUE(restored.success);
+  ASSERT_TRUE(restored.snapshot);
+  EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(*restored.snapshot, session));
+  EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(harness.display.current, session));
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Golden));
+}
+
+// --- rotation reassert on the matching fast path (Vibepollo #406 class) ---
+
+// The OS can report a fully matching layout while the driver's pointer
+// transform is stale; a confirmed match with a non-default rotation must force
+// a same-value rotation refresh, then restore color and verify again.
+TEST(DisplayHelperV2RecoveryEngine, ReassertsNonDefaultRotationOnMatchingFastPath) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+
+  auto baseline = make_snapshot({{"A"}, {"B"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 270}, {"B", 0}}));
+
+  harness.display.current = make_snapshot({{"B"}, {"A"}});
+  harness.display.current.m_primary_device = baseline.m_primary_device;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_EQ(harness.display.topology_calls, 0);
+  ASSERT_EQ(harness.display.reassert_calls.size(), 1u);
+  EXPECT_EQ(harness.display.reassert_calls.front().at("A"), 270);
+}
+
+// An all-default layout has no stale transform to refresh; the fast path must
+// stay a pure no-op.
+TEST(DisplayHelperV2RecoveryEngine, SkipsReassertWhenLayoutIsAllDefault) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+
+  auto baseline = make_snapshot({{"A"}, {"B"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 0}, {"B", 0}}));
+
+  harness.display.current = make_snapshot({{"B"}, {"A"}});
+  harness.display.current.m_primary_device = baseline.m_primary_device;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_TRUE(harness.display.reassert_calls.empty());
+  EXPECT_EQ(harness.display.apply_calls, 0);
+}
+
+// A failed reassert remains best-effort when the final state still matches.
+TEST(DisplayHelperV2RecoveryEngine, ReassertFailureDoesNotFailConfirmedRestore) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+
+  auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 90}}));
+
+  harness.display.current = baseline;
+  harness.display.reassert_result = false;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  ASSERT_EQ(harness.display.reassert_calls.size(), 1u);
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 1);
+}
+
+// A cancellation that lands during the final layout check must suppress both
+// the reassert side effect and the success bookkeeping.
+TEST(DisplayHelperV2RecoveryEngine, CancelledDuringConfirmSkipsReassert) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+
+  auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 270}}));
+
+  harness.display.current = baseline;
+  harness.display.on_current_layout_matches = [&] {
+    harness.cancellation.cancel();
+  };
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_TRUE(harness.display.reassert_calls.empty());
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_EQ(harness.display.topology_calls, 0);
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
+}
+
+// The full restore path owns rotation application; the forced reassert belongs
+// to the matching fast path only.
+TEST(DisplayHelperV2RecoveryEngine, FullRestoreAppliesRotationsWithoutReassert) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+
+  auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 270}}));
+
+  harness.display.current = make_snapshot({{"B"}});
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_EQ(harness.display.topology_calls, 1);
+  ASSERT_EQ(harness.display.rotation_apply_calls.size(), 1u);
+  EXPECT_EQ(harness.display.rotation_apply_calls.front().at("A"), 270);
+  EXPECT_TRUE(harness.display.reassert_calls.empty());
+}
+
+// A failed rotation stage whose rotation nevertheless landed (verify-level
+// layout match) must confirm via the second confirm_matches pass and still
+// perform the driver reassert there.
+TEST(DisplayHelperV2RecoveryEngine, SecondConfirmMatchReassertsAfterLateSettle) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+
+  auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 270}}));
+
+  harness.display.current = make_snapshot({{"B"}});
+  harness.display.apply_layout_rotations_result = false;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_EQ(harness.display.topology_calls, 1);
+  ASSERT_EQ(harness.display.rotation_apply_calls.size(), 1u);
+  ASSERT_EQ(harness.display.reassert_calls.size(), 1u);
+  EXPECT_EQ(harness.display.reassert_calls.front().at("A"), 270);
+}
+
+// Documents current policy: when the rotation stage fails and the layout never
+// matches, the restore fails after both apply attempts (no silent success).
+TEST(DisplayHelperV2RecoveryEngine, RotationStageFailureFailsRestoreWhenLayoutNeverMatches) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+
+  auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 270}}));
+
+  harness.display.current = make_snapshot({{"B"}});
+  harness.display.apply_layout_rotations_result = false;
+  harness.display.layout_matches_result = false;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_EQ(harness.display.topology_calls, 2);
+  EXPECT_EQ(harness.display.rotation_apply_calls.size(), 2u);
+  EXPECT_TRUE(harness.display.reassert_calls.empty());
+}
+
+TEST(DisplayHelperV2RecoveryEngine, RestoresSavedHdrAfterRotationColorReset) {
+  for (const bool matching_fast_path : {false, true}) {
+    for (const auto saved_hdr : {display_device::HdrState::Disabled, display_device::HdrState::Enabled}) {
+      RecoveryHarness harness;
+      harness.add_device("A");
+      harness.add_device("B");
+      auto baseline = make_snapshot({{"A"}});
+      baseline.m_hdr_states["A"] = saved_hdr;
+      ASSERT_TRUE(harness.storage.save(
+        display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 270}}));
+      harness.display.current = matching_fast_path ? baseline : make_snapshot({{"B"}});
+      harness.display.on_rotation_applied = [&] {
+        harness.display.current.m_hdr_states["A"] = saved_hdr == display_device::HdrState::Enabled ?
+          display_device::HdrState::Disabled : display_device::HdrState::Enabled;
+      };
+
+      EXPECT_TRUE(harness.recovery.run(harness.cancellation.token()).success);
+      EXPECT_EQ(harness.display.current.m_hdr_states.at("A"), saved_hdr);
+      EXPECT_EQ(harness.display.restore_stage_order, (std::vector<std::string> {
+        matching_fast_path ? "reassert" : "rotation", "hdr"}));
+      EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 1);
+    }
+  }
+}
+
+TEST(DisplayHelperV2RecoveryEngine, FailedReassertStillRepairsColorBeforeConfirming) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  auto baseline = make_snapshot({{"A"}});
+  baseline.m_hdr_states["A"] = display_device::HdrState::Disabled;
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 90}}));
+  harness.display.current = baseline;
+  harness.display.reassert_result = false;
+  harness.display.on_rotation_applied = [&] {
+    harness.display.current.m_hdr_states["A"] = display_device::HdrState::Enabled;
+  };
+  EXPECT_TRUE(harness.recovery.run(harness.cancellation.token()).success);
+  EXPECT_EQ(harness.display.current.m_hdr_states.at("A"), display_device::HdrState::Disabled);
+  EXPECT_EQ(harness.display.hdr_apply_calls, 1);
+}
+
+TEST(DisplayHelperV2RecoveryEngine, FailedFinalHdrRetainsBaselineAndStagedApplyState) {
+  for (const bool matching_fast_path : {false, true}) {
+    RecoveryHarness harness;
+    harness.add_device("A");
+    harness.add_device("B");
+    auto baseline = make_snapshot({{"A"}});
+    baseline.m_hdr_states["A"] = display_device::HdrState::Disabled;
+    ASSERT_TRUE(harness.storage.save(
+      display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 90}}));
+    harness.display.current = matching_fast_path ? baseline : make_snapshot({{"B"}});
+    harness.display.hdr_apply_result = false;
+    harness.display.on_rotation_applied = [&] {
+      harness.display.current.m_hdr_states["A"] = display_device::HdrState::Enabled;
+    };
+
+    EXPECT_FALSE(harness.recovery.run(harness.cancellation.token()).success);
+    EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+    EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
+    EXPECT_GT(harness.display.hdr_apply_calls, 0);
+  }
+}
+
+TEST(DisplayHelperV2RecoveryEngine, ReassertMustReconfirmWholeSnapshotAfterHdr) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 270}}));
+  harness.display.current = baseline;
+  harness.display.ineffective_ids.insert("A");
+  harness.display.on_rotation_applied = [&] {
+    harness.display.current.m_modes.at("A").m_resolution.m_width = 1280;
+  };
+
+  EXPECT_FALSE(harness.recovery.run(harness.cancellation.token()).success);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
+}
+
+TEST(DisplayHelperV2RecoveryEngine, CancelledRotationSuppressesFinalHdrAndSuccess) {
+  for (const bool matching_fast_path : {false, true}) {
+    RecoveryHarness harness;
+    harness.add_device("A");
+    harness.add_device("B");
+    auto baseline = make_snapshot({{"A"}});
+    ASSERT_TRUE(harness.storage.save(
+      display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 90}}));
+    harness.display.current = matching_fast_path ? baseline : make_snapshot({{"B"}});
+    harness.display.on_rotation_applied = [&] { harness.cancellation.cancel(); };
+    EXPECT_FALSE(harness.recovery.run(harness.cancellation.token()).success);
+    EXPECT_EQ(harness.display.hdr_apply_calls, 0);
+    EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
+    EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  }
+}
+
+TEST(DisplayHelperV2RecoveryEngine, TopologyFailureNeverReachesColorRestore) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+  auto baseline = make_snapshot({{"A"}});
+  baseline.m_hdr_states["A"] = display_device::HdrState::Disabled;
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, baseline));
+  harness.display.current = make_snapshot({{"B"}});
+  harness.display.topology_result = display_helper::v2::ApplyStatus::VerificationFailed;
+  EXPECT_FALSE(harness.recovery.run(harness.cancellation.token()).success);
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_EQ(harness.display.hdr_apply_calls, 0);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+}
+
+// --- storage round trip in the legacy file format ---
+
+TEST(DisplayHelperV2FileStorage, LegacyFormatRoundTripWithLayouts) {
+  display_helper::v2::InMemoryTextStorage text_storage;
+  display_helper::v2::TextSnapshotStorage storage(
+    {"display_session_current.json", "display_session_previous.json", "display_golden_restore.json"}, text_storage);
+
+  auto snap = make_snapshot({{"A", "B"}});
+  snap.m_hdr_states["A"] = display_device::HdrState::Enabled;
+  snap.m_origins["A"] = display_device::Point {0, 0};
+  snap.m_origins["B"] = display_device::Point {1920, -200};
+
+  codec::layout_rotation_map_t layouts {{"B", 270}};
+  EXPECT_TRUE(storage.save(display_helper::v2::SnapshotTier::Golden, snap, layouts));
+  EXPECT_TRUE(storage.exists(display_helper::v2::SnapshotTier::Golden));
+
+  auto loaded = storage.load_with_metadata(display_helper::v2::SnapshotTier::Golden);
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_EQ(loaded->snapshot_version, codec::kSnapshotLayoutVersionLatest);
+  EXPECT_TRUE(loaded->has_layout_data);
+  EXPECT_EQ(loaded->layout_rotations, layouts);
+  EXPECT_TRUE(codec::equal_snapshots_strict(loaded->snapshot, snap));
+  EXPECT_TRUE(display_helper::v2::topology::equal_origins(loaded->snapshot.m_origins, snap.m_origins));
+
+  EXPECT_TRUE(storage.remove(display_helper::v2::SnapshotTier::Golden));
+  EXPECT_FALSE(storage.exists(display_helper::v2::SnapshotTier::Golden));
+}
+
+#endif  // _WIN32

@@ -1,0 +1,8 @@
+Id: Sunshine.Playnite.Integration
+Name: Vibeshine Playnite Connector
+Author: Nonary / Noklef
+Version: 0.5.2
+Module: VibeshinePlaynite.dll
+Type: GenericPlugin
+Icon: icon.png
+Description: Adds two-way communication between Vibeshine and Playnite, allowing you to launch games from Playnite and automatically stream them.
