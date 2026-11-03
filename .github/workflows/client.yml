@@ -24,6 +24,7 @@ on:
       - flake.lock
       - nix/**
       - .github/workflows/client*
+  workflow_dispatch:
 
 concurrency:
   group: client-${{ github.ref }}
