@@ -4,7 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include "third-party/moonlight-common-c/src/ControllerHaptics.h"
+#include <moonlight-common-c/src/ControllerHaptics.h>
 
 namespace platf::gamepad {
   // Preserve signed waveform samples. Never mix controller speaker channels

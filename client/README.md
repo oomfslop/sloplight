@@ -1,6 +1,6 @@
 # vibeshine-client
 
-A fork of [Moonlight PC](https://github.com/moonlight-stream/moonlight-qt) for streaming from a [vibeshine-server](https://github.com/oomfslop/vibeshine-server) host to a Mac.
+A fork of [Moonlight PC](https://github.com/moonlight-stream/moonlight-qt) for streaming from a [vibeshine-server](../server) host to a Mac.
 
 It remains a regular Moonlight client for Sunshine, Apollo and GeForce Experience hosts. Most additions require vibeshine-server, and many are macOS only for now.
 
@@ -47,22 +47,22 @@ Sunshine and GeForce Experience hosts ignore these.
 
 ## Building
 
-The macOS build uses Nix:
+The macOS build uses Nix, from the repository root:
 
 ```sh
-nix build '.?submodules=1'
+nix build
 ```
 
 This builds the Moonlight app into `result/`. To build Sloplight and bundle it with the helper inside:
 
 ```sh
-cd sloplight
+cd client/sloplight
 ./scripts/bundle-macos.sh
 ```
 
-The result is `sloplight/target/Sloplight.app`.
+The result is `client/sloplight/target/Sloplight.app`.
 
-Use `'.?submodules=1'` rather than `path:.`, which copies the entire working tree, including the multi-gigabyte `sloplight/target`, into the Nix store.
+Use `nix build` rather than `nix build path:.`, which copies the entire working tree, including the multi-gigabyte `sloplight/target` and the server's submodules, into the Nix store.
 
 Builds for other platforms follow the [upstream instructions](https://github.com/moonlight-stream/moonlight-qt#building). The app-window features are macOS only.
 

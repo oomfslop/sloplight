@@ -2,10 +2,9 @@
  * @file src/pyrowave_protocol.h
  * @brief Wire constants for PyroWave over the GameStream/Sunshine protocol.
  *
- * The contract is docs/pyrowave-protocol.md, shared with the moonlight-qt fork.
- * The capability bits and bitStreamFormat value match the Aurora/Solarflare
- * PyroWave implementation. Vibeshine builds against upstream moonlight-common-c,
- * so the host-side constants live here rather than in Limelight.h.
+ * The contract is docs/pyrowave-protocol.md, shared with the client.
+ * The capability bits (SCM_PYROWAVE*, in Limelight.h) and bitStreamFormat value
+ * match the Aurora/Solarflare PyroWave implementation.
  */
 #pragma once
 
@@ -14,13 +13,6 @@
 #include <string_view>
 
 namespace pyrowave::protocol {
-  // ServerCodecModeSupport bits advertised in /serverinfo.
-  constexpr std::uint32_t SCM_PYROWAVE = 0x00800000;  ///< 8-bit 4:2:0
-  constexpr std::uint32_t SCM_PYROWAVE_444 = 0x01000000;  ///< 8-bit 4:4:4
-  constexpr std::uint32_t SCM_PYROWAVE_HDR10 = 0x02000000;  ///< 10-bit 4:2:0 (HDR10 on an HDR display)
-  constexpr std::uint32_t SCM_PYROWAVE_HDR10_444 = 0x04000000;  ///< 10-bit 4:4:4
-  constexpr std::uint32_t SCM_MASK_PYROWAVE = SCM_PYROWAVE | SCM_PYROWAVE_444 | SCM_PYROWAVE_HDR10 | SCM_PYROWAVE_HDR10_444;
-
   /// `x-nv-vqos[0].bitStreamFormat` value selecting PyroWave (0/1/2 are H.264/HEVC/AV1).
   constexpr int BITSTREAM_FORMAT = 3;
 

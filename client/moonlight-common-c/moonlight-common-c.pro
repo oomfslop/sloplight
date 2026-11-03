@@ -38,7 +38,7 @@ unix:!macx {
     DEFINES += HAVE_CLOCK_GETTIME=1
 }
 
-COMMON_C_DIR = $$PWD/moonlight-common-c
+COMMON_C_DIR = $$PWD/../../moonlight-common-c
 ENET_DIR = $$COMMON_C_DIR/enet
 SOURCES += \
     $$ENET_DIR/callbacks.c \

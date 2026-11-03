@@ -20,7 +20,6 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v5
         with:
-          submodules: 'recursive'
           fetch-depth: 1
 
       - name: Setup environment
@@ -108,7 +107,7 @@ jobs:
       - name: Build libplacebo
         working-directory: deps/libplacebo
         run: |
-          git apply ../../app/deploy/linux/appimage/*.patch
+          git apply ../../client/app/deploy/linux/appimage/*.patch
           meson setup build -Dvulkan=enabled -Dopengl=disabled -Ddemos=false
           ninja -C build
           sudo ninja install -C build
@@ -153,6 +152,7 @@ jobs:
           chmod +x linuxdeploy*.AppImage
 
       - name: Build Binaries
+        working-directory: client
         run: |
           sudo ldconfig
           scripts/build-appimage.sh
@@ -161,6 +161,6 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: Moonlight-LinuxAppImage-${{ env.CI_VERSION }}
-          path: build/installer-release/Moonlight-${{ env.CI_VERSION }}-x86_64.AppImage
+          path: client/build/installer-release/Moonlight-${{ env.CI_VERSION }}-x86_64.AppImage
           compression-level: 0
           if-no-files-found: error

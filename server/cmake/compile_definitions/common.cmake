@@ -57,10 +57,10 @@ file(GLOB NVENC_SOURCES CONFIGURE_DEPENDS "src/nvenc/*.cpp" "src/nvenc/*.h")
 list(APPEND PLATFORM_TARGET_FILES ${NVENC_SOURCES})
 
 set(SUNSHINE_TARGET_FILES
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Input.h"
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Rtsp.h"
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/RtspParser.c"
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Video.h"
+        "${CMAKE_SOURCE_DIR}/../moonlight-common-c/src/Input.h"
+        "${CMAKE_SOURCE_DIR}/../moonlight-common-c/src/Rtsp.h"
+        "${CMAKE_SOURCE_DIR}/../moonlight-common-c/src/RtspParser.c"
+        "${CMAKE_SOURCE_DIR}/../moonlight-common-c/src/Video.h"
         "${CMAKE_SOURCE_DIR}/third-party/tray/src/tray.h"
         "${CMAKE_SOURCE_DIR}/src/upnp.cpp"
         "${CMAKE_SOURCE_DIR}/src/upnp.h"
@@ -318,7 +318,8 @@ include_directories(
         BEFORE
         SYSTEM
         "${CMAKE_SOURCE_DIR}/third-party"
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/enet/include"
+        "${CMAKE_SOURCE_DIR}/.."
+        "${CMAKE_SOURCE_DIR}/../moonlight-common-c/enet/include"
         "${CMAKE_SOURCE_DIR}/third-party/nanors"
         "${CMAKE_SOURCE_DIR}/third-party/nanors/deps/obl"
         ${WEBRTC_INCLUDE_DIRS}

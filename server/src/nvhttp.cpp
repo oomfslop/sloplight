@@ -4527,7 +4527,7 @@ namespace nvhttp {
     // PyroWave encodes 8/10-bit and 4:2:0/4:4:4 alike, whatever encoder was selected above.
     // pyrowave_mode is 2 only when the probe passed and the pyrowave option is enabled.
     if (advertised_video.pyrowave_mode >= 2) {
-      codec_mode_flags |= pyrowave::protocol::SCM_MASK_PYROWAVE;
+      codec_mode_flags |= SCM_MASK_PYROWAVE;
     }
     tree.put("root.ServerCodecModeSupport", codec_mode_flags);
 

@@ -1,13 +1,21 @@
-name: Build
+name: Server
 
 # Fork CI: unsigned x64 builds for Windows 10/11 (portable ZIP + MSI) and
 # Linux (Debian package) on every push and pull request; tagged pushes
-# (v*) also get a GitHub release with the artifacts attached.
+# (server-v*) also get a GitHub release with the artifacts attached.
 on:
   push:
     branches: ["**"]
-    tags: ["v*"]
+    tags: ["server-v*"]
+    paths:
+      - server/**
+      - moonlight-common-c/**
+      - .github/workflows/server.yml
   pull_request:
+    paths:
+      - server/**
+      - moonlight-common-c/**
+      - .github/workflows/server.yml
   workflow_dispatch:
     inputs:
       linux_cuda:
@@ -16,7 +24,7 @@ on:
         default: false
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: server-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -25,7 +33,7 @@ permissions:
 env:
   NODE_VERSION: "22"
   # Version used for untagged builds (the build refuses 0.0.0). Bump when
-  # rebasing on a newer upstream release; tags v<version> override it.
+  # rebasing on a newer upstream release; tags server-v<version> override it.
   BASE_VERSION: "2.0.1"
 
 jobs:
@@ -36,6 +44,7 @@ jobs:
     defaults:
       run:
         shell: msys2 {0}
+        working-directory: server
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -81,8 +90,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: |
-            src_assets/common/assets/web/package-lock.json
-            src_assets/common/assets/web-legacy/package-lock.json
+            server/src_assets/common/assets/web/package-lock.json
+            server/src_assets/common/assets/web-legacy/package-lock.json
 
       - name: Install WiX Toolset
         shell: pwsh
@@ -108,8 +117,8 @@ jobs:
         id: version
         shell: bash
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF}" == refs/tags/server-v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/server-v}" >> "$GITHUB_OUTPUT"
           else
             echo "version=${BASE_VERSION}-sloplight.${GITHUB_RUN_NUMBER}+${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
           fi
@@ -147,7 +156,7 @@ jobs:
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/${GITHUB_REPOSITORY}/issues" \
             .
 
-      - name: Build
+      - name: Server
         run: |
           export PATH="$PATH:$(cygpath -u "$NODEJS_PATH")"
           export CCACHE_DIR="$(cygpath -u "${GITHUB_WORKSPACE}")/.ccache"
@@ -174,16 +183,20 @@ jobs:
         with:
           name: vibeshine-windows-x64
           path: |
-            build/cpack_artifacts/*.zip
-            build/cpack_artifacts/*.msi
+            server/build/cpack_artifacts/*.zip
+            server/build/cpack_artifacts/*.msi
           if-no-files-found: error
 
   linux:
     name: Linux x64 (Ubuntu 24.04)
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: server
     steps:
       - name: Free disk space
+        working-directory: .
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
@@ -209,8 +222,8 @@ jobs:
       - name: Resolve version
         id: version
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF}" == refs/tags/server-v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/server-v}" >> "$GITHUB_OUTPUT"
           else
             echo "version=${BASE_VERSION}-sloplight.${GITHUB_RUN_NUMBER}+${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
           fi
@@ -227,7 +240,7 @@ jobs:
         run: |
           sudo apt-get install -y ccache
           chmod +x ./scripts/linux_build.sh
-          echo "::add-matcher::.github/matchers/gcc.json"
+          echo "::add-matcher::${GITHUB_WORKSPACE}/server/.github/matchers/gcc.json"
           cuda_arg="--skip-cuda"
           if [[ "${{ inputs.linux_cuda }}" == "true" ]]; then cuda_arg=""; fi
           ./scripts/linux_build.sh \
@@ -246,13 +259,13 @@ jobs:
         with:
           name: vibeshine-linux-x64
           path: |
-            build/cpack_artifacts/*.deb
-            build/sunshine
+            server/build/cpack_artifacts/*.deb
+            server/build/sunshine
           if-no-files-found: error
 
   release:
     name: Attach to release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/server-v')
     needs: [windows, linux]
     runs-on: ubuntu-latest
     steps:

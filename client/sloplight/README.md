@@ -50,7 +50,7 @@ Colors come from your Zed theme. Sloplight reads `~/.config/zed/settings.json`, 
 cargo build --release
 ```
 
-The streaming helper is the Moonlight app from the repository root, built with `nix build '.?submodules=1'`. `./scripts/bundle-macos.sh` builds `target/Sloplight.app` with the helper inside.
+The streaming helper is the Moonlight app, built with `nix build` at the repository root. `./scripts/bundle-macos.sh` builds `target/Sloplight.app` with the helper inside.
 
 Outside the bundle, the helper is looked up in this order:
 

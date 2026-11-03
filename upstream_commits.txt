@@ -1,0 +1,21 @@
+# Upstream commits these trees were forked or vendored from.
+# To reconcile: diff upstream from the commit below to its current head,
+# port what we want, then bump the commit here.
+#
+# path                        upstream                                              commit
+
+# Hard forks
+client                        https://github.com/moonlight-stream/moonlight-qt      781b26fd1ca245cc241ded27da252452533fa3b0
+server                        https://github.com/Nonary/Vibeshine                   fea6315650ad06beb6cd624cf8aeb39411efd7b1
+moonlight-common-c            https://github.com/moonlight-stream/moonlight-common-c 04053843c90c4268583f2496b997d54d59f03957
+# the server's fork (branch vibeshine-dualsense-haptics); its one commit of
+# its own, 4ea115e8 (haptic PCM), is cherry-picked
+moonlight-common-c            https://github.com/Nonary/moonlight-common-c          4ea115e8d23d1ca055a2aa8ddcfb601b705b3323
+
+# Vendored unmodified (were git submodules)
+client/qmdnsengine/qmdnsengine     https://github.com/cgutman/qmdnsengine           920c097ffa742e2968290f15d4dde6693aec02e5
+client/app/SDL_GameControllerDB    https://github.com/gabomdq/SDL_GameControllerDB  8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5
+client/pyrowave/pyrowave           https://github.com/Themaister/pyrowave           7fe0e2667cd3076b8b2bf04bcb80bc8d691b800b
+moonlight-common-c/enet            https://github.com/cgutman/enet                  aca87840b57f045a1f7f9299e4b1b9b8e2a5e2f1
+moonlight-common-c/nanors          https://github.com/sleepybishop/nanors           b1e3c22ca0cdc0bb83e3cd6ed1a2fc77869ed99a
+# server/third-party/pyrowave lists its own commits in VENDOR.txt

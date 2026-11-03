@@ -20,7 +20,6 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v5
         with:
-          submodules: 'recursive'
           fetch-depth: 1
 
       - name: Checkout Steam Link SDK
@@ -31,11 +30,12 @@ jobs:
           fetch-depth: 1
 
       - name: Build binaries
-        run: STEAMLINK_SDK_PATH=$PWD/steamlink-sdk scripts/build-steamlink-app.sh
+        working-directory: client
+        run: STEAMLINK_SDK_PATH=$GITHUB_WORKSPACE/steamlink-sdk scripts/build-steamlink-app.sh
 
       - name: Upload Binaries
         uses: actions/upload-artifact@v6
         with:
           name: Moonlight-SteamLink-${{ env.CI_VERSION }}
-          path: build/deploy-release/*
+          path: client/build/deploy-release/*
           if-no-files-found: error

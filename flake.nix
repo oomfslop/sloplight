@@ -10,13 +10,13 @@
     in
     {
       packages = forAll (pkgs: rec {
-        # The desk windows of app-window streaming (Rust, app/deskwm): a static
+        # The desk windows of app-window streaming (Rust, client/app/deskwm): a static
         # library the helper links on macOS.
         deskwm = pkgs.rustPlatform.buildRustPackage {
           pname = "deskwm";
           version = "0.1.0";
-          src = ./app/deskwm;
-          cargoLock.lockFile = ./app/deskwm/Cargo.lock;
+          src = ./client/app/deskwm;
+          cargoLock.lockFile = ./client/app/deskwm/Cargo.lock;
           buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.apple-sdk_15 ];
           doCheck = false;
           installPhase = ''
@@ -28,14 +28,18 @@
           '';
         };
         # Reuse the nixpkgs derivation (qmake + pkg-config, CONFIG+=disable-prebuilts)
-        # but build this tree, including the modified moonlight-common-c submodule.
+        # but build the client with the shared moonlight-common-c.
         moonlight-qt = (pkgs.moonlight-qt.override (pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
           # Upstream's prebuilt FFmpeg carries the same patch: VideoToolbox decodes into
           # OpenGL-compatible buffers otherwise, ~3 ms more per 4K frame on Apple silicon
           ffmpeg_8 = pkgs.ffmpeg_8.overrideAttrs (o: { patches = (o.patches or [ ]) ++ [ ./nix/ffmpeg_metal_vt.patch ]; });
         })).overrideAttrs (old: {
           version = "6.1.0-apollo";
-          src = ./.;
+          src = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [ ./client ./moonlight-common-c ];
+          };
+          sourceRoot = "source/client";
           # Upstream master already contains the fix that nixpkgs patches in
           patches = [ ];
           # The FP16 Metal shaders need the simd half types from the macOS 15 SDK;
@@ -52,9 +56,9 @@
         sloplight = pkgs.rustPlatform.buildRustPackage {
           pname = "sloplight";
           version = "0.1.0";
-          src = ./sloplight;
+          src = ./client/sloplight;
           cargoLock = {
-            lockFile = ./sloplight/Cargo.lock;
+            lockFile = ./client/sloplight/Cargo.lock;
             # GPUI comes from Zed's repository at the commit the lockfile pins
             allowBuiltinFetchGit = true;
           };
@@ -91,7 +95,7 @@
 
       # Incremental development builds:
       #   nix develop
-      #   qmake6 moonlight-qt.pro CONFIG+=disable-prebuilts && make -j$(nproc)
+      #   cd client && qmake6 moonlight-qt.pro CONFIG+=disable-prebuilts && make -j$(nproc)
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
           inputsFrom = [ self.packages.${pkgs.system}.default ];

@@ -243,11 +243,11 @@ target_link_libraries(sunshine_test_simple_web_headers INTERFACE
 
 add_library(sunshine_test_moonlight_headers INTERFACE)
 target_include_directories(sunshine_test_moonlight_headers SYSTEM INTERFACE
-    "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party")
+    "${SUNSHINE_TEST_REPOSITORY_ROOT}/..")
 
 add_library(sunshine_test_enet_headers INTERFACE)
 target_include_directories(sunshine_test_enet_headers SYSTEM INTERFACE
-    "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/moonlight-common-c/enet/include")
+    "${SUNSHINE_TEST_REPOSITORY_ROOT}/../moonlight-common-c/enet/include")
 
 add_library(sunshine_test_displaydevice_headers INTERFACE)
 target_include_directories(sunshine_test_displaydevice_headers SYSTEM INTERFACE
@@ -1792,7 +1792,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET libinputtino)
     add_executable(test_ds5_haptics unit/platform/linux/test_ds5_haptics.cpp)
     target_include_directories(test_ds5_haptics PRIVATE
         "${SUNSHINE_TEST_REPOSITORY_ROOT}"
-        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/moonlight-common-c/src")
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/..")
     add_test(NAME test_ds5_haptics COMMAND test_ds5_haptics)
     foreach(profile ds4 ds5)
         add_executable(test_${profile}_usb unit/platform/linux/test_${profile}_usb.cpp)

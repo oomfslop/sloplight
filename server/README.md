@@ -1,6 +1,6 @@
 # vibeshine-server
 
-A fork of [Vibeshine](https://github.com/Nonary/Vibeshine), the Sunshine-based game streaming host, that adds what [vibeshine-client](https://github.com/oomfslop/vibeshine-client) needs to stream single Windows apps as Mac windows.
+A fork of [Vibeshine](https://github.com/Nonary/Vibeshine), the Sunshine-based game streaming host, that adds what [vibeshine-client](../client) needs to stream single Windows apps as Mac windows.
 
 It includes everything upstream Vibeshine offers, such as the virtual display driver, Windows Graphics Capture as a service, PyroWave, the virtual gamepad driver and Playnite sync. See the [upstream README](https://github.com/Nonary/Vibeshine#readme) for details. Regular Moonlight clients work as usual.
 
@@ -57,9 +57,9 @@ All on the HTTPS port, authenticated with the client certificate like the rest o
 
 ## Building
 
-CI builds an unsigned Windows x64 ZIP and MSI, and a Linux `.deb`, on every push. `v*` tags attach them to a GitHub release.
+CI builds an unsigned Windows x64 ZIP and MSI, and a Linux `.deb`, on every push that touches the server. `server-v*` tags attach them to a GitHub release.
 
-Local builds follow the [upstream build docs](docs/building.md). On Windows that means MSYS2 UCRT64 with CMake and Ninja.
+Local builds follow the [upstream build docs](docs/building.md), run in this directory after `git submodule update --init --recursive server` at the repository root. On Windows that means MSYS2 UCRT64 with CMake and Ninja. The server builds against `../moonlight-common-c`, so it needs the whole repository, not just this directory.
 
 ## Debugging
 

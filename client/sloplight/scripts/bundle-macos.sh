@@ -32,7 +32,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
-HELPER_SRC=${HELPER_SRC:-../result/Applications/Moonlight.app}
+HELPER_SRC=${HELPER_SRC:-../../result/Applications/Moonlight.app}
 if [ -d "$HELPER_SRC" ]; then
   # Dereference the Nix store symlinks so the bundle is self-contained
   cp -RL "$HELPER_SRC" "$APP/Contents/Helpers/Moonlight.app"
@@ -47,7 +47,7 @@ if [ -d "$HELPER_SRC" ]; then
   /usr/libexec/PlistBuddy -c "Add :NSPrefersDisplaySafeAreaCompatibilityMode bool false" "$HELPER_PLIST"
   echo "Embedded streaming helper from $HELPER_SRC"
 else
-  echo "No helper at $HELPER_SRC (run nix build '.?submodules=1' in moonlight-qt first); the app will look for Moonlight.app elsewhere"
+  echo "No helper at $HELPER_SRC (run nix build at the repository root first); the app will look for Moonlight.app elsewhere"
 fi
 # Ad-hoc signature so macOS attributes the Local Network permission to this bundle
 codesign --force --deep --sign - "$APP" 2>/dev/null || true
