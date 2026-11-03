@@ -1,4 +1,4 @@
-//! deskwm: host windows of a Vibeshine desk as native macOS windows.
+//! deskwm: host windows of a Sloplight server desk as native macOS windows.
 //! See deskwm.h for the C interface and desk.rs for how the two sides are
 //! kept in step.
 

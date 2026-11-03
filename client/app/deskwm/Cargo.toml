@@ -2,7 +2,7 @@
 name = "deskwm"
 version = "0.1.0"
 edition = "2021"
-description = "Desk windows: host windows of a Vibeshine desk as native macOS windows (window management for the Moonlight helper)"
+description = "Desk windows: host windows of a Sloplight server desk as native macOS windows (window management for the Moonlight helper)"
 
 [lib]
 crate-type = ["staticlib", "rlib"]

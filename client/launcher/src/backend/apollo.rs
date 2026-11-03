@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 pub const INPUT_CONTROLLER: u32 = 0x0000_0100;
-/// Vibeshine fork: this client may list and stream individual host windows.
+/// Sloplight server: this client may list and stream individual host windows.
 pub const APP_WINDOWS: u32 = 0x4000_0000;
 pub const INPUT_TOUCH: u32 = 0x0000_0200;
 pub const INPUT_PEN: u32 = 0x0000_0400;

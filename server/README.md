@@ -1,6 +1,6 @@
-# vibeshine-server
+# Sloplight server
 
-A fork of [Vibeshine](https://github.com/Nonary/Vibeshine), the Sunshine-based game streaming host, that adds what [vibeshine-client](../client) needs to stream single Windows apps as Mac windows.
+A hard fork of [Vibeshine](https://github.com/Nonary/Vibeshine), the Sunshine-based game streaming host, that adds what the [Sloplight client](../client) needs to stream single Windows apps as Mac windows. The installed program, its service and its web UI keep Vibeshine's names.
 
 It includes everything upstream Vibeshine offers, such as the virtual display driver, Windows Graphics Capture as a service, PyroWave, the virtual gamepad driver and Playnite sync. See the [upstream README](https://github.com/Nonary/Vibeshine#readme) for details. Regular Moonlight clients work as usual.
 

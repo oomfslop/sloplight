@@ -417,7 +417,7 @@ namespace host_windows {
     if (image.empty()) return {};
     wchar_t tmp_dir[MAX_PATH] {};
     if (!GetTempPathW(MAX_PATH, tmp_dir)) return {};
-    const std::wstring tmp = std::wstring(tmp_dir) + L"vibeshine-window-icon-" + std::to_wstring(pid) + L".png";
+    const std::wstring tmp = std::wstring(tmp_dir) + L"sloplight-window-icon-" + std::to_wstring(pid) + L".png";
     int native = 0;
     if (!platf::img::extract_largest_icon_png(image, tmp, native)) return {};
     std::string bytes;

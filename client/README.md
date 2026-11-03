@@ -1,14 +1,14 @@
-# vibeshine-client
+# Sloplight client
 
-A fork of [Moonlight PC](https://github.com/moonlight-stream/moonlight-qt) for streaming from a [vibeshine-server](../server) host to a Mac.
+A hard fork of [Moonlight PC](https://github.com/moonlight-stream/moonlight-qt) for streaming from a [Sloplight server](../server). On macOS it ships as `Sloplight.app`: the [launcher](launcher) with the streaming client inside. On Windows it is the Moonlight app with this fork's changes. There are no Linux builds for now.
 
-It remains a regular Moonlight client for Sunshine, Apollo and GeForce Experience hosts. Most additions require vibeshine-server, and many are macOS only for now.
+It remains a regular Moonlight client for Sunshine, Apollo and GeForce Experience hosts. Most additions require a Sloplight server, and many are macOS only for now.
 
 ## What's different
 
-### Sloplight
+### Launcher
 
-[Sloplight](sloplight) is a new launcher written in Rust with GPUI that replaces the QML interface on macOS. Streaming is still handled by the C++ client, which Sloplight runs as a helper process.
+The [launcher](launcher), written in Rust with GPUI, replaces the QML interface on macOS. Streaming is still handled by the C++ client, which the launcher runs as a helper process.
 
 ### App windows
 
@@ -42,7 +42,7 @@ Sunshine and GeForce Experience hosts ignore these.
 ### Other changes
 
 - Lower client-side latency on macOS: the Metal renderer keeps three drawables, and streaming threads run at user-interactive priority.
-- A "Capture on present" option that requests Vibeshine's low-latency VRR capture.
+- A "Capture on present" option that requests the server's low-latency VRR capture.
 - A headless `--stream` mode for end-to-end latency tests.
 
 ## Building
@@ -53,18 +53,18 @@ The macOS build uses Nix, from the repository root:
 nix build
 ```
 
-This builds the Moonlight app into `result/`. To build Sloplight and bundle it with the helper inside:
+This builds the streaming client into `result/`. To build the launcher and bundle it with the client inside:
 
 ```sh
-cd client/sloplight
+cd client/launcher
 ./scripts/bundle-macos.sh
 ```
 
-The result is `client/sloplight/target/Sloplight.app`.
+The result is `client/launcher/target/Sloplight.app`.
 
-Use `nix build` rather than `nix build path:.`, which copies the entire working tree, including the multi-gigabyte `sloplight/target` and the server's submodules, into the Nix store.
+Use `nix build` rather than `nix build path:.`, which copies the entire working tree, including the multi-gigabyte `launcher/target` and the server's submodules, into the Nix store.
 
-Builds for other platforms follow the [upstream instructions](https://github.com/moonlight-stream/moonlight-qt#building). The app-window features are macOS only.
+The Windows build follows the [upstream instructions](https://github.com/moonlight-stream/moonlight-qt#building). The app-window features are macOS only.
 
 ## License
 

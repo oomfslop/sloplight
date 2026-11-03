@@ -89,7 +89,7 @@ namespace app_launcher {
 
     /** Run the launchables tool as the user; its JSON, or "" */
     std::string run_tool() {
-      const std::wstring tool = module_dir() + L"\\tools\\vibeshine_launchables.exe";
+      const std::wstring tool = module_dir() + L"\\tools\\sloplight_launchables.exe";
       if (GetFileAttributesW(tool.c_str()) == INVALID_FILE_ATTRIBUTES) {
         BOOST_LOG(warning) << "App launcher: " << utf_utils::to_utf8(tool) << " is missing";
         return {};

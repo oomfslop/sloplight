@@ -11,7 +11,7 @@ namespace CliStreamHelper
 
 // Runs a single streaming session from a JSON description read on stdin,
 // reporting progress as JSON lines on stdout. This is how the GPUI launcher
-// (sloplight) drives the C++ streaming core.
+// (the launcher) drives the C++ streaming core.
 class Launcher : public QObject
 {
     Q_OBJECT

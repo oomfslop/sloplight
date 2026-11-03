@@ -4378,7 +4378,7 @@ namespace nvhttp {
     bool metrics_supported = false;
     bool sleep_allowed = false;
     // Apollo-compatible client permission mask (see apollo_permission_e).
-    // Artemis/Sloplight read it from the "Permission" element to decide
+    // Artemis and the Sloplight client read it from the "Permission" element to decide
     // which host features (clipboard sync, server commands) to offer.
     std::uint32_t apollo_permissions = 0;
     if constexpr (std::is_same_v<SunshineHTTPS, T>) {

@@ -220,7 +220,7 @@ pub fn find_helper(settings: &Settings) -> Option<PathBuf> {
             // App bundle: Contents/MacOS/sloplight -> Contents/Helpers/Moonlight.app
             candidates.push(dir.join("../Helpers/Moonlight.app/Contents/MacOS/Moonlight"));
             candidates.push(dir.join("../Resources/Moonlight.app/Contents/MacOS/Moonlight"));
-            // Dev tree: client/sloplight/target/{debug,release}/sloplight -> result at the repository root
+            // Dev tree: client/launcher/target/{debug,release}/sloplight -> result at the repository root
             candidates.push(dir.join("../../../../result/bin/moonlight"));
             candidates.push(dir.join("../../../../result/Applications/Moonlight.app/Contents/MacOS/Moonlight"));
             candidates.push(dir.join("../../../app/Moonlight.app/Contents/MacOS/Moonlight"));

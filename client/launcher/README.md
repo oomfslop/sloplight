@@ -1,15 +1,15 @@
-# Sloplight
+# Sloplight launcher
 
-A keyboard-first launcher for game streaming hosts, written in Rust with [GPUI](https://www.gpui.rs).
+The macOS front end of the Sloplight client: a keyboard-first launcher written in Rust with [GPUI](https://www.gpui.rs), shipped as `Sloplight.app`.
 
-Sloplight replaces Moonlight's Qt interface on macOS, handling hosts, apps, pairing and settings. Streaming is still done by Moonlight's C++ client, which Sloplight runs as a helper process (`moonlight stream-helper`).
+It replaces Moonlight's Qt interface, handling hosts, apps, pairing and settings. Streaming is still done by the client's C++ core, which the launcher runs as a helper process (`moonlight stream-helper`).
 
 ## Use
 
 - Hosts are discovered on the local network or added manually with `⌘N`. Tailscale addresses are used when the host is not on the LAN.
 - Pair with a PIN, or with a one-time password on Apollo-style hosts.
 - Pick an app and press Enter to stream it. `⌘K` finds an app on any host.
-- With vibeshine-server, the **Windows** button (`⇧⌘O`) lists the host's windows and streams any of them as a Mac window, and `⌘O` launches a host app straight into one.
+- With a Sloplight server, the **Windows** button (`⇧⌘O`) lists the host's windows and streams any of them as a Mac window, and `⌘O` launches a host app straight into one.
 - The **Keep windows ready** card in a host's app grid keeps an idle connection open until you quit, so windows and launched apps show up almost at once. It sends next to no data while nothing is streamed.
 - The launcher and the window picker can also get system-wide shortcuts in Settings → App windows. They then open as a panel over any app.
 
@@ -42,7 +42,7 @@ Settings are grouped into presets: **Full quality** and **Efficient** are built 
 
 ## Theme
 
-Colors come from your Zed theme. Sloplight reads `~/.config/zed/settings.json`, finds the dark theme named there among your themes and installed extensions, and builds its palette on top of Zed's One Dark. The monospace font is Zed's buffer font. Without Zed, the built-in colors are used.
+Colors come from your Zed theme. The launcher reads `~/.config/zed/settings.json`, finds the dark theme named there among your themes and installed extensions, and builds its palette on top of Zed's One Dark. The monospace font is Zed's buffer font. Without Zed, the built-in colors are used.
 
 ## Building
 
@@ -71,7 +71,7 @@ xattr -dr com.apple.quarantine Sloplight.app
 
 Config is stored in `~/Library/Application Support/sloplight` (`hosts.json`, `settings.json`, `identity.json`). `SLOPLIGHT_CONFIG_DIR` overrides it.
 
-`SLOPLIGHT_DEBUG_STATE=settings|info|pairing|add-host|palette|launcher|...` opens Sloplight directly on that screen, for UI work without a host.
+`SLOPLIGHT_DEBUG_STATE=settings|info|pairing|add-host|palette|launcher|...` opens the launcher directly on that screen, for UI work without a host.
 
 ## Permissions
 

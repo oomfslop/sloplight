@@ -1,4 +1,4 @@
-// deskwm: host windows of a Vibeshine desk as native macOS windows.
+// deskwm: host windows of a Sloplight server desk as native macOS windows.
 //
 // The Rust library owns the Mac side of app-window streaming: one NSWindow
 // per host window (with a CAMetalLayer the renderer draws into), the mouse

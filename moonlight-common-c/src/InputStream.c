@@ -1428,7 +1428,7 @@ int LiSendTrackpadEvent(uint8_t contactCount, const LI_TRACKPAD_CONTACT* contact
         return -2;
     }
 
-    // This is a protocol extension only supported with Vibeshine
+    // This is a protocol extension only supported with the Sloplight server
     if (!(SunshineFeatureFlags & LI_FF_TRACKPAD_EVENTS)) {
         return LI_ERR_UNSUPPORTED;
     }

@@ -766,10 +766,10 @@ int LiSendKeyboardEvent(short keyCode, char keyAction, char modifiers);
 // the keycode was not mapped to a standard US English scancode and should be
 // interpreted as-is. This is a Sunshine protocol extension.
 #define SS_KBE_FLAG_NON_NORMALIZED 0x01
-// Vibeshine (LI_FF_CLIENT_KEY_REPEAT): a key down that is an auto-repeat of a
+// Sloplight server (LI_FF_CLIENT_KEY_REPEAT): a key down that is an auto-repeat of a
 // held key, paced by the client's own key repeat settings
 #define SS_KBE_FLAG_REPEAT 0x02
-// Vibeshine (LI_FF_CLIENT_KEY_REPEAT): on a key down, the client sends this
+// Sloplight server (LI_FF_CLIENT_KEY_REPEAT): on a key down, the client sends this
 // key's repeats itself (the host doesn't repeat it on a timer of its own)
 #define SS_KBE_FLAG_CLIENT_REPEATS 0x04
 int LiSendKeyboardEvent2(short keyCode, char keyAction, char modifiers, char flags);
@@ -1090,8 +1090,8 @@ void LiRequestIdrFrame(void);
 // This function returns any extended feature flags supported by the host.
 #define LI_FF_PEN_TOUCH_EVENTS        0x01 // LiSendTouchEvent()/LiSendPenEvent() supported
 #define LI_FF_CONTROLLER_TOUCH_EVENTS 0x02 // LiSendControllerTouchEvent() supported
-#define LI_FF_TRACKPAD_EVENTS         0x04 // LiSendTrackpadEvent() supported (Vibeshine)
-#define LI_FF_CLIENT_KEY_REPEAT       0x08 // SS_KBE_FLAG_REPEAT/SS_KBE_FLAG_CLIENT_REPEATS supported (Vibeshine)
+#define LI_FF_TRACKPAD_EVENTS         0x04 // LiSendTrackpadEvent() supported (Sloplight server)
+#define LI_FF_CLIENT_KEY_REPEAT       0x08 // SS_KBE_FLAG_REPEAT/SS_KBE_FLAG_CLIENT_REPEATS supported (Sloplight server)
 uint32_t LiGetHostFeatureFlags(void);
 
 #ifdef __cplusplus

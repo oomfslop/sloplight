@@ -620,7 +620,7 @@ namespace app_desk {
         WNDCLASSW wc {};
         wc.lpfnWndProc = DefWindowProcW;
         wc.hInstance = GetModuleHandleW(nullptr);
-        wc.lpszClassName = L"VibeshineDeskReserve";
+        wc.lpszClassName = L"SloplightDeskReserve";
         RegisterClassW(&wc);  // fails harmlessly when already registered
         std::vector<std::pair<HWND, std::pair<UINT, int>>> bars;
         for (auto [edge, extent] : {std::pair<UINT, int> {ABE_RIGHT, right}, std::pair<UINT, int> {ABE_BOTTOM, bottom}}) {
@@ -804,9 +804,9 @@ namespace app_desk {
      *  edge or hovering a maximize button (Snap Layouts) tiles windows on the
      *  host behind the client's back. Off for the logged-in user while any
      *  desk is open, as the Settings app turns it off; the user's values are
-     *  kept under HKCU\\Software\\Vibeshine\\DeskTweaks until restored, so a
+     *  kept under HKCU\\Software\\Sloplight\\DeskTweaks until restored, so a
      *  crash restores them with the next desk. */
-    constexpr const wchar_t *tweaks_backup_key = L"Software\\Vibeshine\\DeskTweaks";
+    constexpr const wchar_t *tweaks_backup_key = L"Software\\Sloplight\\DeskTweaks";
     constexpr const wchar_t *explorer_advanced_key = L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced";
     constexpr const wchar_t *snap_values[] = {L"EnableSnapAssistFlyout", L"EnableSnapBar", L"SnapAssist"};
     std::atomic<bool> g_tweaked {false};
@@ -1054,7 +1054,7 @@ namespace app_desk {
     desk_display.device = desk.device;
     desk_display.monitor_path = desk.monitor_path;
     RECT rect {};
-    const bool desk_ok = ensure_display(desk_display, "vibeshine-desk-" + client_uuid, "the desk", w, h, fps, custom, sudovda, [&] {
+    const bool desk_ok = ensure_display(desk_display, "sloplight-desk-" + client_uuid, "the desk", w, h, fps, custom, sudovda, [&] {
       return desk_position(ours());
     }, rect);
     desk.sudovda = desk_display.sudovda;
@@ -1084,7 +1084,7 @@ namespace app_desk {
     }
     const int want_aw = aw, want_ah = ah;
     RECT atlas_rect {};
-    if (!ensure_display(desk.atlas, "vibeshine-atlas-" + client_uuid, "the atlas", aw, ah, afps, custom, sudovda, [&] {
+    if (!ensure_display(desk.atlas, "sloplight-atlas-" + client_uuid, "the atlas", aw, ah, afps, custom, sudovda, [&] {
           return atlas_position(ours());
         }, atlas_rect) || aw != want_aw || ah != want_ah) {
       BOOST_LOG(warning) << "Desk: no atlas display at " << want_aw << 'x' << want_ah << " (got " << aw << 'x' << ah << ')';

@@ -1,5 +1,5 @@
 {
-  description = "Moonlight Qt with Apollo host extensions";
+  description = "Sloplight client";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
@@ -34,7 +34,7 @@
           # OpenGL-compatible buffers otherwise, ~3 ms more per 4K frame on Apple silicon
           ffmpeg_8 = pkgs.ffmpeg_8.overrideAttrs (o: { patches = (o.patches or [ ]) ++ [ ./nix/ffmpeg_metal_vt.patch ]; });
         })).overrideAttrs (old: {
-          version = "6.1.0-apollo";
+          version = "6.1.0-sloplight";
           src = pkgs.lib.fileset.toSource {
             root = ./.;
             fileset = pkgs.lib.fileset.unions [ ./client ./moonlight-common-c ];
@@ -56,9 +56,9 @@
         sloplight = pkgs.rustPlatform.buildRustPackage {
           pname = "sloplight";
           version = "0.1.0";
-          src = ./client/sloplight;
+          src = ./client/launcher;
           cargoLock = {
-            lockFile = ./client/sloplight/Cargo.lock;
+            lockFile = ./client/launcher/Cargo.lock;
             # GPUI comes from Zed's repository at the commit the lockfile pins
             allowBuiltinFetchGit = true;
           };

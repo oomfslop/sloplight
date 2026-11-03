@@ -1,8 +1,9 @@
 /**
  * @file src/trackpad_packet.h
- * @brief The precision touchpad packet of the input stream (a Vibeshine
- *        protocol extension, sent by LiSendTrackpadEvent()): every finger on the client's trackpad in one
- *        frame, for the host to recognize scrolling and zooming itself.
+ * @brief The precision touchpad packet of the input stream (a Sloplight
+ *        protocol extension, sent by LiSendTrackpadEvent()): every finger on
+ *        the client's trackpad in one frame, for the host to recognize
+ *        scrolling and zooming itself.
  */
 #pragma once
 

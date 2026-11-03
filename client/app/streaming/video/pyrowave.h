@@ -7,8 +7,7 @@ extern "C" {
 #include <libavutil/frame.h>
 }
 
-// Decodes record-framed PyroWave frames (see docs/pyrowave-protocol.md in
-// vibeshine-server) with the upstream Metal decoder into IOSurface-backed
+// Decodes record-framed PyroWave frames (see server/docs/pyrowave-protocol.md) with the upstream Metal decoder into IOSurface-backed
 // planar CVPixelBuffers, handed out as AV_PIX_FMT_VIDEOTOOLBOX frames
 class PyroWaveMetalDecoder
 {

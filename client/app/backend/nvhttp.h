@@ -120,9 +120,9 @@ public:
     // virtual display runs at 1000 Hz and frames are captured right after
     // the game presents them, instead of on the display's refresh grid.
     bool clientVrrRequested = false;
-    // App-window streaming (Vibeshine fork): capture only this host window
+    // App-window streaming (Sloplight server): capture only this host window
     bool hideCursor = false;  // the client draws its own cursor; leave the host cursor out of the capture
-    // Desk session (Vibeshine fork): capture this client's desk, the private
+    // Desk session (Sloplight server): capture this client's desk, the private
     // host display that mirrors the client's screen (opened beforehand).
     bool desk = false;
 };
@@ -218,7 +218,7 @@ public:
     QString
     hitTestWindow(quint64 windowHandle, int x, int y);
 
-    // Reuse the connection between requests (Vibeshine's app-window requests:
+    // Reuse the connection between requests (the Sloplight server's app-window requests:
     // one round trip each instead of a TCP and TLS handshake first). Not for
     // GFE, which cannot take persistent connections.
     void setKeepAlive(bool keepAlive) { m_KeepAlive = keepAlive; }
@@ -236,7 +236,7 @@ public:
     QByteArray
     windowIcon(quint64 windowHandle);
 
-    // Vibeshine: type in this language on the host (the client's keyboard
+    // Sloplight server: type in this language on the host (the client's keyboard
     // input source, "en", "ru", ...). False when the host can't.
     bool
     setKeyboardLanguage(const QString& language);

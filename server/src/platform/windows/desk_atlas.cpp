@@ -183,7 +183,7 @@ namespace desk_atlas {
     WNDCLASSW wc {};
     wc.lpfnWndProc = window_proc;
     wc.hInstance = GetModuleHandleW(nullptr);
-    wc.lpszClassName = L"VibeshineDeskAtlas";
+    wc.lpszClassName = L"SloplightDeskAtlas";
     wc.hCursor = nullptr;
     RegisterClassW(&wc);  // fails harmlessly when already registered
     window_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, wc.lpszClassName, L"", WS_POPUP, monitor_.left, monitor_.top,
@@ -193,7 +193,7 @@ namespace desk_atlas {
       WNDCLASSW wcw {};
       wcw.lpfnWndProc = DefWindowProcW;
       wcw.hInstance = wc.hInstance;
-      wcw.lpszClassName = L"VibeshineDeskWhite";
+      wcw.lpszClassName = L"SloplightDeskWhite";
       wcw.hbrBackground = static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH));
       RegisterClassW(&wcw);
       white_src_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, wcw.lpszClassName, L"", WS_POPUP, monitor_.left, monitor_.top, white_src_size, white_src_size, nullptr, nullptr, wc.hInstance, nullptr);

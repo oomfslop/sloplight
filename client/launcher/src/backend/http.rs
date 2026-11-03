@@ -286,14 +286,14 @@ impl NvHttp {
         Ok(())
     }
 
-    /// App-window streaming (Vibeshine fork): the host's top-level windows.
+    /// App-window streaming (Sloplight server): the host's top-level windows.
     pub fn get_host_windows(&self) -> Result<Vec<HostWindow>, HttpError> {
         let body = self.get_string(true, "actions/windows", "", REQUEST_TIMEOUT)?;
         let parsed: HostWindowList = serde_json::from_str(&body).map_err(|e| HttpError::Network(format!("windows list: {e}")))?;
         Ok(parsed.windows)
     }
 
-    /// App launcher (Vibeshine fork): what the host's signed-in user can
+    /// App launcher (Sloplight server): what the host's signed-in user can
     /// launch (Start menu apps, PATH programs). The host asks its shell the
     /// first time, which takes a moment; `refresh` asks it again.
     pub fn get_launchables(&self, refresh: bool) -> Result<Launchables, HttpError> {
@@ -756,7 +756,7 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// One entry of `GET /actions/windows` (Vibeshine fork, app-window streaming).
+/// One entry of `GET /actions/windows` (Sloplight server, app-window streaming).
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
 pub struct HostWindow {
     pub hwnd: String,

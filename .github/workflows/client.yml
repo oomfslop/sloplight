@@ -78,7 +78,7 @@ jobs:
         if: runner.os == 'macOS'
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: client/sloplight
+          workspaces: client/launcher
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -163,7 +163,7 @@ jobs:
 
       - name: Build Sloplight.app (macOS)
         if: runner.os == 'macOS'
-        working-directory: client/sloplight
+        working-directory: client/launcher
         run: HELPER_SRC=../build/build-Release/app/Moonlight.app ./scripts/bundle-macos.sh
         env:
           # gpui needs macOS 12+, the helper declares 13.0 in its Info.plist.
@@ -172,7 +172,7 @@ jobs:
       - name: Package Sloplight (macOS)
         if: runner.os == 'macOS'
         run: |
-          ditto -c -k --keepParent sloplight/target/Sloplight.app "Sloplight-macos-arm64.zip"
+          ditto -c -k --keepParent launcher/target/Sloplight.app "Sloplight-macos-arm64.zip"
           shasum -a 256 "Sloplight-macos-arm64.zip" | tee -a "$GITHUB_STEP_SUMMARY"
           echo 'The app is ad-hoc signed and not notarized: after unzipping, run `xattr -dr com.apple.quarantine Sloplight.app` or right-click → Open the first time.' >> "$GITHUB_STEP_SUMMARY"
 

@@ -3,7 +3,7 @@
  * @brief Lists what can be launched on this machine, as the signed-in user
  *        sees it: every app of the Start menu (the shell's Apps folder: Win32
  *        and Store apps alike) with its icon, and the programs on the PATH.
- *        Vibeshine runs it as the user (the shell answers per user) and reads
+ *        The server runs it as the user (the shell answers per user) and reads
  *        the list as JSON from its stdout:
  *
  *        {"apps":[{"name":..,"id":..,"icon":"<PNG, base64>"}..],

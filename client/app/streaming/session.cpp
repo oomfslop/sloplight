@@ -2395,7 +2395,7 @@ void Session::syncKeyboardLanguage(bool force)
     QThreadPool::globalInstance()->start(new FunctionTask([computer, language, unsupported]() {
         NvHTTP http(computer);
         if (!http.setKeyboardLanguage(language)) {
-            // (not a Vibeshine host, or one too old: don't ask again)
+            // (not a Sloplight server, or one too old: don't ask again)
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "The host doesn't take the keyboard language (%s)", qPrintable(language));
             unsupported->storeRelease(1);
         }

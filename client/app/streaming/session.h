@@ -209,7 +209,7 @@ public:
     // is reported via the quick menu toast if showResult is true.
     void syncClipboard(ClipboardDirection direction, bool showResult);
 
-    // The host types in the language of our keyboard input source (Vibeshine)
+    // The host types in the language of our keyboard input source (Sloplight server)
     void syncKeyboardLanguage(bool force);
 
 signals:

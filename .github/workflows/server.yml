@@ -181,7 +181,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: vibeshine-windows-x64
+          name: sloplight-server-windows-x64
           path: |
             server/build/cpack_artifacts/*.zip
             server/build/cpack_artifacts/*.msi
@@ -257,7 +257,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: vibeshine-linux-x64
+          name: sloplight-server-linux-x64
           path: |
             server/build/cpack_artifacts/*.deb
             server/build/sunshine
@@ -275,6 +275,6 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/vibeshine-windows-x64/*
-            artifacts/vibeshine-linux-x64/*.deb
+            artifacts/sloplight-server-windows-x64/*
+            artifacts/sloplight-server-linux-x64/*.deb
           generate_release_notes: true
