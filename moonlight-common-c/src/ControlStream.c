@@ -1325,7 +1325,8 @@ static void controlReceiveThreadFunc(void* context) {
                         BbGet8(&bb, &flags) &&
                         BbGet16(&bb, &cursor.x) && BbGet16(&bb, &cursor.y) &&
                         BbGet16(&bb, &cursor.displayWidth) && BbGet16(&bb, &cursor.displayHeight) &&
-                        BbGet64(&bb, &cursor.imageId);
+                        BbGet64(&bb, &cursor.imageId) &&
+                        BbGet16(&bb, &cursor.systemCursor);
                 if (valid && (flags & ML_HOST_CURSOR_FLAG_IMAGE)) {
                     valid = BbGet16(&bb, &cursor.hotX) && BbGet16(&bb, &cursor.hotY) &&
                             BbGet16(&bb, &cursor.width) && BbGet16(&bb, &cursor.height) &&

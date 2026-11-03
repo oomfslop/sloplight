@@ -436,8 +436,26 @@ void SdlInputHandler::updateHostCursor()
         return;
     }
 
+    static const QHash<int, SDL_SystemCursor> k_SystemCursors = {
+        { 32512, SDL_SYSTEM_CURSOR_ARROW },
+        { 32513, SDL_SYSTEM_CURSOR_IBEAM },
+        { 32514, SDL_SYSTEM_CURSOR_WAIT },
+        { 32515, SDL_SYSTEM_CURSOR_CROSSHAIR },
+        { 32642, SDL_SYSTEM_CURSOR_SIZENWSE },
+        { 32643, SDL_SYSTEM_CURSOR_SIZENESW },
+        { 32644, SDL_SYSTEM_CURSOR_SIZEWE },
+        { 32645, SDL_SYSTEM_CURSOR_SIZENS },
+        { 32646, SDL_SYSTEM_CURSOR_SIZEALL },
+        { 32648, SDL_SYSTEM_CURSOR_NO },
+        { 32649, SDL_SYSTEM_CURSOR_HAND },
+        { 32650, SDL_SYSTEM_CURSOR_WAITARROW },
+    };
+
     SDL_Cursor* cursor = nullptr;
-    if (m_HostCursor.imageId != 0 && !m_HostCursorImages.isEmpty() &&
+    if (k_SystemCursors.contains(m_HostCursor.systemCursor)) {
+        cursor = SDL_CreateSystemCursor(k_SystemCursors.value(m_HostCursor.systemCursor));
+    }
+    if (cursor == nullptr && m_HostCursor.imageId != 0 && !m_HostCursorImages.isEmpty() &&
             m_HostCursorImages.first().id == m_HostCursor.imageId && !m_HostCursorImages.first().bgra.isEmpty()) {
         const HostCursorImage& image = m_HostCursorImages.first();
 

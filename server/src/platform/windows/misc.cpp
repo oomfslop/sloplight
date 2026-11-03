@@ -3247,6 +3247,13 @@ namespace platf {
         // ponytail: animated cursors (busy spinner) show their first frame only
         if (visible && info.hCursor != image_handle) {
           image_handle = info.hCursor;
+          cursor.system_cursor = 0;
+          for (const WORD id : {32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32650, 32651}) {
+            if (info.hCursor == LoadCursorW(nullptr, MAKEINTRESOURCEW(id))) {
+              cursor.system_cursor = id;
+              break;
+            }
+          }
           if (!read_cursor_image(info.hCursor, cursor)) {
             BOOST_LOG(debug) << "Host cursor: couldn't read the cursor image"sv;
             cursor.image_id = 0;

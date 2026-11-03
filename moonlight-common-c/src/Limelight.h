@@ -526,6 +526,8 @@ typedef struct _HOST_CURSOR {
     uint16_t displayWidth;
     uint16_t displayHeight;
     uint64_t imageId;
+    // Windows IDC_* resource id of a standard cursor, 0 otherwise
+    uint16_t systemCursor;
     // Straight-alpha BGRA, rows top-down
     const uint8_t* bgra;
     // Host pixels

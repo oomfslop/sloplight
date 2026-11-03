@@ -1494,6 +1494,7 @@ namespace stream {
     const std::uint64_t image_id = cached ? cursor.image_id : 0;
     MlHapticsWrite32(bytes + 10, static_cast<std::uint32_t>(image_id));
     MlHapticsWrite32(bytes + 14, static_cast<std::uint32_t>(image_id >> 32));
+    MlHapticsWrite16(bytes + 18, cursor.visible ? cursor.system_cursor : 0);
     if (send_image) {
       bytes += ML_HOST_CURSOR_STATE_SIZE;
       MlHapticsWrite16(bytes, std::clamp(cursor.hot_x, 0, 0xFFFF));

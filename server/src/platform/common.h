@@ -1078,6 +1078,7 @@ namespace platf {
     int display_width = 0;
     int display_height = 0;
     std::uint64_t image_id = 0;  ///< hash of the image below; 0: no image
+    int system_cursor = 0;  ///< IDC_* id of a standard Windows cursor, 0 otherwise
     int hot_x = 0;
     int hot_y = 0;
     int width = 0;
