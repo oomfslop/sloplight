@@ -623,6 +623,10 @@ namespace platf {
     return {};
   }
 
+  std::unique_ptr<deinit_t> watch_host_cursor(std::function<void(host_cursor_t)>) {
+    return nullptr;
+  }
+
   std::string get_clipboard() {
     // Not implemented on this platform yet.
     return {};

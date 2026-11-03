@@ -79,7 +79,9 @@ CONNECTION_LISTENER_CALLBACKS Session::k_ConnCallbacks = {
     Session::clRumbleTriggers,
     Session::clSetMotionEventState,
     Session::clSetControllerLED,
-    Session::clSetAdaptiveTriggers
+    Session::clSetAdaptiveTriggers,
+    nullptr,
+    Session::clHostCursor
 };
 
 Session* Session::s_ActiveSession;
@@ -291,6 +293,16 @@ void Session::clSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlag
 
     setControllerLEDEvent.user.data2 = (void *) state;
     SDL_PushEvent(&setControllerLEDEvent);
+}
+
+void Session::clHostCursor(const HOST_CURSOR* cursor)
+{
+    SDL_Event event = {};
+    event.type = SDL_USEREVENT;
+    event.user.code = SDL_CODE_HOST_CURSOR;
+    event.user.data1 = new HOST_CURSOR(*cursor);
+    event.user.data2 = cursor->bgra != nullptr ? new QByteArray((const char*)cursor->bgra, cursor->width * cursor->height * 4) : new QByteArray();
+    SDL_PushEvent(&event);
 }
 
 
@@ -2772,6 +2784,15 @@ void Session::exec()
             case SDL_CODE_QUICKMENU_TIMER:
                 m_QuickMenu.onTimerExpired();
                 break;
+            case SDL_CODE_HOST_CURSOR:
+            {
+                HOST_CURSOR* cursor = (HOST_CURSOR*)event.user.data1;
+                QByteArray* pixels = (QByteArray*)event.user.data2;
+                m_InputHandler->setHostCursor(*cursor, *pixels);
+                delete cursor;
+                delete pixels;
+                break;
+            }
             case SDL_CODE_CLIPBOARD_TEXT_RECEIVED:
             {
                 QString* text = (QString*)event.user.data1;
@@ -2840,6 +2861,10 @@ void Session::exec()
                 break;
             case SDL_WINDOWEVENT_LEAVE:
                 m_InputHandler->notifyMouseLeave();
+                break;
+            case SDL_WINDOWEVENT_SIZE_CHANGED:
+            case SDL_WINDOWEVENT_DISPLAY_CHANGED:
+                m_InputHandler->updateHostCursor();
                 break;
             }
 

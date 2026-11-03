@@ -515,6 +515,30 @@ typedef void(*ConnListenerSetControllerLED)(uint16_t controllerNumber, uint8_t r
 // Only advertise LI_CCAP_HAPTICS_PCM for controllers with a working renderer.
 typedef void(*ConnListenerControllerHaptics)(uint16_t controllerNumber, uint32_t sequence, const uint8_t* pcm, uint16_t frames);
 
+// The host's cursor (Sloplight hosts, sessions launched with hideCursor=1).
+// x, y, displayWidth and displayHeight are host pixels on the cursor's display.
+// The image fields are set only when the packet carries the image (bgra != NULL);
+// otherwise the client has it cached under imageId (see HostCursor.h).
+typedef struct _HOST_CURSOR {
+    bool visible;
+    uint16_t x;
+    uint16_t y;
+    uint16_t displayWidth;
+    uint16_t displayHeight;
+    uint64_t imageId;
+    // Straight-alpha BGRA, rows top-down
+    const uint8_t* bgra;
+    // Host pixels
+    uint16_t hotX;
+    uint16_t hotY;
+    // Image pixels, each 1 << scaleShift host pixels
+    uint16_t width;
+    uint16_t height;
+    uint8_t scaleShift;
+} HOST_CURSOR, *PHOST_CURSOR;
+
+typedef void(*ConnListenerHostCursor)(const HOST_CURSOR* cursor);
+
 typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerStageStarting stageStarting;
     ConnListenerStageComplete stageComplete;
@@ -530,6 +554,7 @@ typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerSetControllerLED setControllerLED;
     ConnListenerSetAdaptiveTriggers setAdaptiveTriggers;
     ConnListenerControllerHaptics controllerHaptics;
+    ConnListenerHostCursor hostCursor;
 } CONNECTION_LISTENER_CALLBACKS, *PCONNECTION_LISTENER_CALLBACKS;
 
 // Use this function to zero the connection callbacks when allocated on the stack or heap

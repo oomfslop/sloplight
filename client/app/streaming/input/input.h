@@ -6,6 +6,8 @@
 
 #include "SDL_compat.h"
 
+#include <Limelight.h>
+
 struct GamepadState {
     SDL_GameController* controller;
     SDL_JoystickID jsId;
@@ -97,6 +99,11 @@ public:
         m_MouseCursorCapturedVisibilityState = SDL_ENABLE;
         SDL_ShowCursor(SDL_ENABLE);
     }
+
+    // The host's cursor becomes ours; when the host hides it, the mouse goes relative.
+    void setHostCursor(const HOST_CURSOR& cursor, const QByteArray& pixels);
+
+    void updateHostCursor();
 
     void handleKeyEvent(SDL_KeyboardEvent* event);
 
@@ -245,6 +252,18 @@ private:
     QStringList m_IgnoreDeviceGuids;
     StreamingPreferences::CaptureSysKeysMode m_CaptureSystemKeysMode;
     int m_MouseCursorCapturedVisibilityState;
+    struct HostCursorImage {
+        uint64_t id;
+        int hotX;
+        int hotY;
+        int width;
+        int height;
+        int scaleShift;
+        QByteArray bgra;
+    };
+    HOST_CURSOR m_HostCursor = {};
+    QList<HostCursorImage> m_HostCursorImages;
+    SDL_Cursor* m_HostSdlCursor = nullptr;
 
     struct {
         KeyCombo keyCombo;

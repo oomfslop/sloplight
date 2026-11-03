@@ -1,5 +1,6 @@
 #include "Limelight-internal.h"
 #include "ControllerHaptics.h"
+#include "HostCursor.h"
 
 // This is a private header, but it just contains some time macros
 #include <enet/time.h>
@@ -1310,6 +1311,36 @@ static void controlReceiveThreadFunc(void* context) {
                     ListenerCallbacks.controllerHaptics(MlHapticsRead16(payload + 2),
                         MlHapticsRead32(payload + 4), payload + ML_HAPTICS_HEADER_SIZE,
                         MlHapticsRead16(payload + 8));
+                }
+            }
+            else if (ctlHdr->type == ML_HOST_CURSOR_PACKET_TYPE) {
+                BYTE_BUFFER bb;
+                uint8_t version, flags, reserved;
+                HOST_CURSOR cursor = { 0 };
+                int payloadLength = packetLength - (int)sizeof(*ctlHdr);
+                bool valid;
+
+                BbInitializeWrappedBuffer(&bb, (char*)ctlHdr, sizeof(*ctlHdr), payloadLength, BYTE_ORDER_LITTLE);
+                valid = BbGet8(&bb, &version) && version == ML_HOST_CURSOR_VERSION &&
+                        BbGet8(&bb, &flags) &&
+                        BbGet16(&bb, &cursor.x) && BbGet16(&bb, &cursor.y) &&
+                        BbGet16(&bb, &cursor.displayWidth) && BbGet16(&bb, &cursor.displayHeight) &&
+                        BbGet64(&bb, &cursor.imageId);
+                if (valid && (flags & ML_HOST_CURSOR_FLAG_IMAGE)) {
+                    valid = BbGet16(&bb, &cursor.hotX) && BbGet16(&bb, &cursor.hotY) &&
+                            BbGet16(&bb, &cursor.width) && BbGet16(&bb, &cursor.height) &&
+                            BbGet8(&bb, &cursor.scaleShift) && BbGet8(&bb, &reserved) &&
+                            cursor.width != 0 && cursor.height != 0 &&
+                            (int)cursor.width * cursor.height <= ML_HOST_CURSOR_MAX_PIXELS &&
+                            payloadLength == ML_HOST_CURSOR_STATE_SIZE + ML_HOST_CURSOR_IMAGE_HEADER_SIZE + (int)cursor.width * cursor.height * 4;
+                    cursor.bgra = (const uint8_t*)(ctlHdr + 1) + ML_HOST_CURSOR_STATE_SIZE + ML_HOST_CURSOR_IMAGE_HEADER_SIZE;
+                }
+                else if (valid) {
+                    valid = payloadLength == ML_HOST_CURSOR_STATE_SIZE;
+                }
+                if (valid && ListenerCallbacks.hostCursor) {
+                    cursor.visible = (flags & ML_HOST_CURSOR_FLAG_VISIBLE) != 0;
+                    ListenerCallbacks.hostCursor(&cursor);
                 }
             }
             else if (needsAsyncCallback(ctlHdr->type)) {

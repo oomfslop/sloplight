@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 // lib includes
 #include <boost/core/noncopyable.hpp>
@@ -1068,6 +1069,28 @@ namespace platf {
 
   /** Resolve the render device path used for hardware encoding. */
   std::string resolve_render_device();
+
+  struct host_cursor_t {
+    bool visible = false;
+    // Host pixels, relative to the cursor's display
+    int x = 0;
+    int y = 0;
+    int display_width = 0;
+    int display_height = 0;
+    std::uint64_t image_id = 0;  ///< hash of the image below; 0: no image
+    int hot_x = 0;
+    int hot_y = 0;
+    int width = 0;
+    int height = 0;
+    std::vector<std::uint8_t> bgra;  ///< straight-alpha BGRA, rows top-down
+  };
+
+  /**
+   * Calls `on_change` (on its own thread) with the host cursor now and whenever its
+   * visibility or shape changes, until the returned object is destroyed.
+   * Returns nullptr where the host cursor can't be watched.
+   */
+  std::unique_ptr<deinit_t> watch_host_cursor(std::function<void(host_cursor_t)> on_change);
 
   /** Host clipboard text as UTF-8 (empty when unavailable). */
   std::string get_clipboard();

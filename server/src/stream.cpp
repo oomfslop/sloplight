@@ -1,4 +1,5 @@
 #include <moonlight-common-c/src/ControllerHaptics.h>
+#include <moonlight-common-c/src/HostCursor.h>
 /**
  * @file src/stream.cpp
  * @brief Definitions for the streaming protocols.
@@ -692,6 +693,8 @@ namespace stream {
       std::array<std::atomic_bool, platf::MAX_GAMEPADS> vigem_rumble_send_success_logged {};
       std::array<std::atomic_bool, platf::MAX_GAMEPADS> vigem_rumble_send_failure_logged {};
       safe::mail_raw_t::event_t<video::hdr_info_t> hdr_queue;
+      std::uint64_t host_cursor_serial = 0;
+      std::vector<std::uint64_t> host_cursor_images;  ///< the client's cached image ids, most recent first
     } control;
 
     std::uint32_t launch_session_id;
@@ -1463,6 +1466,69 @@ namespace stream {
     return 0;
   }
 
+  int send_host_cursor(session_t *session, const platf::host_cursor_t &cursor) {
+    auto &images = session->control.host_cursor_images;
+    const bool cached = cursor.visible && cursor.image_id != 0;
+    const auto image = std::find(images.begin(), images.end(), cursor.image_id);
+    const bool send_image = cached && image == images.end();
+
+    int shift = 0;
+    while (send_image && (cursor.width >> shift) * (cursor.height >> shift) > ML_HOST_CURSOR_MAX_PIXELS) {
+      ++shift;
+    }
+    const int width = send_image ? cursor.width >> shift : 0;
+    const int height = send_image ? cursor.height >> shift : 0;
+    constexpr std::size_t max_plaintext = sizeof(control_header_v2) + ML_HOST_CURSOR_STATE_SIZE + ML_HOST_CURSOR_IMAGE_HEADER_SIZE + ML_HOST_CURSOR_MAX_PIXELS * 4;
+
+    std::vector<std::uint8_t> plaintext(sizeof(control_header_v2) + ML_HOST_CURSOR_STATE_SIZE + (send_image ? ML_HOST_CURSOR_IMAGE_HEADER_SIZE + std::size_t(width) * height * 4 : 0));
+    auto *bytes = plaintext.data();
+    MlHapticsWrite16(bytes, ML_HOST_CURSOR_PACKET_TYPE);
+    MlHapticsWrite16(bytes + 2, plaintext.size() - sizeof(control_header_v2));
+    bytes += sizeof(control_header_v2);
+    bytes[0] = ML_HOST_CURSOR_VERSION;
+    bytes[1] = (cursor.visible ? ML_HOST_CURSOR_FLAG_VISIBLE : 0) | (send_image ? ML_HOST_CURSOR_FLAG_IMAGE : 0);
+    const int state[] = {cursor.x, cursor.y, cursor.display_width, cursor.display_height};
+    for (std::size_t i = 0; i < std::size(state); ++i) {
+      MlHapticsWrite16(bytes + 2 + i * 2, std::clamp(state[i], 0, 0xFFFF));
+    }
+    const std::uint64_t image_id = cached ? cursor.image_id : 0;
+    MlHapticsWrite32(bytes + 10, static_cast<std::uint32_t>(image_id));
+    MlHapticsWrite32(bytes + 14, static_cast<std::uint32_t>(image_id >> 32));
+    if (send_image) {
+      bytes += ML_HOST_CURSOR_STATE_SIZE;
+      MlHapticsWrite16(bytes, std::clamp(cursor.hot_x, 0, 0xFFFF));
+      MlHapticsWrite16(bytes + 2, std::clamp(cursor.hot_y, 0, 0xFFFF));
+      MlHapticsWrite16(bytes + 4, width);
+      MlHapticsWrite16(bytes + 6, height);
+      bytes[8] = shift;
+      auto *pixels = bytes + ML_HOST_CURSOR_IMAGE_HEADER_SIZE;
+      for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+          std::memcpy(pixels + (std::size_t(y) * width + x) * 4, &cursor.bgra[((std::size_t(y) << shift) * cursor.width + (std::size_t(x) << shift)) * 4], 4);
+        }
+      }
+    }
+
+    auto encrypted_payload = std::make_unique<std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(max_plaintext) + crypto::cipher::tag_size>>();
+    auto payload = encode_control(session, std::string_view(reinterpret_cast<const char *>(plaintext.data()), plaintext.size()), *encrypted_payload);
+    if (payload.empty() || session->broadcast_ref->control_server.send(payload, session->control.peer)) {
+      TUPLE_2D(port, addr, platf::from_sockaddr_ex((sockaddr *) &session->control.peer->address.address));
+      BOOST_LOG(warning) << "Couldn't send host cursor to ["sv << addr << ':' << port << ']';
+      return -1;
+    }
+
+    if (cached) {
+      if (image != images.end()) {
+        images.erase(image);
+      }
+      images.insert(images.begin(), cursor.image_id);
+      if (images.size() > ML_HOST_CURSOR_CACHE_SIZE) {
+        images.pop_back();
+      }
+    }
+    return 0;
+  }
+
   void controlBroadcastThread(control_server_t *server) {
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
@@ -1721,6 +1787,10 @@ namespace stream {
     auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     constexpr auto pending_peer_termination_grace = std::chrono::seconds(1);
     std::optional<std::chrono::steady_clock::time_point> process_terminated_since;
+    std::mutex host_cursor_mutex;
+    std::shared_ptr<const platf::host_cursor_t> host_cursor;
+    std::uint64_t host_cursor_serial = 0;
+    std::unique_ptr<platf::deinit_t> host_cursor_watcher;
 
     // Reuse the normal graceful termination packet when an ended game must be
     // removed without taking down processless Remote Input/Monitor peers that
@@ -1871,6 +1941,27 @@ namespace stream {
 
               send_hdr_mode(session, std::move(hdr_info));
             }
+
+            // Desk sessions get the host cursor from the desk layout instead
+            if (session->control.peer && session->hide_cursor && !session->app_window) {
+              if (!host_cursor_watcher) {
+                host_cursor_watcher = platf::watch_host_cursor([&](platf::host_cursor_t cursor) {
+                  auto shared = std::make_shared<const platf::host_cursor_t>(std::move(cursor));
+                  std::lock_guard lock {host_cursor_mutex};
+                  host_cursor = std::move(shared);
+                  ++host_cursor_serial;
+                });
+              }
+              std::unique_lock lock {host_cursor_mutex};
+              if (session->control.host_cursor_serial != host_cursor_serial) {
+                const auto cursor = host_cursor;
+                const auto serial = host_cursor_serial;
+                lock.unlock();
+                if (send_host_cursor(session, *cursor) == 0) {
+                  session->control.host_cursor_serial = serial;
+                }
+              }
+            }
           }
 
           ++pos;
@@ -1897,7 +1988,8 @@ namespace stream {
       }
 
       // Haptic samples must keep flowing even when the player is not moving.
-      server->iterate(haptics_client ? 5ms : 150ms);
+      // ENet can't be woken from another thread: cursor changes wait for input or this timeout.
+      server->iterate(haptics_client || host_cursor_watcher ? 5ms : 150ms);
     }
 
     // Let all remaining connections know the server is shutting down

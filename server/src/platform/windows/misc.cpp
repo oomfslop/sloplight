@@ -3068,6 +3068,212 @@ namespace platf {
     }
   }  // namespace
 
+  namespace {
+    std::vector<std::uint8_t> read_bitmap_bgra(HDC dc, HBITMAP bitmap, int width, int height) {
+      std::vector<std::uint8_t> bits(std::size_t(width) * height * 4);
+      BITMAPINFO info {};
+      info.bmiHeader.biSize = sizeof(info.bmiHeader);
+      info.bmiHeader.biWidth = width;
+      info.bmiHeader.biHeight = -height;
+      info.bmiHeader.biPlanes = 1;
+      info.bmiHeader.biBitCount = 32;
+      info.bmiHeader.biCompression = BI_RGB;
+      if (GetDIBits(dc, bitmap, 0, height, bits.data(), &info, DIB_RGB_COLORS) != height) {
+        bits.clear();
+      }
+      return bits;
+    }
+
+    bool read_cursor_image(HCURSOR handle, host_cursor_t &cursor) {
+      ICONINFO icon {};
+      if (!GetIconInfo(handle, &icon)) {
+        return false;
+      }
+      auto free_bitmaps = util::fail_guard([&]() {
+        DeleteObject(icon.hbmMask);
+        if (icon.hbmColor) {
+          DeleteObject(icon.hbmColor);
+        }
+      });
+
+      BITMAP mask_info {};
+      if (!GetObjectW(icon.hbmMask, sizeof(mask_info), &mask_info)) {
+        return false;
+      }
+      // Monochrome cursors have no color bitmap; their mask is the AND mask stacked on the XOR mask
+      const int width = mask_info.bmWidth;
+      const int height = icon.hbmColor ? mask_info.bmHeight : mask_info.bmHeight / 2;
+      if (width <= 0 || height <= 0) {
+        return false;
+      }
+      const std::size_t pixels = std::size_t(width) * height;
+
+      HDC dc = GetDC(nullptr);
+      auto release_dc = util::fail_guard([&]() {
+        ReleaseDC(nullptr, dc);
+      });
+      // GDI expands mask bits to black (0) and white (1) pixels
+      const auto mask = read_bitmap_bgra(dc, icon.hbmMask, width, icon.hbmColor ? height : height * 2);
+      if (mask.empty()) {
+        return false;
+      }
+
+      std::vector<std::uint8_t> bgra;
+      if (icon.hbmColor) {
+        bgra = read_bitmap_bgra(dc, icon.hbmColor, width, height);
+        if (bgra.empty()) {
+          return false;
+        }
+        bool has_alpha = false;
+        for (std::size_t i = 0; i < pixels && !has_alpha; ++i) {
+          has_alpha = bgra[i * 4 + 3] != 0;
+        }
+        if (!has_alpha) {
+          for (std::size_t i = 0; i < pixels; ++i) {
+            bgra[i * 4 + 3] = mask[i * 4] ? 0 : 255;
+          }
+        }
+      } else {
+        // AND 1 + XOR 1 inverts the screen, which a color cursor can't do (the text
+        // I-beam): draw those pixels black with a white outline
+        bgra.resize(pixels * 4);
+        std::vector<bool> inverted(pixels);
+        for (std::size_t i = 0; i < pixels; ++i) {
+          const bool and_bit = mask[i * 4] != 0;
+          const bool xor_bit = mask[(pixels + i) * 4] != 0;
+          if (and_bit && !xor_bit) {
+            continue;
+          }
+          inverted[i] = and_bit;
+          std::fill_n(&bgra[i * 4], 3, xor_bit && !and_bit ? 255 : 0);
+          bgra[i * 4 + 3] = 255;
+        }
+        for (int y = 0; y < height; ++y) {
+          for (int x = 0; x < width; ++x) {
+            const std::size_t i = std::size_t(y) * width + x;
+            const bool next_to_inverted = (x > 0 && inverted[i - 1]) || (x + 1 < width && inverted[i + 1]) ||
+                                          (y > 0 && inverted[i - width]) || (y + 1 < height && inverted[i + width]);
+            if (bgra[i * 4 + 3] == 0 && next_to_inverted) {
+              std::fill_n(&bgra[i * 4], 4, 255);
+            }
+          }
+        }
+      }
+
+      cursor.hot_x = static_cast<int>(icon.xHotspot);
+      cursor.hot_y = static_cast<int>(icon.yHotspot);
+      cursor.width = width;
+      cursor.height = height;
+      cursor.bgra = std::move(bgra);
+      const auto id = std::hash<std::string_view> {}({reinterpret_cast<const char *>(cursor.bgra.data()), cursor.bgra.size()}) ^
+                      (std::uint64_t(width) << 48 | std::uint64_t(height) << 32 | std::uint64_t(cursor.hot_x & 0xFFFF) << 16 | std::uint64_t(cursor.hot_y & 0xFFFF));
+      cursor.image_id = id ? id : 1;
+      return true;
+    }
+
+    class host_cursor_watcher_t: public deinit_t {
+    public:
+      explicit host_cursor_watcher_t(std::function<void(host_cursor_t)> on_change):
+          on_change {std::move(on_change)},
+          stop_event {CreateEventW(nullptr, TRUE, FALSE, nullptr)},
+          thread {[this]() {
+            run();
+          }} {
+      }
+
+      ~host_cursor_watcher_t() override {
+        SetEvent(stop_event);
+        thread.join();
+        CloseHandle(stop_event);
+      }
+
+    private:
+      void run() {
+        platf::set_thread_name("host-cursor");
+        syncThreadDesktop();
+        // DPI-unaware threads get cursors (and monitors) scaled down to 96 DPI
+        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        current = this;
+
+        // Out-of-context WinEvents arrive on this thread while it pumps messages
+        const HWINEVENTHOOK hooks[] = {
+          SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_HIDE, nullptr, on_event, 0, 0, WINEVENT_OUTOFCONTEXT),
+          SetWinEventHook(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, nullptr, on_event, 0, 0, WINEVENT_OUTOFCONTEXT),
+        };
+        if (!hooks[0] || !hooks[1]) {
+          BOOST_LOG(warning) << "Host cursor: SetWinEventHook failed: "sv << GetLastError();
+        }
+
+        refresh();
+        while (MsgWaitForMultipleObjects(1, &stop_event, FALSE, INFINITE, QS_ALLINPUT) == WAIT_OBJECT_0 + 1) {
+          MSG msg;
+          while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            DispatchMessageW(&msg);
+          }
+        }
+
+        for (auto hook : hooks) {
+          if (hook) {
+            UnhookWinEvent(hook);
+          }
+        }
+      }
+
+      static void CALLBACK on_event(HWINEVENTHOOK, DWORD, HWND, LONG id_object, LONG, DWORD, DWORD) {
+        if (id_object == OBJID_CURSOR) {
+          current->refresh();
+        }
+      }
+
+      void refresh() {
+        CURSORINFO info {sizeof(info)};
+        if (!GetCursorInfo(&info)) {
+          return;
+        }
+        const bool visible = (info.flags & CURSOR_SHOWING) && info.hCursor;
+        if (reported && visible == cursor.visible && (!visible || info.hCursor == image_handle)) {
+          return;
+        }
+        reported = true;
+
+        cursor.visible = visible;
+        MONITORINFO monitor {sizeof(monitor)};
+        if (GetMonitorInfoW(MonitorFromPoint(info.ptScreenPos, MONITOR_DEFAULTTONEAREST), &monitor)) {
+          cursor.x = info.ptScreenPos.x - monitor.rcMonitor.left;
+          cursor.y = info.ptScreenPos.y - monitor.rcMonitor.top;
+          cursor.display_width = monitor.rcMonitor.right - monitor.rcMonitor.left;
+          cursor.display_height = monitor.rcMonitor.bottom - monitor.rcMonitor.top;
+        }
+        // ponytail: animated cursors (busy spinner) show their first frame only
+        if (visible && info.hCursor != image_handle) {
+          image_handle = info.hCursor;
+          if (!read_cursor_image(info.hCursor, cursor)) {
+            BOOST_LOG(debug) << "Host cursor: couldn't read the cursor image"sv;
+            cursor.image_id = 0;
+            cursor.width = cursor.height = 0;
+            cursor.bgra.clear();
+          }
+        }
+        on_change(cursor);
+      }
+
+      static thread_local host_cursor_watcher_t *current;
+
+      std::function<void(host_cursor_t)> on_change;
+      HANDLE stop_event;
+      host_cursor_t cursor;
+      HCURSOR image_handle = nullptr;
+      bool reported = false;
+      std::thread thread;
+    };
+
+    thread_local host_cursor_watcher_t *host_cursor_watcher_t::current = nullptr;
+  }  // namespace
+
+  std::unique_ptr<deinit_t> watch_host_cursor(std::function<void(host_cursor_t)> on_change) {
+    return std::make_unique<host_cursor_watcher_t>(std::move(on_change));
+  }
+
   std::string get_clipboard() {
     if (!open_clipboard_with_retry()) {
       BOOST_LOG(warning) << "Clipboard: OpenClipboard failed: " << GetLastError();

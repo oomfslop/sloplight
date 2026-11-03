@@ -761,7 +761,7 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
                 reset: Some(Box::new(|s| s.resolution_scale_factor = 100)),
             });
             rows.push(toggle_row(root, cx, theme, "tg-clip", "Sync clipboard", "Sends your clipboard on stream start and focus, fetches the host's on focus loss.", |s| s.clipboard_sync, |s, v| s.clipboard_sync = v, None));
-            rows.push(toggle_row(root, cx, theme, "tg-hide-cursor", "Show only the Mac cursor", "The host leaves its cursor out of the picture and your Mac cursor stays visible over the stream. Always on for app windows.", |s| s.hide_host_cursor, |s, v| s.hide_host_cursor = v, None));
+            rows.push(toggle_row(root, cx, theme, "tg-hide-cursor", "Draw the cursor on the Mac", "The host cursor is drawn by your Mac, so it moves without stream lag. When a game hides it, the mouse switches to relative mode. Always on for app windows.", |s| s.hide_host_cursor, |s, v| s.hide_host_cursor = v, None));
         }
         "audio" => {
             rows.push(segmented_row(root, cx, theme, "seg-audio", "Audio channels", "", AudioConfig::ALL, &["Stereo", "5.1", "7.1"], |s| s.audio_config, |s, v| s.audio_config = v, None));

@@ -342,8 +342,8 @@ pub struct Settings {
     pub windows_hotkey: String,
     pub resolution_scale_factor: i32,
     pub clipboard_sync: bool,
-    /// Draw only the Mac cursor; the host leaves its cursor out of the
-    /// capture. Always on for app windows.
+    /// The Mac draws the host cursor (shape from the host, relative mouse
+    /// while the host hides it); the capture leaves it out. Always on for app windows.
     #[serde(default)]
     pub hide_host_cursor: bool,
     // Audio

@@ -31,6 +31,7 @@
 #define SDL_CODE_CLIPBOARD_TEXT_RECEIVED 107
 #define SDL_CODE_QUICKMENU_TOAST 108
 #define SDL_CODE_APPWINDOW_CMD 109
+#define SDL_CODE_HOST_CURSOR 110
 
 class SupportedVideoFormatList : public QList<int>
 {
@@ -132,8 +133,8 @@ public:
     Q_INVOKABLE void start();
     Q_INVOKABLE void interrupt();
 
-    // Draw only the local cursor: the host leaves its cursor out of the capture.
-    // Always on for app windows.
+    // Draw the host cursor locally: the host leaves it out of the capture and
+    // sends its shape. Always on for app windows.
     void setHideHostCursor(bool hide) { m_HideHostCursor = hide; }
 
     // App-window streaming (desk mode): the stream is the client's desk, a
@@ -317,6 +318,9 @@ private:
 
     static
     void clSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlags, uint8_t typeLeft, uint8_t typeRight, uint8_t *left, uint8_t *right);
+
+    static
+    void clHostCursor(const HOST_CURSOR* cursor);
 
     static
     int arInit(int audioConfiguration,

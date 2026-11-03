@@ -238,6 +238,10 @@ SdlInputHandler::~SdlInputHandler()
         }
     }
 
+    if (m_HostSdlCursor != nullptr) {
+        SDL_FreeCursor(m_HostSdlCursor);
+    }
+
     SDL_RemoveTimer(m_LongPressTimer);
     SDL_RemoveTimer(m_LeftButtonReleaseTimer);
     SDL_RemoveTimer(m_RightButtonReleaseTimer);

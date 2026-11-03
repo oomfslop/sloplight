@@ -1,8 +1,47 @@
 #include "input.h"
 
 #include <Limelight.h>
+#include <HostCursor.h>
 #include "SDL_compat.h"
 #include "streaming/streamutils.h"
+
+#ifdef Q_OS_DARWIN
+#include <dlfcn.h>
+#include <mach-o/dyld.h>
+
+namespace {
+
+// sdl2-compat passes SDL3 cursors through as they are, but its surfaces can't carry
+// the alternate images SDL3's Cocoa backend makes HiDPI cursors from
+struct Sdl3CursorApi {
+    void* (*createSurfaceFrom)(int width, int height, Uint32 format, void* pixels, int pitch);
+    bool (*addSurfaceAlternateImage)(void* surface, void* image);
+    void (*destroySurface)(void* surface);
+    SDL_Cursor* (*createColorCursor)(void* surface, int hotX, int hotY);
+};
+
+const Sdl3CursorApi* getSdl3CursorApi()
+{
+    static const Sdl3CursorApi api = [] {
+        Sdl3CursorApi api = {};
+        for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+            const char* name = _dyld_get_image_name(i);
+            void* library = strstr(name, "libSDL3") != nullptr ? dlopen(name, RTLD_LAZY | RTLD_NOLOAD) : nullptr;
+            if (library != nullptr) {
+                api.createSurfaceFrom = (decltype(api.createSurfaceFrom))dlsym(library, "SDL_CreateSurfaceFrom");
+                api.addSurfaceAlternateImage = (decltype(api.addSurfaceAlternateImage))dlsym(library, "SDL_AddSurfaceAlternateImage");
+                api.destroySurface = (decltype(api.destroySurface))dlsym(library, "SDL_DestroySurface");
+                api.createColorCursor = (decltype(api.createColorCursor))dlsym(library, "SDL_CreateColorCursor");
+                break;
+            }
+        }
+        return api;
+    }();
+    return api.createSurfaceFrom && api.addSurfaceAlternateImage && api.destroySurface && api.createColorCursor ? &api : nullptr;
+}
+
+}
+#endif
 
 void SdlInputHandler::notifyMouseLeave()
 {
@@ -333,4 +372,152 @@ void SdlInputHandler::updatePointerRegionLock()
         SDL_SetWindowGrab(m_Window, SDL_FALSE);
 #endif
     }
+}
+
+void SdlInputHandler::setHostCursor(const HOST_CURSOR& cursor, const QByteArray& pixels)
+{
+    m_HostCursor = cursor;
+    m_HostCursor.bgra = nullptr;
+
+    if (cursor.visible && cursor.imageId != 0) {
+        auto cached = std::find_if(m_HostCursorImages.begin(), m_HostCursorImages.end(),
+                                   [&](const HostCursorImage& image) { return image.id == cursor.imageId; });
+        HostCursorImage image = { cursor.imageId, cursor.hotX, cursor.hotY, cursor.width, cursor.height, cursor.scaleShift, pixels };
+        if (pixels.isEmpty()) {
+            if (cached == m_HostCursorImages.end()) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                            "Host cursor image %llx isn't cached",
+                            (unsigned long long)cursor.imageId);
+            }
+            else {
+                image = *cached;
+            }
+        }
+        if (cached != m_HostCursorImages.end()) {
+            m_HostCursorImages.erase(cached);
+        }
+        m_HostCursorImages.prepend(image);
+        if (m_HostCursorImages.size() > ML_HOST_CURSOR_CACHE_SIZE) {
+            m_HostCursorImages.removeLast();
+        }
+    }
+
+    updateHostCursor();
+
+    if (m_AbsoluteMouseMode == cursor.visible) {
+        return;
+    }
+
+    bool captured = isCaptureActive();
+    if (captured) {
+        setCaptureActive(false);
+    }
+
+    m_AbsoluteMouseMode = cursor.visible;
+
+    if (captured) {
+        if (cursor.visible && cursor.displayWidth != 0 && cursor.displayHeight != 0) {
+            // Put our cursor where the host's is, so capture doesn't move the host's to ours
+            SDL_Rect src = { 0, 0, m_StreamWidth, m_StreamHeight };
+            SDL_Rect dst = { 0, 0, 0, 0 };
+            SDL_GetWindowSize(m_Window, &dst.w, &dst.h);
+            StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
+            SDL_WarpMouseInWindow(m_Window,
+                                  dst.x + cursor.x * dst.w / cursor.displayWidth,
+                                  dst.y + cursor.y * dst.h / cursor.displayHeight);
+        }
+        setCaptureActive(true);
+    }
+}
+
+void SdlInputHandler::updateHostCursor()
+{
+    if (!m_HostCursor.visible) {
+        return;
+    }
+
+    SDL_Cursor* cursor = nullptr;
+    if (m_HostCursor.imageId != 0 && !m_HostCursorImages.isEmpty() &&
+            m_HostCursorImages.first().id == m_HostCursor.imageId && !m_HostCursorImages.first().bgra.isEmpty()) {
+        const HostCursorImage& image = m_HostCursorImages.first();
+
+        int windowWidth, windowHeight, pixelWidth, pixelHeight;
+        SDL_GetWindowSize(m_Window, &windowWidth, &windowHeight);
+        SDL_GetWindowSizeInPixels(m_Window, &pixelWidth, &pixelHeight);
+        double pixelsPerPoint = windowWidth > 0 ? (double)pixelWidth / windowWidth : 1.0;
+
+        double pointsPerHostPixel = 1.0 / pixelsPerPoint;
+        if (m_HostCursor.displayWidth != 0) {
+            SDL_Rect src = { 0, 0, m_StreamWidth, m_StreamHeight };
+            SDL_Rect dst = { 0, 0, windowWidth, windowHeight };
+            StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
+            pointsPerHostPixel = (double)dst.w / m_HostCursor.displayWidth;
+        }
+
+        int hostWidth = image.width << image.scaleShift;
+        int hostHeight = image.height << image.scaleShift;
+        int width = qMax(1, (int)qRound(hostWidth * pointsPerHostPixel));
+        int height = qMax(1, (int)qRound(hostHeight * pointsPerHostPixel));
+        int hiResWidth = qMax(1, (int)qRound(hostWidth * pointsPerHostPixel * pixelsPerPoint));
+        int hiResHeight = qMax(1, (int)qRound(hostHeight * pointsPerHostPixel * pixelsPerPoint));
+        int hotX = qMin((int)qRound(image.hotX * pointsPerHostPixel), width - 1);
+        int hotY = qMin((int)qRound(image.hotY * pointsPerHostPixel), height - 1);
+
+        SDL_Surface* source = SDL_CreateRGBSurfaceWithFormatFrom((void*)image.bgra.constData(),
+                                                                 image.width, image.height, 32,
+                                                                 image.width * 4, SDL_PIXELFORMAT_ARGB8888);
+        auto resize = [source](int w, int h) -> SDL_Surface* {
+            if (source == nullptr || (w == source->w && h == source->h)) {
+                return source;
+            }
+            SDL_Surface* resized = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+            if (resized != nullptr && SDL_SoftStretchLinear(source, nullptr, resized, nullptr) != 0) {
+                SDL_FreeSurface(resized);
+                resized = nullptr;
+            }
+            return resized;
+        };
+        SDL_Surface* base = resize(width, height);
+        SDL_Surface* hiRes = hiResWidth != width ? resize(hiResWidth, hiResHeight) : nullptr;
+
+#ifdef Q_OS_DARWIN
+        const Sdl3CursorApi* sdl3 = getSdl3CursorApi();
+        if (sdl3 != nullptr && base != nullptr && hiRes != nullptr) {
+            void* base3 = sdl3->createSurfaceFrom(base->w, base->h, SDL_PIXELFORMAT_ARGB8888, base->pixels, base->pitch);
+            void* hiRes3 = sdl3->createSurfaceFrom(hiRes->w, hiRes->h, SDL_PIXELFORMAT_ARGB8888, hiRes->pixels, hiRes->pitch);
+            if (base3 != nullptr && hiRes3 != nullptr && sdl3->addSurfaceAlternateImage(base3, hiRes3)) {
+                cursor = sdl3->createColorCursor(base3, hotX, hotY);
+            }
+            sdl3->destroySurface(hiRes3);
+            sdl3->destroySurface(base3);
+        }
+#endif
+        bool hiResCursor = cursor != nullptr;
+        if (cursor == nullptr && base != nullptr) {
+            cursor = SDL_CreateColorCursor(base, hotX, hotY);
+        }
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Host cursor: %dx%d image (%dx%d host pixels), %dx%d points, %dx%d pixels, %s",
+                    image.width, image.height, hostWidth, hostHeight, width, height, hiResWidth, hiResHeight,
+                    hiResCursor ? "HiDPI" : "1x");
+
+        if (hiRes != source) {
+            SDL_FreeSurface(hiRes);
+        }
+        if (base != source) {
+            SDL_FreeSurface(base);
+        }
+        SDL_FreeSurface(source);
+        if (cursor == nullptr) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Failed to create the host cursor: %s",
+                        SDL_GetError());
+        }
+    }
+
+    SDL_SetCursor(cursor != nullptr ? cursor : SDL_GetDefaultCursor());
+    if (m_HostSdlCursor != nullptr) {
+        SDL_FreeCursor(m_HostSdlCursor);
+    }
+    m_HostSdlCursor = cursor;
 }
