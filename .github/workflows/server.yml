@@ -1,8 +1,8 @@
 name: Server
 
-# Fork CI: unsigned x64 builds for Windows 10/11 (portable ZIP + MSI) and
-# Linux (Debian package) on every push and pull request; tagged pushes
-# (server-v*) also get a GitHub release with the artifacts attached.
+# Fork CI: unsigned x64 builds for Windows 10/11 (portable ZIP + MSI) on every
+# push and pull request; tagged pushes (server-v*) also get a GitHub release
+# with the artifacts attached.
 on:
   push:
     branches: ["**"]
@@ -17,11 +17,6 @@ on:
       - moonlight-common-c/**
       - .github/workflows/server.yml
   workflow_dispatch:
-    inputs:
-      linux_cuda:
-        description: Build the Linux package with CUDA (NVENC on Linux hosts); slow
-        type: boolean
-        default: false
 
 concurrency:
   group: server-${{ github.ref }}
@@ -187,90 +182,10 @@ jobs:
             server/build/cpack_artifacts/*.msi
           if-no-files-found: error
 
-  linux:
-    name: Linux x64 (Ubuntu 24.04)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 180
-    defaults:
-      run:
-        working-directory: server
-    steps:
-      - name: Free disk space
-        working-directory: .
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 1
-
-      - name: Set up Node.js (web UI)
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            server/src_assets/common/assets/web/package-lock.json
-            server/src_assets/common/assets/web-legacy/package-lock.json
-
-      - name: Compiler cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ccache
-          key: ccache-linux-${{ github.sha }}
-          restore-keys: ccache-linux-
-
-      - name: Resolve version
-        id: version
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/server-v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/server-v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${BASE_VERSION}-sloplight.${GITHUB_RUN_NUMBER}+${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build and package (.deb)
-        env:
-          BRANCH: ${{ github.head_ref || github.ref_name }}
-          BUILD_VERSION: ${{ steps.version.outputs.version }}
-          COMMIT: ${{ github.sha }}
-          SUNSHINE_BUILD_TESTS: "OFF"
-          SUNSHINE_COMPILER_LAUNCHER: ccache
-          CCACHE_DIR: /home/runner/.cache/ccache
-          CCACHE_MAXSIZE: 1G
-        run: |
-          sudo apt-get install -y ccache
-          chmod +x ./scripts/linux_build.sh
-          echo "::add-matcher::${GITHUB_WORKSPACE}/server/.github/matchers/gcc.json"
-          cuda_arg="--skip-cuda"
-          if [[ "${{ inputs.linux_cuda }}" == "true" ]]; then cuda_arg=""; fi
-          ./scripts/linux_build.sh \
-            --publisher-name="${GITHUB_REPOSITORY_OWNER}" \
-            --publisher-website="https://github.com/${GITHUB_REPOSITORY}" \
-            --publisher-issue-url="https://github.com/${GITHUB_REPOSITORY}/issues" \
-            --skip-cleanup \
-            --ubuntu-test-repo \
-            $cuda_arg
-          echo "::remove-matcher owner=gcc::"
-          ccache --show-stats
-          ls -la build/cpack_artifacts/ || ls -la build/
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: sloplight-server-linux-x64
-          path: |
-            server/build/cpack_artifacts/*.deb
-            server/build/sunshine
-          if-no-files-found: error
-
   release:
     name: Attach to release
     if: startsWith(github.ref, 'refs/tags/server-v')
-    needs: [windows, linux]
+    needs: [windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -278,7 +193,5 @@ jobs:
           path: artifacts
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/sloplight-server-windows-x64/*
-            artifacts/sloplight-server-linux-x64/*.deb
+          files: artifacts/sloplight-server-windows-x64/*
           generate_release_notes: true

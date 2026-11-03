@@ -57,7 +57,7 @@ All on the HTTPS port, authenticated with the client certificate like the rest o
 
 ## Building
 
-CI builds an unsigned Windows x64 ZIP and MSI, and a Linux `.deb`, on every push that touches the server. `server-v*` tags attach them to a GitHub release.
+CI builds an unsigned Windows x64 ZIP and MSI on every push that touches the server. `server-v*` tags attach them to a GitHub release.
 
 Local builds follow the [upstream build docs](docs/building.md), run in this directory after `git submodule update --init --recursive server` at the repository root. On Windows that means MSYS2 UCRT64 with CMake and Ninja. The server builds against `../moonlight-common-c`, so it needs the whole repository, not just this directory.
 
