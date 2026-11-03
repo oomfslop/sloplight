@@ -52,6 +52,17 @@ void closeChildren()
     deskwm_end();
 }
 
+void* watchTrackpad(SDL_Window* window, bool (*active)(void* ctx), void* ctx)
+{
+    NSWindow* ns = nsWindowFor(window);
+    return ns ? deskwm_trackpad_watch((__bridge void*)ns, active, ctx) : nullptr;
+}
+
+void unwatchTrackpad(void* watch)
+{
+    deskwm_trackpad_unwatch(watch);
+}
+
 QString describeCurrentException()
 {
     @try {

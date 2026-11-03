@@ -355,6 +355,8 @@ pub struct Settings {
     pub absolute_touch_mode: bool,
     pub swap_mouse_buttons: bool,
     pub reverse_scroll_direction: bool,
+    /// Two-finger trackpad gestures go to the host as its own touchpad's
+    pub trackpad_gestures: bool,
     pub capture_sys_keys_mode: CaptureSysKeys,
     // Gamepad
     pub multi_controller: bool,
@@ -440,6 +442,7 @@ impl Default for Settings {
             absolute_touch_mode: true,
             swap_mouse_buttons: false,
             reverse_scroll_direction: false,
+            trackpad_gestures: true,
             capture_sys_keys_mode: CaptureSysKeys::Off,
             multi_controller: true,
             swap_face_buttons: false,

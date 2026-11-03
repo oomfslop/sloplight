@@ -105,6 +105,9 @@ public:
 
     void updateHostCursor();
 
+    // Touchpad gestures go where the host pointer is, so only while it follows ours
+    bool isTrackpadActive() { return isCaptureActive() && m_AbsoluteMouseMode; }
+
     void handleKeyEvent(SDL_KeyboardEvent* event);
 
     void handleMouseButtonEvent(SDL_MouseButtonEvent* event);

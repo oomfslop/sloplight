@@ -295,6 +295,11 @@ void Session::clSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlag
     SDL_PushEvent(&setControllerLEDEvent);
 }
 
+bool Session::isTrackpadActive(void* context)
+{
+    return ((Session*)context)->m_InputHandler->isTrackpadActive();
+}
+
 void Session::clHostCursor(const HOST_CURSOR* cursor)
 {
     SDL_Event event = {};
@@ -2582,6 +2587,9 @@ void Session::exec()
     if (m_IsAppWindow) {
         m_InputHandler->setSwallowCommandKey(true);
     }
+    else if (m_TrackpadGestures) {
+        m_TrackpadWatch = AppWindow::watchTrackpad(m_Window, &Session::isTrackpadActive, this);
+    }
 
     if (m_IsAppWindow) {
         // Desk mode: nothing is drawn in the SDL window; every desk window is
@@ -3155,6 +3163,9 @@ DispatchDeferredCleanup:
     if (QGuiApplication::platformName() == "eglfs") {
         QGuiApplication::restoreOverrideCursor();
     }
+
+    AppWindow::unwatchTrackpad(m_TrackpadWatch);
+    m_TrackpadWatch = nullptr;
 
     // Raise any keys that are still down
     m_InputHandler->raiseAllKeys();

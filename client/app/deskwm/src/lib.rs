@@ -7,6 +7,7 @@ mod desk;
 mod ffi;
 mod input;
 mod layout;
+mod trackpad;
 
 use std::ffi::{c_char, c_void, CStr};
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
@@ -234,5 +235,54 @@ pub extern "C" fn deskwm_shown(hwnd: u64, w: i32, h: i32) {
         ffi::on_main(move || {
             guard("shown", || desk::shown_changed(hwnd));
         });
+    }
+}
+
+/// # Safety
+/// `window` is an NSWindow; `active` is callable with `ctx` on the main thread
+/// until deskwm_trackpad_unwatch.
+#[no_mangle]
+pub unsafe extern "C" fn deskwm_trackpad_watch(window: *mut c_void, active: Option<extern "C" fn(*mut c_void) -> bool>, ctx: *mut c_void) -> *mut c_void {
+    let (Some(window), Some(active)) = (unsafe { (window as *const NSWindow).as_ref() }, active) else {
+        return std::ptr::null_mut();
+    };
+    let number = window.windowNumber();
+    let ctx = ctx as usize;
+    let block = block2::RcBlock::new(move |event: std::ptr::NonNull<objc2_app_kit::NSEvent>| -> *mut objc2_app_kit::NSEvent {
+        let e = unsafe { event.as_ref() };
+        if e.windowNumber() != number {
+            return event.as_ptr();
+        }
+        let swallow = guard("trackpad monitor", || {
+            if e.r#type() == objc2_app_kit::NSEventType::ScrollWheel {
+                return trackpad::trackpad_scroll(e);
+            }
+            let pointer_over = || {
+                MainThreadMarker::new().is_some_and(|mtm| {
+                    NSWindow::windowNumberAtPoint_belowWindowWithWindowNumber(objc2_app_kit::NSEvent::mouseLocation(), 0, mtm) == number
+                })
+            };
+            trackpad::touches(e, None, ffi::trackpad_supported() && active(ctx as *mut c_void), pointer_over, || {});
+            false
+        });
+        if swallow.unwrap_or(false) {
+            std::ptr::null_mut()
+        } else {
+            event.as_ptr()
+        }
+    });
+    let mask = objc2_app_kit::NSEventMask::Gesture | objc2_app_kit::NSEventMask::ScrollWheel;
+    match unsafe { objc2_app_kit::NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &block) } {
+        Some(monitor) => Retained::into_raw(monitor) as *mut c_void,
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// # Safety
+/// `monitor` came from deskwm_trackpad_watch (or is null).
+#[no_mangle]
+pub unsafe extern "C" fn deskwm_trackpad_unwatch(monitor: *mut c_void) {
+    if let Some(monitor) = unsafe { Retained::from_raw(monitor as *mut objc2::runtime::AnyObject) } {
+        unsafe { objc2_app_kit::NSEvent::removeMonitor(&monitor) };
     }
 }

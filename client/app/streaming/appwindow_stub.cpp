@@ -5,6 +5,8 @@ namespace AppWindow {
 void setAppIcon(const QByteArray&) {}
 void beginDesk(SDL_Window*, const QRect&, double, int, int, const DeskwmCallbacks&) {}
 void closeChildren() {}
+void* watchTrackpad(SDL_Window*, bool (*)(void*), void*) { return nullptr; }
+void unwatchTrackpad(void*) {}
 QString describeCurrentException() { return QStringLiteral("?"); }
 }
 

@@ -86,6 +86,12 @@ typedef struct DeskwmLayer {
 void deskwm_begin(void* key_window, double screen_x, double screen_y, double screen_w, double screen_h,
                   double points_per_px, int32_t desk_w, int32_t desk_h, DeskwmCallbacks callbacks);
 void deskwm_end(void);
+// Outside desk mode: two fingers on the trackpad over window (an NSWindow) go
+// to the host as touchpad contacts while active(ctx), and the scrolls they make
+// stop there. Main thread; returns a handle for deskwm_trackpad_unwatch (NULL:
+// not watching).
+void* deskwm_trackpad_watch(void* window, bool (*active)(void* ctx), void* ctx);
+void deskwm_trackpad_unwatch(void* monitor);
 // A /actions/desk-layout reply (any thread).
 void deskwm_layout(const char* json, size_t len);
 void deskwm_hittest_result(uint64_t token, const char* hit);

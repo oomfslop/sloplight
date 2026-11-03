@@ -774,6 +774,7 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
             rows.push(toggle_row(root, cx, theme, "tg-touch", "Touchscreen as trackpad", "On: touch acts like a trackpad. Off: touch moves the pointer directly.", |s| !s.absolute_touch_mode, |s, v| s.absolute_touch_mode = !v, None));
             rows.push(toggle_row(root, cx, theme, "tg-swapmouse", "Swap left and right mouse buttons", "", |s| s.swap_mouse_buttons, |s, v| s.swap_mouse_buttons = v, None));
             rows.push(toggle_row(root, cx, theme, "tg-revscroll", "Reverse scroll direction", "", |s| s.reverse_scroll_direction, |s, v| s.reverse_scroll_direction = v, None));
+            rows.push(toggle_row(root, cx, theme, "tg-trackpad", "Trackpad gestures on the host", "Two fingers on the trackpad act as a Windows touchpad: smooth scrolling, pinch to zoom. Off: they scroll like a mouse wheel. App windows always do this.", |s| s.trackpad_gestures, |s, v| s.trackpad_gestures = v, None));
         }
         "gamepad" => {
             rows.push(toggle_row(root, cx, theme, "tg-swapface", "Swap A/B and X/Y", "Nintendo-style button layout.", |s| s.swap_face_buttons, |s, v| s.swap_face_buttons = v, None));

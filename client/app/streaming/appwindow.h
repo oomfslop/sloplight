@@ -30,6 +30,11 @@ void beginDesk(SDL_Window* keyWindow, const QRect& screenPts, double pointsPerHo
 // Close every desk window (safe from any thread).
 void closeChildren();
 
+// Outside desk mode: the trackpad's two-finger gestures over window go to the
+// host as its own touchpad's while active(ctx) (see deskwm_trackpad_watch).
+void* watchTrackpad(SDL_Window* window, bool (*active)(void* ctx), void* ctx);
+void unwatchTrackpad(void* watch);
+
 // "What was that?" for an exception being handled: name, reason and where,
 // for AppKit exceptions (call from a catch block).
 QString describeCurrentException();

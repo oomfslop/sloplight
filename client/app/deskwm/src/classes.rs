@@ -145,7 +145,7 @@ define_class!(
         #[unsafe(method(scrollWheel:))]
         fn scroll_wheel(&self, e: &NSEvent) {
             // A scroll the trackpad's fingers already make on the host
-            if input::trackpad_scroll(e) {
+            if crate::trackpad::trackpad_scroll(e) {
                 return;
             }
             self.forward(Ev::Scroll, e);
