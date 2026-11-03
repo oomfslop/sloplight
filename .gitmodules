@@ -1,12 +1,3 @@
-[submodule "qmdnsengine/qmdnsengine"]
-	path = client/qmdnsengine/qmdnsengine
-	url = https://github.com/cgutman/qmdnsengine.git
-[submodule "app/SDL_GameControllerDB"]
-	path = client/app/SDL_GameControllerDB
-	url = https://github.com/gabomdq/SDL_GameControllerDB.git
-[submodule "pyrowave/pyrowave"]
-	path = client/pyrowave/pyrowave
-	url = https://github.com/Themaister/pyrowave
 [submodule "server/packaging/linux/flatpak/deps/flatpak-builder-tools"]
 	path = server/packaging/linux/flatpak/deps/flatpak-builder-tools
 	url = https://github.com/flatpak/flatpak-builder-tools.git
@@ -97,9 +88,3 @@
 	path = server/third-party/libvirtualgamepad
 	url = https://github.com/Nonary/libvirtualgamepad.git
 	branch = main
-[submodule "moonlight-common-c/enet"]
-	path = moonlight-common-c/enet
-	url = https://github.com/cgutman/enet.git
-[submodule "moonlight-common-c/nanors"]
-	path = moonlight-common-c/nanors
-	url = https://github.com/sleepybishop/nanors.git
