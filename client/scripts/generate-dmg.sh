@@ -53,9 +53,13 @@ cargo build --release --manifest-path $SOURCE_ROOT/app/deskwm/Cargo.toml --targe
 lipo -create $DESKWM_TARGET/x86_64-apple-darwin/release/libdeskwm.a $DESKWM_TARGET/aarch64-apple-darwin/release/libdeskwm.a \
   -output $DESKWM_TARGET/libdeskwm.a || fail "Lipo failed!"
 
+# Cache compiles with ccache when it is installed
+CACHE_ARGS=
+command -v ccache >/dev/null && CACHE_ARGS=CONFIG+=ccache
+
 echo Configuring the project
 pushd $BUILD_FOLDER
-qmake $SOURCE_ROOT/moonlight-qt.pro QMAKE_APPLE_DEVICE_ARCHS="x86_64 arm64" DESKWM_LIB=$DESKWM_TARGET/libdeskwm.a || fail "Qmake failed!"
+qmake $SOURCE_ROOT/moonlight-qt.pro QMAKE_APPLE_DEVICE_ARCHS="x86_64 arm64" DESKWM_LIB=$DESKWM_TARGET/libdeskwm.a $CACHE_ARGS || fail "Qmake failed!"
 popd
 
 echo Compiling Moonlight in $BUILD_CONFIG configuration

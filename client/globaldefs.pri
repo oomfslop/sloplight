@@ -4,6 +4,15 @@ CONFIG += debug_and_release
 # Ensure symbols are always generated
 CONFIG += force_debug_info
 
+# sccache can't cache -Zi objects (one PDB written by every compile); -Z7 keeps
+# the debug info in each object, and the linker still writes the PDB
+*-msvc:ccache {
+    QMAKE_CFLAGS_RELEASE_WITH_DEBUGINFO ~= s/-Zi/-Z7/
+    QMAKE_CXXFLAGS_RELEASE_WITH_DEBUGINFO ~= s/-Zi/-Z7/
+    QMAKE_CFLAGS_DEBUG ~= s/-Zi/-Z7/
+    QMAKE_CXXFLAGS_DEBUG ~= s/-Zi/-Z7/
+}
+
 # Disable asserts on release builds
 CONFIG(release, debug|release) {
     DEFINES += NDEBUG

@@ -164,9 +164,14 @@ set CFLAGS=/GL
 set CXXFLAGS=/GL
 set LDFLAGS=/LTCG
 
+rem Cache compiles with sccache when it is installed
+set CACHE_ARGS=
+where /q sccache.exe
+if !ERRORLEVEL! EQU 0 set CACHE_ARGS=CONFIG+=ccache QMAKE_CACHE_LAUNCHER_PREFIX=sccache
+
 echo Configuring the project
 pushd %BUILD_FOLDER%
-%QMAKE_CMD% %SOURCE_ROOT%\moonlight-qt.pro
+%QMAKE_CMD% %SOURCE_ROOT%\moonlight-qt.pro %CACHE_ARGS%
 if !ERRORLEVEL! NEQ 0 goto Error
 popd
 

@@ -211,6 +211,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            server/src_assets/common/assets/web/package-lock.json
+            server/src_assets/common/assets/web-legacy/package-lock.json
 
       - name: Compiler cache
         uses: actions/cache@v4

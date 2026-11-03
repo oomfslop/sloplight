@@ -80,6 +80,13 @@ jobs:
         with:
           workspaces: client/launcher
 
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: client-${{ matrix.os }}
+          variant: ${{ runner.os == 'Windows' && 'sccache' || 'ccache' }}
+          max-size: 2G
+
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
