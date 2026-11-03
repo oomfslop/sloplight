@@ -34,6 +34,7 @@
 extern "C" {
   // clang-format off
 #include <moonlight-common-c/src/Limelight-internal.h>
+#include <rs.h>
 #include "rswrapper.h"
   // clang-format on
 }

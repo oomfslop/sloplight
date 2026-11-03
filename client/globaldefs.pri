@@ -5,8 +5,11 @@ CONFIG += debug_and_release
 CONFIG += force_debug_info
 
 # sccache can't cache -Zi objects (one PDB written by every compile); -Z7 keeps
-# the debug info in each object, and the linker still writes the PDB
+# the debug info in each object, and the linker still writes the PDB. Nor can it
+# take nmake's batched compiles (many sources, -Fo a directory): no_batch gives
+# one cl per source with its own -Fo file
 *-msvc:ccache {
+    CONFIG += no_batch
     QMAKE_CFLAGS_RELEASE_WITH_DEBUGINFO ~= s/-Zi/-Z7/
     QMAKE_CXXFLAGS_RELEASE_WITH_DEBUGINFO ~= s/-Zi/-Z7/
     QMAKE_CFLAGS_DEBUG ~= s/-Zi/-Z7/
