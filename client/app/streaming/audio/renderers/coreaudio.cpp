@@ -103,9 +103,21 @@ bool CoreAudioRenderer::prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION*
         AudioUnitSetProperty(m_OutputUnit, kAudioUnitProperty_AudioChannelLayout, kAudioUnitScope_Input, 0, layoutData.data(), (UInt32)layoutData.size());
     }
 
-    // Half an Opus frame per device cycle; the device clamps this to its own range
-    UInt32 ioFrames = m_SamplesPerFrame / 2;
-    AudioUnitSetProperty(m_OutputUnit, kAudioDevicePropertyBufferFrameSize, kAudioUnitScope_Global, 0, &ioFrames, sizeof(ioFrames));
+    AudioObjectID device = kAudioObjectUnknown;
+    UInt32 size = sizeof(device);
+    AudioUnitGetProperty(m_OutputUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, &size);
+    AudioObjectPropertyAddress transportAddress = { kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+    UInt32 transport = 0;
+    size = sizeof(transport);
+    AudioObjectGetPropertyData(device, &transportAddress, 0, nullptr, &size, &transport);
+
+    // Shrinking the buffer on AirPods makes other apps' running audio glitch when
+    // Game Mode retunes the link, and saves little next to their 30+ ms of latency
+    if (transport != kAudioDeviceTransportTypeBluetooth && transport != kAudioDeviceTransportTypeBluetoothLE) {
+        // Half an Opus frame per device cycle; the device clamps this to its own range
+        UInt32 ioFrames = m_SamplesPerFrame / 2;
+        AudioUnitSetProperty(m_OutputUnit, kAudioDevicePropertyBufferFrameSize, kAudioUnitScope_Global, 0, &ioFrames, sizeof(ioFrames));
+    }
 
     AURenderCallbackStruct callback = { renderCallback, this };
     err = AudioUnitSetProperty(m_Varispeed, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &callback, sizeof(callback));
@@ -130,9 +142,6 @@ bool CoreAudioRenderer::prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION*
         return false;
     }
 
-    AudioObjectID device = kAudioObjectUnknown;
-    UInt32 size = sizeof(device);
-    AudioUnitGetProperty(m_OutputUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, &size);
     Float64 deviceRate = 0;
     AudioObjectPropertyAddress rateAddress = { kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
     size = sizeof(deviceRate);
