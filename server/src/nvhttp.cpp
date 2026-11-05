@@ -3318,6 +3318,8 @@ namespace nvhttp {
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
     launch_session->client_vrr_requested = util::from_view(get_arg(args, "clientVrrRequested", "0"));
     launch_session->hide_cursor = get_arg(args, "hideCursor", "0") == "1";
+    launch_session->efficient_encoding = get_arg(args, "efficient", "0") == "1";
+    launch_session->quiet_idle = get_arg(args, "quiet", "0") == "1";
     // Resume requests usually omit appid. Resolve the running application's
     // preference as well, before display preparation and HDR request overrides.
     auto color_app_ctx = launch_app_ctx;

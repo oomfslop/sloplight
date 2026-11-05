@@ -199,6 +199,7 @@ namespace nvenc {
       bool rfi_needs_confirmation = false;
       std::pair<uint64_t, uint64_t> last_rfi_range;
       logging::min_max_avg_periodic_logger<double> frame_size_logger = {debug, "NvEnc: encoded frame sizes in kB", ""};
+      logging::min_max_avg_periodic_logger<double> frame_qp_logger = {debug, "NvEnc: frame average QP", ""};
       logging::min_max_avg_periodic_logger<double> encode_latency_logger = {debug, "NvEnc: native encode call latency", "ms"};
     } encoder_state;
 

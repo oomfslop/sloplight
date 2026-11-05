@@ -84,6 +84,12 @@ namespace video {
     // Desk session (the client's uuid): the atlas is captured, but pointer
     // input belongs on the desk, where the windows are (same size).
     std::string desk_client;
+    // A quality ceiling: still areas are not refined further than the eye can
+    // tell, the bits a slow link lacks (no encode time added).
+    bool efficient = false;
+    // Repeat the last frame about once a second, not at the minimum fps
+    // target, while the capture has nothing new (slow or metered links).
+    bool quiet_idle = false;
     // Recheck the exact platform binding before each native capture open/reopen.
     // This callback also retains the target through the producer/GPU lifetime.
     std::function<bool()> capture_target_valid;

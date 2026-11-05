@@ -4058,6 +4058,8 @@ namespace stream {
       // A desk has a producer of its own and hides the cursor there; only
       // shared-display sessions need the process-wide request.
       session->hide_cursor = launch_session.hide_cursor && launch_session.desk_display.empty();
+      session->config.monitor.efficient = launch_session.efficient_encoding;
+      session->config.monitor.quiet_idle = launch_session.quiet_idle;
       if (session->hide_cursor) video::add_cursor_hide_request(1);
       session->remote_role_generation = launch_session.role_generation;
       session->monitor_profile_uuid = launch_session.monitor_profile_uuid;

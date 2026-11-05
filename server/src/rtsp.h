@@ -110,6 +110,8 @@ namespace rtsp_stream {
     bool client_vrr_requested = false;
     bool requested_resolution_only = false;
     bool hide_cursor = false;  ///< client draws its own cursor: leave the host cursor out of the capture
+    bool efficient_encoding = false;  ///< a quality ceiling: fewer bits for the same picture (the client's Efficient setting)
+    bool quiet_idle = false;  ///< nothing repeated faster than about a frame a second while the picture stands still
     std::string desk_display;  ///< desk session: capture this display (the client's desk) instead of a window
     std::string virtual_display_catalog_error;
     bool client_display_mode_override;

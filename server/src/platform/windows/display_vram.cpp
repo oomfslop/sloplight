@@ -64,29 +64,42 @@ namespace platf::dxgi {
   namespace {
     /** The encoder settings for a session: an app-window desk's own options
      *  over the host's (the Sloplight client's Efficient preset: fewer bits for the same
-     *  picture, and background windows at lower quality) */
+     *  picture, and background windows at lower quality). Regular streams can ask
+     *  for the quality ceiling alone at launch. */
     nvenc::nvenc_config desk_encoder_config(const ::video::config_t &client_config) {
       auto nv = config::video.nv;
-      if (client_config.desk_client.empty()) return nv;
-      const auto options = app_desk::options(client_config.desk_client);
-      if (!options) return nv;
-      if (options->efficient) {
-        // A slower preset and a quarter-resolution pre-pass find cheaper ways
-        // to code each frame; a quality ceiling stops still areas from being
-        // refined further than the eye can tell (bits a slow link lacks)
-        nv.quality_preset = std::max(nv.quality_preset, 6);
-        nv.two_pass = nvenc::nvenc_two_pass::quarter_resolution;
+      // A quality ceiling stops still areas from being refined further than the
+      // eye can tell (bits a slow link lacks). Without it NVENC keeps spending
+      // most of the bitrate on a picture that barely changes; with it, a mostly
+      // still desktop at 1080p120 took 1.3 instead of 9.2 Mbps at the same
+      // encode time. (A slower preset with a quarter-resolution pre-pass, tried
+      // on top, added 3.7 ms per frame at 1080p and 12.5 ms at 4K, overshot a
+      // 3 or 6 Mbps cap about 2x on moving content for the same QP, and made a
+      // 4K desk at 120 fps ~18 ms slower from input to photon, so it is not
+      // used.)
+      const auto quality_ceiling = [&nv] {
         nv.enable_min_qp = true;
         nv.min_qp_h264 = std::max(nv.min_qp_h264, 24u);
         nv.min_qp_hevc = std::max(nv.min_qp_hevc, 26u);
         nv.min_qp_av1 = std::max(nv.min_qp_av1, 26u);
+      };
+      const auto options = client_config.desk_client.empty() ? std::nullopt : app_desk::options(client_config.desk_client);
+      if (!options) {
+        if (client_config.efficient) {
+          quality_ceiling();
+          BOOST_LOG(info) << "Encoder: quality ceiling";
+        }
+        return nv;
+      }
+      if (options->efficient) {
+        quality_ceiling();
       }
       if (options->background_qp > 0) {
         nv.region_qp = [](std::vector<std::array<int, 5>> &rects) {
           return desk_hold::background_cells(rects);
         };
       }
-      BOOST_LOG(info) << "Desk encoder: preset " << nv.quality_preset << (options->efficient ? ", pre-pass, quality ceiling" : "")
+      BOOST_LOG(info) << "Desk encoder: preset " << nv.quality_preset << (options->efficient ? ", quality ceiling" : "")
                       << (options->background_qp > 0 ? ", background windows +" + std::to_string(options->background_qp) + " QP" : "");
       return nv;
     }

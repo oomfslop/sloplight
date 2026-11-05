@@ -1105,6 +1105,8 @@ namespace nvenc {
     if (encoded_frame.idr) {
       BOOST_LOG(debug) << "NvEnc: idr frame " << encoded_frame.frame_index;
     }
+    // (the picture quality the bits bought: lower is better)
+    encoder_state.frame_qp_logger.collect_and_log(lock_bitstream.frameAvgQP);
 
     if (nvenc_failed(nvenc->nvEncUnlockBitstream(encoder, lock_bitstream.outputBitstream))) {
       BOOST_LOG(error) << "NvEnc: NvEncUnlockBitstream() failed: " << last_nvenc_error_string;

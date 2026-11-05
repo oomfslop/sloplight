@@ -208,6 +208,8 @@ namespace rtsp_stream {
     snapshot->remote_capture_output = source.remote_capture_output;
     snapshot->desk_display = source.desk_display;
     snapshot->hide_cursor = source.hide_cursor;
+    snapshot->efficient_encoding = source.efficient_encoding;
+    snapshot->quiet_idle = source.quiet_idle;
     snapshot->rtsp_source_address = source.rtsp_source_address;
     snapshot->gcm_key = source.gcm_key;
     snapshot->iv = source.iv;
