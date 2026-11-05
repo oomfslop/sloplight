@@ -2151,3 +2151,19 @@ bool LiSendExecServerCmd(uint8_t cmdId) {
                                 ENET_PACKET_FLAG_RELIABLE,
                                 false);
 }
+
+bool LiSendEmptyPayload(void) {
+    uint8_t payload[4] = { 0xAA, 0x55, 0xAA, 0x55 };
+
+    // Type 0 is no message the host handles: it drops it
+    if (!IS_SUNSHINE()) {
+        return false;
+    }
+
+    return sendMessageAndForget(0x00,
+                                sizeof(payload),
+                                payload,
+                                CTRL_CHANNEL_SERVERCTL,
+                                ENET_PACKET_FLAG_RELIABLE,
+                                false);
+}

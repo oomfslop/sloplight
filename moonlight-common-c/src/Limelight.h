@@ -1101,6 +1101,11 @@ bool LiGetHdrMetadata(PSS_HDR_METADATA metadata);
 // Returns false if the host does not support this feature.
 bool LiSendExecServerCmd(uint8_t cmdId);
 
+// This function sends a small control message the host ignores. Sent every few
+// milliseconds, it keeps a client's Wi-Fi radio out of power saving, which on
+// some devices otherwise delays or drops incoming video packets.
+bool LiSendEmptyPayload(void);
+
 // Returns the PyroWave bitstream identity the host advertised in its RTSP DESCRIBE
 // response (see PYROWAVE_BITSTREAM_ID), or an empty string if it sent none. Hosts
 // that encode PyroWave without advertising it use an unknown bitstream revision.
