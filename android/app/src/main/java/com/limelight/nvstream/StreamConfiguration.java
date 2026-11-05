@@ -15,6 +15,8 @@ public class StreamConfiguration {
     private float refreshRate;
     private float launchRefreshRate;
     private boolean virtualDisplay;
+    private int efficientEncoding;
+    private boolean quietIdle;
     private int resolutionScaleFactor;
     private int clientRefreshRateX100;
     private int bitrate;
@@ -63,6 +65,24 @@ public class StreamConfiguration {
 
         public StreamConfiguration.Builder setVirtualDisplay(boolean enable) {
             config.virtualDisplay = enable;
+            return this;
+        }
+
+        // Sloplight hosts: encoder settings that spend fewer bits for the same picture
+        public StreamConfiguration.Builder setEfficientEncoding(boolean enable) {
+            config.efficientEncoding = enable ? 1 : 0;
+            return this;
+        }
+
+        // Debug builds: another level the host knows (test runs)
+        public StreamConfiguration.Builder setEfficientLevel(int level) {
+            config.efficientEncoding = level;
+            return this;
+        }
+
+        // Sloplight hosts: about a frame a second while the picture stands still
+        public StreamConfiguration.Builder setQuietIdle(boolean enable) {
+            config.quietIdle = enable;
             return this;
         }
 
@@ -196,6 +216,8 @@ public class StreamConfiguration {
     }
 
     public boolean getVirtualDisplay() { return virtualDisplay; }
+    public int getEfficientEncoding() { return efficientEncoding; }
+    public boolean getQuietIdle() { return quietIdle; }
 
     public int getResolutionScaleFactor() { return resolutionScaleFactor; }
     

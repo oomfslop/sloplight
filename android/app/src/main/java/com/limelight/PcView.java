@@ -1,5 +1,7 @@
 package com.limelight;
 
+import android.content.SharedPreferences;
+import android.view.Display;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.UnknownHostException;
@@ -147,7 +149,22 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
             setShouldDockBigOverlays(false);
         }
 
-        // Set default preferences if we've never been run
+        // Set default preferences if we've never been run: the frame rate the
+        // display can show (a virtual display on the host matches it), then the rest
+        SharedPreferences defaultPrefs = PreferenceManager.getDefaultSharedPreferences(this);
+        if (!defaultPrefs.contains("list_fps")) {
+            float maxHz = 60;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                for (Display.Mode mode : getWindowManager().getDefaultDisplay().getSupportedModes()) {
+                    maxHz = Math.max(maxHz, mode.getRefreshRate());
+                }
+            }
+            String fps = maxHz >= 118 ? "120" : maxHz >= 88 ? "90" : "60";
+            defaultPrefs.edit()
+                    .putString("list_fps", fps)
+                    .putInt("seekbar_bitrate_kbps", PreferenceConfiguration.getDefaultBitrate(PreferenceConfiguration.DEFAULT_RESOLUTION, fps))
+                    .apply();
+        }
         PreferenceManager.setDefaultValues(this, R.xml.preferences, false);
 
         // Set the correct layout for the PC grid

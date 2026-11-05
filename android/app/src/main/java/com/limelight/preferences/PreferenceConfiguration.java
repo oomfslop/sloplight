@@ -139,11 +139,15 @@ public class PreferenceConfiguration {
 
     private static final String CHECKBOX_ENABLE_COMMIT_TEXT = "checkbox_enable_commit_text";
 
-    static final String DEFAULT_RESOLUTION = "1280x720";
+    public static final String DEFAULT_RESOLUTION = "1920x1080";
     static final String DEFAULT_FPS = "60";
     private static final boolean DEFAULT_ENABLE_ULTRA_LOW_LATENCY = false;
     private static final boolean DEFAULT_ENFORCE_DISPLAY_MODE = false;
-    private static final boolean DEFAULT_USE_VIRTUAL_DISPLAY = false;
+    private static final boolean DEFAULT_USE_VIRTUAL_DISPLAY = true;
+    private static final String EFFICIENT_ENCODING_PREF_STRING = "checkbox_efficient_encoding";
+    private static final boolean DEFAULT_EFFICIENT_ENCODING = true;
+    private static final String QUIET_IDLE_PREF_STRING = "checkbox_quiet_idle";
+    private static final boolean DEFAULT_QUIET_IDLE = true;
     private static final String DEFAULT_VIDEO_SCALE_MODE = "fit";
     private static final boolean DEFAULT_AUTO_INVERT_VIDEO_RESOLUTION = true;
     private static final int DEFAULT_RESOLUTION_SCALE_FACTOR = 100;
@@ -246,6 +250,9 @@ public class PreferenceConfiguration {
     public boolean onscreenKeyboardAutoFitDisabled;
     public int onscreenKeyboardWidth;
     public String onscreenKeyboardAlignMode;
+    public boolean efficientEncoding, quietIdle;
+    // Debug builds: the efficient level sent to the host (-1: from the setting)
+    public int debugEfficientLevel;
     public boolean enforceDisplayMode, useVirtualDisplay, enableSops, playHostAudio, disableWarnings, fullScreen;
     public ScaleMode videoScaleMode;
     public String language;
@@ -882,6 +889,9 @@ private static int getFramePacingValue(Context context) {
         config.disableWarnings = prefs.getBoolean(DISABLE_TOASTS_PREF_STRING, DEFAULT_DISABLE_TOASTS);
         config.enforceDisplayMode = prefs.getBoolean(ENFORCE_DISPLAY_MODE_PREF_STRING, DEFAULT_ENFORCE_DISPLAY_MODE);
         config.useVirtualDisplay = prefs.getBoolean(USE_VIRTUAL_DISPLAY_PREF_STRING, DEFAULT_USE_VIRTUAL_DISPLAY);
+        config.efficientEncoding = prefs.getBoolean(EFFICIENT_ENCODING_PREF_STRING, DEFAULT_EFFICIENT_ENCODING);
+        config.quietIdle = prefs.getBoolean(QUIET_IDLE_PREF_STRING, DEFAULT_QUIET_IDLE);
+        config.debugEfficientLevel = Integer.parseInt(prefs.getString("debug_efficient_level", "-1"));
         config.enableUltraLowLatency = prefs.getBoolean(ENABLE_ULTRA_LOW_LATENCY_PREF_STRING, DEFAULT_ENABLE_ULTRA_LOW_LATENCY);
         config.enableSops = prefs.getBoolean(SOPS_PREF_STRING, DEFAULT_SOPS);
         config.playHostAudio = prefs.getBoolean(HOST_AUDIO_PREF_STRING, DEFAULT_HOST_AUDIO);

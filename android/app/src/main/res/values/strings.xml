@@ -565,6 +565,10 @@
    	<string name="title_checkbox_forceTightThresholds">Tight Vsync (Experimental)</string>
     <string name="summary_checkbox_forceTightThresholds">Tighter VSYNC thresholds for lower latency; may increase drops.</string>
     <string name="title_checkbox_use_virtual_display">Use Virtual Display</string>
+    <string name="title_checkbox_efficient_encoding">Efficient encoding</string>
+    <string name="summary_checkbox_efficient_encoding">The host stops refining still areas once they look right, which saves most of the bitrate on desktop and slow-moving content. Fine detail can be slightly softer.\nRequires a Sloplight host.</string>
+    <string name="title_checkbox_quiet_idle">Quiet when idle</string>
+    <string name="summary_checkbox_quiet_idle">While nothing on the host changes, about a frame a second is sent instead of a steady stream.\nRequires a Sloplight host.</string>
     <string name="summary_checkbox_use_virtual_display">Use Virtual Display by default.\nVirtual Display can automatically match your client side resolution and frame rate settings, giving you a seamless streaming experience.\nRequires Apollo as host streaming software.</string>
     <string name="title_checkbox_resume_without_confirm">Quick Resume</string>
     <string name="summary_checkbox_resume_without_confirm">Do not show resume menu when clicking resume button, resume the app immediately.</string>

@@ -784,6 +784,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setLaunchRefreshRate(prefConfig.fps)
                 .setRefreshRate(chosenFrameRate)
                 .setVirtualDisplay(vDisplay)
+                .setEfficientEncoding(prefConfig.efficientEncoding)
+                .setEfficientLevel(BuildConfig.DEBUG && prefConfig.debugEfficientLevel >= 0 ? prefConfig.debugEfficientLevel : (prefConfig.efficientEncoding ? 1 : 0))
+                .setQuietIdle(prefConfig.quietIdle)
                 .setResolutionScaleFactor(prefConfig.resolutionScaleFactor)
                 .setApp(app)
                 .setEnableUltraLowLatency(prefConfig.enableUltraLowLatency)
@@ -1638,7 +1641,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         else {
             // Use the lower of the current refresh rate and the selected refresh rate.
             // The preferred refresh rate may not actually be applied (ex: Battery Saver mode).
-            return Math.min(currentDisplay.getRefreshRate(), displayRefreshRate);
+            // The display mode's rate, not getRefreshRate(): Android 15+ gives apps in the
+            // game category a 60 Hz frame rate override until their surface asks for more.
+            float currentRefreshRate = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ?
+                    currentDisplay.getMode().getRefreshRate() : currentDisplay.getRefreshRate();
+            return Math.min(currentRefreshRate, displayRefreshRate);
         }
     }
 
