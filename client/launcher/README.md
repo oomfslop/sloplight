@@ -38,7 +38,7 @@ Arrows and Enter move around the app grid, and typing filters it.
 Settings are grouped into presets: **Full quality** and **Efficient** are built in, and custom ones can be saved on top.
 
 - **Full quality** is for home Wi-Fi and wired networks. It streams at the screen's native resolution and refresh rate.
-- **Efficient** is for other networks, like hotels, offices, cafés and phone hotspots. It streams HEVC at 12 Mbps, 60 fps and the screen's size in points. For app windows, background windows update at an eighth of the frame rate and are encoded at lower quality, and the host encoder uses its slower, more efficient mode.
+- **Efficient** is for other networks, like hotels, offices, cafés and phone hotspots. It streams HEVC at 12 Mbps, 60 fps and the screen's size in points. The host stops refining still areas once they look right and sends about a frame a second while nothing changes. For app windows, background windows also update at an eighth of the frame rate and are encoded at lower quality.
 
 ## Theme
 

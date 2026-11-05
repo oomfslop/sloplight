@@ -235,6 +235,8 @@ void Launcher::execute()
         m_Session->setPreferredDisplayOrigin(origin.at(0).toInt(), origin.at(1).toInt());
     }
     m_Session->setHideHostCursor(m_Config.value("settings").toObject().value("hide_host_cursor").toBool(false));
+    m_Session->setEfficientEncoding(m_Config.value("settings").toObject().value("app_window_efficient_encoding").toBool(false),
+                                    m_Config.value("settings").toObject().value("app_window_quiet_idle").toBool(false));
     m_Session->setTrackpadGestures(m_Config.value("settings").toObject().value("trackpad_gestures").toBool(true));
     QJsonArray tw = m_Config.value("test_window").toArray();
     if (tw.size() == 4) {

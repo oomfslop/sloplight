@@ -125,6 +125,10 @@ public:
     // Desk session (Sloplight server): capture this client's desk, the private
     // host display that mirrors the client's screen (opened beforehand).
     bool desk = false;
+    // Sloplight server, regular streams (a desk asks when it opens): a quality
+    // ceiling on the encoder, and about a frame a second while nothing changes
+    bool efficient = false;
+    bool quietIdle = false;
 };
 
 class NvHTTP : public QObject

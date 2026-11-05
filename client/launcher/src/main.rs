@@ -183,7 +183,8 @@ fn stream_cli(host_q: &str, app_q: &str, seconds: u64) -> i32 {
     log::info!("[stream-cli] after serverinfo: {} apps, https {}, paired {:?}", host.apps.len(), host.active_https_port, host.pair_state);
     let host = &host;
     let aq = app_q.to_lowercase();
-    let Some(app) = host.apps.iter().find(|a| a.name.to_lowercase().contains(&aq)) else {
+    // (a uuid prefix picks one app where names repeat, like the host's synthetic "Desktop")
+    let Some(app) = host.apps.iter().find(|a| a.uuid.to_lowercase().starts_with(&aq)).or_else(|| host.apps.iter().find(|a| a.name.to_lowercase().contains(&aq))) else {
         eprintln!("No app matching {app_q:?} on {}; known: {:?}", host.name, host.apps.iter().map(|a| &a.name).collect::<Vec<_>>());
         return 2;
     };

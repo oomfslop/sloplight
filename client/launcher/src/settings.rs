@@ -325,12 +325,13 @@ pub struct Settings {
     /// changes cost fewer bits)
     #[serde(default)]
     pub app_window_background_quality: BackgroundQuality,
-    /// App windows: the host's encoder spends more time per frame for fewer
-    /// bits (slower preset, a pre-pass, a quality ceiling on still areas)
+    /// Every stream (named for app windows, where it started): a quality
+    /// ceiling on the host's encoder, so still areas cost few bits
     #[serde(default)]
     pub app_window_efficient_encoding: bool,
-    /// App windows: while nothing changes, the host sends a frame a second
-    /// instead of repeating the picture, and its text cursor stops blinking
+    /// Every stream (named for app windows, where it started): while nothing
+    /// changes, the host sends a frame a second instead of repeating the
+    /// picture (on desks its text cursor stops blinking too)
     #[serde(default)]
     pub app_window_quiet_idle: bool,
     /// Opens the app launcher from anywhere in the system (a key binding like

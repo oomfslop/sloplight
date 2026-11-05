@@ -136,6 +136,7 @@ public:
     // Draw the host cursor locally: the host leaves it out of the capture and
     // sends its shape. Always on for app windows.
     void setHideHostCursor(bool hide) { m_HideHostCursor = hide; }
+    void setEfficientEncoding(bool efficient, bool quietIdle) { m_EfficientEncoding = efficient; m_QuietIdle = quietIdle; }
     void setTrackpadGestures(bool enabled) { m_TrackpadGestures = enabled; }
 
     // App-window streaming (desk mode): the stream is the client's desk, a
@@ -367,6 +368,8 @@ private:
     QRect m_TestWindow;
     bool m_HasTestWindow = false;
     bool m_HideHostCursor = false;
+    bool m_EfficientEncoding = false;
+    bool m_QuietIdle = false;
     bool m_TrackpadGestures = true;
     void* m_TrackpadWatch = nullptr;
     // App-window streaming = desk mode (m_IsAppWindow is the desk-session flag)

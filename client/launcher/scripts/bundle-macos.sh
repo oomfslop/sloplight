@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 cargo build --release
-APP=target/Sloplight.app
+APP=${APP:-target/Sloplight.app}
 [ -e "$APP" ] && chmod -R u+w "$APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"

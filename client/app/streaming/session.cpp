@@ -1693,6 +1693,8 @@ bool Session::startConnectionAsync()
         launchOptions.clientVrrRequested = m_Preferences->vrrCapture;
         launchOptions.hideCursor = m_HideHostCursor || m_IsAppWindow;
         launchOptions.desk = m_IsAppWindow;
+        launchOptions.efficient = m_EfficientEncoding;
+        launchOptions.quietIdle = m_QuietIdle;
 
         NvHTTP http(m_Computer);
         // The host admits one launch/resume at a time and answers 503 while

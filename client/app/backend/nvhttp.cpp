@@ -246,6 +246,14 @@ NvHTTP::startApp(QString verb,
     if (launchOptions.desk) {
         apolloParams += "&desk=1";
     }
+    else {
+        if (launchOptions.efficient) {
+            apolloParams += "&efficient=1";
+        }
+        if (launchOptions.quietIdle) {
+            apolloParams += "&quiet=1";
+        }
+    }
 
     QString response =
             openConnectionToString(m_BaseUrlHttps,
