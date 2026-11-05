@@ -17,6 +17,7 @@ public class StreamConfiguration {
     private boolean virtualDisplay;
     private int efficientEncoding;
     private boolean quietIdle;
+    private int displayScale;
     private int resolutionScaleFactor;
     private int clientRefreshRateX100;
     private int bitrate;
@@ -77,6 +78,12 @@ public class StreamConfiguration {
         // Debug builds: another level the host knows (test runs)
         public StreamConfiguration.Builder setEfficientLevel(int level) {
             config.efficientEncoding = level;
+            return this;
+        }
+
+        // Sloplight hosts: Windows scaling for the virtual display, in percent (0: the host's)
+        public StreamConfiguration.Builder setDisplayScale(int percent) {
+            config.displayScale = percent;
             return this;
         }
 
@@ -218,6 +225,7 @@ public class StreamConfiguration {
     public boolean getVirtualDisplay() { return virtualDisplay; }
     public int getEfficientEncoding() { return efficientEncoding; }
     public boolean getQuietIdle() { return quietIdle; }
+    public int getDisplayScale() { return displayScale; }
 
     public int getResolutionScaleFactor() { return resolutionScaleFactor; }
     

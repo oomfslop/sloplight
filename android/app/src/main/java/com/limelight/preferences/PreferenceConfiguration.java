@@ -148,6 +148,8 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_EFFICIENT_ENCODING = true;
     private static final String QUIET_IDLE_PREF_STRING = "checkbox_quiet_idle";
     private static final boolean DEFAULT_QUIET_IDLE = true;
+    private static final String DESKTOP_SCALE_PREF_STRING = "list_desktop_scale";
+    private static final String DEFAULT_DESKTOP_SCALE = "auto";
     private static final String DEFAULT_VIDEO_SCALE_MODE = "fit";
     private static final boolean DEFAULT_AUTO_INVERT_VIDEO_RESOLUTION = true;
     private static final int DEFAULT_RESOLUTION_SCALE_FACTOR = 100;
@@ -251,6 +253,8 @@ public class PreferenceConfiguration {
     public int onscreenKeyboardWidth;
     public String onscreenKeyboardAlignMode;
     public boolean efficientEncoding, quietIdle;
+    // Windows scaling for the host's virtual display in percent; 0: worked out from the screen
+    public int desktopScale;
     // Debug builds: the efficient level sent to the host (-1: from the setting)
     public int debugEfficientLevel;
     public boolean enforceDisplayMode, useVirtualDisplay, enableSops, playHostAudio, disableWarnings, fullScreen;
@@ -891,6 +895,8 @@ private static int getFramePacingValue(Context context) {
         config.useVirtualDisplay = prefs.getBoolean(USE_VIRTUAL_DISPLAY_PREF_STRING, DEFAULT_USE_VIRTUAL_DISPLAY);
         config.efficientEncoding = prefs.getBoolean(EFFICIENT_ENCODING_PREF_STRING, DEFAULT_EFFICIENT_ENCODING);
         config.quietIdle = prefs.getBoolean(QUIET_IDLE_PREF_STRING, DEFAULT_QUIET_IDLE);
+        String desktopScale = prefs.getString(DESKTOP_SCALE_PREF_STRING, DEFAULT_DESKTOP_SCALE);
+        config.desktopScale = desktopScale.equals("auto") ? 0 : Integer.parseInt(desktopScale);
         config.debugEfficientLevel = Integer.parseInt(prefs.getString("debug_efficient_level", "-1"));
         config.enableUltraLowLatency = prefs.getBoolean(ENABLE_ULTRA_LOW_LATENCY_PREF_STRING, DEFAULT_ENABLE_ULTRA_LOW_LATENCY);
         config.enableSops = prefs.getBoolean(SOPS_PREF_STRING, DEFAULT_SOPS);

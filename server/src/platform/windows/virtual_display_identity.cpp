@@ -2,6 +2,7 @@
 #include "src/virtual_display_scale.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstring>
 #include <ranges>
@@ -103,11 +104,22 @@ namespace VDISPLAY {
            starts_with_wide_ascii_ci(product_code, L"5");
   }
 
+  namespace {
+    std::atomic<int> client_scale_percent {0};
+  }
+
+  void set_client_scale_percent(const int percent) {
+    client_scale_percent.store(percent);
+  }
+
   std::uint32_t effective_virtual_display_scale_percent(
     const int configured_scale_percent,
     const std::uint32_t width,
     const std::uint32_t height
   ) {
+    if (const auto client = client_scale_percent.load(); client > 0) {
+      return static_cast<std::uint32_t>(client);
+    }
     return virtual_display_scale::effective_percent(configured_scale_percent, width, height);
   }
 

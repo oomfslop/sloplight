@@ -84,6 +84,15 @@
             android:title="@string/title_checkbox_use_virtual_display"
             app:iconSpaceReserved="false" />
 
+        <ListPreference
+            android:defaultValue="auto"
+            android:entries="@array/desktop_scale_names"
+            android:entryValues="@array/desktop_scale_values"
+            android:key="list_desktop_scale"
+            android:summary="@string/summary_desktop_scale"
+            android:title="@string/title_desktop_scale"
+            app:iconSpaceReserved="false" />
+
         <CheckBoxPreference
             android:defaultValue="true"
             android:key="checkbox_efficient_encoding"

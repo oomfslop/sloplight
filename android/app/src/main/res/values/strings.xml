@@ -565,6 +565,9 @@
    	<string name="title_checkbox_forceTightThresholds">Tight Vsync (Experimental)</string>
     <string name="summary_checkbox_forceTightThresholds">Tighter VSYNC thresholds for lower latency; may increase drops.</string>
     <string name="title_checkbox_use_virtual_display">Use Virtual Display</string>
+    <string name="title_desktop_scale">Desktop scale</string>
+    <string name="summary_desktop_scale">How large the host\'s text and windows are on its virtual display. Auto picks a scale that reads well on this screen.\nRequires a Sloplight host.</string>
+    <string name="desktop_scale_auto">Auto</string>
     <string name="title_checkbox_efficient_encoding">Efficient encoding</string>
     <string name="summary_checkbox_efficient_encoding">The host stops refining still areas once they look right, which saves most of the bitrate on desktop and slow-moving content. Fine detail can be slightly softer.\nRequires a Sloplight host.</string>
     <string name="title_checkbox_quiet_idle">Quiet when idle</string>

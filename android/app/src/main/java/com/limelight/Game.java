@@ -86,6 +86,7 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.util.Rational;
 import android.view.Display;
+import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
@@ -787,6 +788,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setEfficientEncoding(prefConfig.efficientEncoding)
                 .setEfficientLevel(BuildConfig.DEBUG && prefConfig.debugEfficientLevel >= 0 ? prefConfig.debugEfficientLevel : (prefConfig.efficientEncoding ? 1 : 0))
                 .setQuietIdle(prefConfig.quietIdle)
+                .setDisplayScale(prefConfig.desktopScale > 0 ? prefConfig.desktopScale : autoDesktopScale(displayWidth, displayHeight))
                 .setResolutionScaleFactor(prefConfig.resolutionScaleFactor)
                 .setApp(app)
                 .setEnableUltraLowLatency(prefConfig.enableUltraLowLatency)
@@ -1453,6 +1455,26 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     public boolean isOnExternalDisplay() {
         return onExternelDisplay;
+    }
+
+    // Windows scaling that makes the host's desktop about as legible as a desktop
+    // monitor's at arm's length: the stream is fitted to this screen, and
+    // 192 stream pixels per inch on a phone held closer read like 100% on a monitor.
+    // Windows refuses scales that leave less than a 1280x720 desktop.
+    private int autoDesktopScale(int streamWidth, int streamHeight) {
+        DisplayMetrics metrics = new DisplayMetrics();
+        getWindowManager().getDefaultDisplay().getRealMetrics(metrics);
+        int screenLong = Math.max(metrics.widthPixels, metrics.heightPixels);
+        int screenShort = Math.min(metrics.widthPixels, metrics.heightPixels);
+        int streamLong = Math.max(streamWidth, streamHeight), streamShort = Math.min(streamWidth, streamHeight);
+        float fit = Math.min((float) screenLong / streamLong, (float) screenShort / streamShort);
+        float dpi = (metrics.xdpi + metrics.ydpi) / 2;
+        float streamPpi = dpi / fit;
+        int percent = Math.round(streamPpi / 192f * 4) * 25;
+        int windowsMax = (int) Math.floor(streamShort / 720f * 4) * 25;
+        int scale = Math.max(100, Math.min(Math.min(300, windowsMax), percent));
+        LimeLog.info("Desktop scale: " + streamPpi + " stream pixels per inch on this screen, " + scale + "%");
+        return scale;
     }
 
     private float prepareDisplayForRendering(Display currentDisplay) {

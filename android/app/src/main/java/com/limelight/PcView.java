@@ -1,6 +1,7 @@
 package com.limelight;
 
 import android.content.SharedPreferences;
+import android.util.DisplayMetrics;
 import android.view.Display;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -160,9 +161,16 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
                 }
             }
             String fps = maxHz >= 118 ? "120" : maxHz >= 88 ? "90" : "60";
+            // The tallest 16:9 stream the screen shows pixel for pixel (1440p on a
+            // 1440 px tall phone): sharp text, and room for a legible desktop scale
+            DisplayMetrics metrics = new DisplayMetrics();
+            getWindowManager().getDefaultDisplay().getRealMetrics(metrics);
+            int screenShort = Math.min(metrics.widthPixels, metrics.heightPixels);
+            String resolution = screenShort >= 2160 ? "3840x2160" : screenShort >= 1440 ? "2560x1440" : screenShort >= 1080 ? "1920x1080" : "1280x720";
             defaultPrefs.edit()
+                    .putString("list_resolution", resolution)
                     .putString("list_fps", fps)
-                    .putInt("seekbar_bitrate_kbps", PreferenceConfiguration.getDefaultBitrate(PreferenceConfiguration.DEFAULT_RESOLUTION, fps))
+                    .putInt("seekbar_bitrate_kbps", PreferenceConfiguration.getDefaultBitrate(resolution, fps))
                     .apply();
         }
         PreferenceManager.setDefaultValues(this, R.xml.preferences, false);

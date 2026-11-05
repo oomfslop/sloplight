@@ -102,6 +102,11 @@ namespace VDISPLAY {
     std::uint32_t height
   );
 
+  // The scale the launching client asked for (a phone's screen wants more than
+  // the host's setting for monitors), used over the configured one by the
+  // virtual displays created after it; 0: the configured scale.
+  void set_client_scale_percent(int percent);
+
   // Read the MHC2 peak-luminance value from a Windows HDR calibration profile selection.
   std::optional<std::uint32_t> hdr_profile_peak_luminance_nits(std::string_view selection);
 

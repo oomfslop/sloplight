@@ -887,6 +887,7 @@ public class NvHTTP {
             "&virtualDisplay=" + (context.streamConfig.getVirtualDisplay() ? 1 : 0) +
             (context.streamConfig.getEfficientEncoding() != 0 ? "&efficient=" + context.streamConfig.getEfficientEncoding() : "") +
             (context.streamConfig.getQuietIdle() ? "&quiet=1" : "") +
+            (context.streamConfig.getVirtualDisplay() && context.streamConfig.getDisplayScale() > 0 ? "&displayScale=" + context.streamConfig.getDisplayScale() : "") +
             "&localAudioPlayMode=" + (context.streamConfig.getPlayLocalAudio() ? 1 : 0) +
             "&surroundAudioInfo=" + context.streamConfig.getAudioConfiguration().getSurroundAudioInfo() +
             "&remoteControllersBitmap=" + context.streamConfig.getAttachedGamepadMask() +

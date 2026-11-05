@@ -1831,6 +1831,8 @@ namespace nvhttp {
         }
 
         VDISPLAY::setWatchdogFeedingEnabled(true);
+        // The client's own scaling, if it asked (a phone wants more than a monitor)
+        VDISPLAY::set_client_scale_percent(launch_session->display_scale_percent);
         auto display_info = VDISPLAY::createVirtualDisplay(
           display_uuid_source.c_str(),
           client_label.c_str(),
@@ -3320,6 +3322,9 @@ namespace nvhttp {
     launch_session->hide_cursor = get_arg(args, "hideCursor", "0") == "1";
     launch_session->efficient_encoding = get_arg(args, "efficient", "0") == "1";
     launch_session->quiet_idle = get_arg(args, "quiet", "0") == "1";
+    if (const auto display_scale = util::from_view(get_arg(args, "displayScale", "0")); display_scale >= 100 && display_scale <= 500) {
+      launch_session->display_scale_percent = static_cast<int>(display_scale);
+    }
     // Resume requests usually omit appid. Resolve the running application's
     // preference as well, before display preparation and HDR request overrides.
     auto color_app_ctx = launch_app_ctx;
