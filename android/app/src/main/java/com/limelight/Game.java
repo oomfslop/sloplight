@@ -457,10 +457,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // The desk is made to measure: this screen's shape (upright when the
             // phone is) at the configured height, so windows fill the screen without bars. Everything after
             // (the video view's shape, its buffer) goes by this size.
+            // The camera cutout's edge is left out: the desk is the rest of the screen
             DisplayMetrics metrics = new DisplayMetrics();
-            getWindowManager().getDefaultDisplay().getRealMetrics(metrics);
-            int screenLong = Math.max(metrics.widthPixels, metrics.heightPixels);
-            int screenShort = Math.min(metrics.widthPixels, metrics.heightPixels);
+            Display screen = getWindowManager().getDefaultDisplay();
+            screen.getRealMetrics(metrics);
+            int screenW = metrics.widthPixels, screenH = metrics.heightPixels;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && screen.getCutout() != null) {
+                android.view.DisplayCutout cutout = screen.getCutout();
+                screenW -= cutout.getSafeInsetLeft() + cutout.getSafeInsetRight();
+                screenH -= cutout.getSafeInsetTop() + cutout.getSafeInsetBottom();
+            }
+            int screenLong = Math.max(screenW, screenH);
+            int screenShort = Math.min(screenW, screenH);
             int shortSide = Math.min(displayWidth, displayHeight);
             int longSide = Math.min(4096, Math.round((float) shortSide * screenLong / screenShort / 8) * 8);
             if (displayWidth >= displayHeight) displayWidth = longSide;
@@ -471,7 +479,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
 
-        if (
+        if (deskMode) {
+            // Never under the camera cutout (the desk is sized to what's left)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                getWindow().getAttributes().layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER;
+            }
+        }
+        else if (
                 prefConfig.videoScaleMode == PreferenceConfiguration.ScaleMode.STRETCH ||
                         shouldIgnoreInsetsForResolution(displayWidth, displayHeight)
         ) {
