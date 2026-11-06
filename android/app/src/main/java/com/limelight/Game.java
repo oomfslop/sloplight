@@ -9,7 +9,14 @@ import static com.limelight.utils.ServerHelper.getActiveDisplay;
 import static com.limelight.utils.ServerHelper.getSecondaryDisplay;
 
 import com.limelight.binding.PlatformBinding;
-import com.limelight.desk.SwitcherOverlay;
+import app.sloplight.ui.stream.FloatingStreamButton;
+import app.sloplight.ui.stream.PerfOverlay;
+import app.sloplight.ui.stream.PerfStats;
+import app.sloplight.ui.stream.PerfStatsListener;
+import app.sloplight.ui.stream.StreamDialogs;
+import app.sloplight.ui.stream.StreamNotice;
+import app.sloplight.ui.stream.SwitcherOverlay;
+import androidx.compose.ui.platform.ComposeView;
 import com.limelight.desk.Workspaces;
 import com.limelight.binding.audio.AndroidAudioRenderer;
 import com.limelight.binding.input.ControllerHandler;
@@ -57,7 +64,8 @@ import com.limelight.utils.UiHelper;
 
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
-import android.app.AlertDialog;
+import androidx.appcompat.app.AlertDialog;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import android.app.PictureInPictureParams;
 import android.app.Service;
 import android.content.ClipData;
@@ -108,7 +116,6 @@ import android.widget.FrameLayout;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.widget.ImageButton;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.NotificationManagerCompat;
@@ -143,7 +150,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         OnGenericMotionListener, OnTouchListener, NvConnectionListener, EvdevListener,
         OnSystemUiVisibilityChangeListener, GameGestures, StreamContainer.InputCallbacks,
         ExternalControllerView.InputCallbacks,
-        PerfOverlayListener, UsbDriverService.UsbDriverStateListener, View.OnKeyListener {
+        PerfStatsListener, UsbDriverService.UsbDriverStateListener, View.OnKeyListener {
     public static Game instance;
 
     private int lastButtonState = 0;
@@ -187,7 +194,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private int currentOrientation;
 
     public NvConnection conn;
-    private SpinnerDialog spinner;
+    // The connecting / error dialogs (Compose, dialog windows of their own)
+    private StreamDialogs streamDialogs;
+    private StreamDialogs.Spinner spinner;
     private boolean displayedFailureDialog = false;
     private boolean connecting = false;
     public boolean connected = false;
@@ -225,13 +234,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean isHidingOverlays;
     private boolean floatingButtonShown;
     private boolean overlayToggleZoomButtonShown;
-    private TextView notificationOverlayView;
+    private StreamNotice notificationOverlayView;
     private int requestedNotificationOverlayVisibility = View.GONE;
+    // The perf overlay's container (its gravity: top or bottom) and the overlay in it
     private View performanceOverlayView;
-
-    private TextView performanceOverlayLite;
-
-    private TextView performanceOverlayBig;
+    private PerfOverlay perfOverlay;
 
     private MediaCodecDecoderRenderer decoderRenderer;
     private boolean reportedCrash;
@@ -308,8 +315,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public boolean isInputOnly = true;
     public boolean allowChangeMouseMode = true;
     private boolean onExternelDisplay = false;
-    private ImageButton floatingMenuButton;
-    private ImageButton overlayToggleButton;
+    private ComposeView floatingMenuButton;
+    private ComposeView overlayToggleButton;
+    private FloatingStreamButton overlayToggleLook;
     private float floatingButtonDX, floatingButtonDY;
     private boolean isButtonMoving = false;
     private static final float CLICK_ACTION_THRESHOLD = 5;
@@ -391,7 +399,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         clipboardManager = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
 
         // Start the spinner
-        spinner = SpinnerDialog.displayDialog(this, getResources().getString(R.string.conn_establishing_title),
+        streamDialogs = new StreamDialogs(this);
+        spinner = streamDialogs.showSpinner(getResources().getString(R.string.conn_establishing_title),
                 getResources().getString(R.string.conn_establishing_msg), true);
 
 
@@ -565,13 +574,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             );
         }
 
-        notificationOverlayView = findViewById(R.id.notificationOverlay);
+        notificationOverlayView = new StreamNotice(findViewById(R.id.notificationOverlay));
 
         performanceOverlayView = findViewById(R.id.performanceOverlay);
 
-        performanceOverlayLite = findViewById(R.id.performanceOverlayLite);
-
-        performanceOverlayBig = findViewById(R.id.performanceOverlayBig);
+        // Full or lite (and lite's "tap for the menu"), as the settings say
+        perfOverlay = new PerfOverlay((ViewGroup) performanceOverlayView, prefConfig.enablePerfOverlayLite,
+                prefConfig.enablePerfOverlayLite && prefConfig.enablePerfOverlayLiteDialog ? () -> showGameMenu(null) : null);
 
         inputCaptureProvider = InputCaptureManager.getInputCaptureProvider(this, this);
 
@@ -600,7 +609,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             highPerfWifiLock.setReferenceCounted(false);
             highPerfWifiLock.acquire();
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Efficient leaves Wi-Fi its power saving (low latency mode turns it off)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !prefConfig.efficientEncoding) {
                 lowLatencyWifiLock = wifiMgr.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "Moonlight Low Latency Lock");
                 lowLatencyWifiLock.setReferenceCounted(false);
                 lowLatencyWifiLock.acquire();
@@ -681,23 +691,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         }
 
+        // At the bottom if asked (also when it is turned on later from the menu)
+        if (prefConfig.enablePerfOverlayBottom) {
+            FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) performanceOverlayView.getLayoutParams();
+            params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+            performanceOverlayView.setLayoutParams(params);
+        }
+
         // Check if the user has enabled performance stats overlay
         if (prefConfig.enablePerfOverlay) {
-            performanceOverlayView.setVisibility(View.VISIBLE);
-            if (prefConfig.enablePerfOverlayLite) {
-                performanceOverlayLite.setVisibility(View.VISIBLE);
-                if(prefConfig.enablePerfOverlayLiteDialog){
-                    performanceOverlayLite.setOnClickListener(v -> showGameMenu(null));
-                }
-            } else {
-                performanceOverlayBig.setVisibility(View.VISIBLE);
-            }
-            if (prefConfig.enablePerfOverlayBottom) {
-                //performanceOverlayView.getLayoutParams().layout_gravity = Gravity.BOTTOM;
-                FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) performanceOverlayView.getLayoutParams();
-                params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-                performanceOverlayView.setLayoutParams(params);
-            }
+            perfOverlay.setShown(true);
         }
 
         decoderRenderer = new MediaCodecDecoderRenderer(
@@ -917,7 +920,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
 
             // If we can't find an AVC decoder, we can't proceed
-            Dialog.displayDialog(this, getResources().getString(R.string.conn_error_title),
+            streamDialogs.showError(getResources().getString(R.string.conn_error_title),
                     "This device or ROM doesn't support hardware accelerated H.264 playback.", true);
             return;
         }
@@ -942,10 +945,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         gameMenuCallbacks = new GameMenu(this);
 
         floatingMenuButton = findViewById(R.id.floatingMenuButton);
+        FloatingStreamButton.attach(floatingMenuButton, R.drawable.ic_menu, getString(R.string.menu_button));
         updateFloatingButtonVisibility(prefConfig.enableBackMenu && prefConfig.enableFloatingButton);
         initFloatingButton();
 
         overlayToggleButton = findViewById(R.id.overlayToggleZoomButton);
+        overlayToggleLook = FloatingStreamButton.attach(overlayToggleButton, R.drawable.ic_zoom_toggle, getString(R.string.toggle_pan_zoom_mode));
         setupOverlayToggleButton();
 
         //fixed size + pacing without back-pressure on MTK
@@ -955,42 +960,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             SurfaceView streamSurfaceView = findFirstSurfaceViewFrom(root);
 
             if (streamSurfaceView != null) {
-                // Avoid resizes/glitches that break the compositor
-                int vw = (prefConfig != null && prefConfig.width > 0) ? prefConfig.width : displayWidth;
-                int vh = (prefConfig != null && prefConfig.height > 0) ? prefConfig.height : displayHeight;
+                // Avoid resizes/glitches that break the compositor: the buffer is
+                // the stream's size, oriented as the stream is (displayWidth x
+                // displayHeight; the settings' width x height is always landscape)
+                int vw = displayWidth > 0 ? displayWidth : prefConfig.width;
+                int vh = displayHeight > 0 ? displayHeight : prefConfig.height;
                 try { streamSurfaceView.getHolder().setFixedSize(vw, vh); } catch (Throwable ignored) {}
                 try { streamSurfaceView.setZOrderOnTop(false); } catch (Throwable ignored) {}
                 try { streamSurfaceView.setZOrderMediaOverlay(false); } catch (Throwable ignored) {}
 
-                // 2) setFrameRate via reflection (compat < 30)
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                    float displayHz = 60f;
-                    try {
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                            displayHz = currentDisplay.getMode().getRefreshRate();
-                        } else {
-                            displayHz = currentDisplay.getRefreshRate();
-                        }
-                    } catch (Throwable ignored) {}
-
-                    float targetFps = (prefConfig != null && prefConfig.fps > 0) ? prefConfig.fps : displayHz;
-
-                    boolean isMTKDevice;
-                    try {
-                        String sum = (android.os.Build.MANUFACTURER + " " + android.os.Build.HARDWARE + " " + android.os.Build.BOARD)
-                                .toLowerCase(java.util.Locale.US);
-                        isMTKDevice = sum.contains("mtk") || sum.contains("mediatek");
-                    } catch (Throwable t) { isMTKDevice = false; }
-
-                    int compat = isMTKDevice
-                            ? Surface.FRAME_RATE_COMPATIBILITY_DEFAULT
-                            : Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE;
-
-                    try {
-                        java.lang.reflect.Method m = SurfaceView.class.getMethod("setFrameRate", float.class, int.class);
-                        m.invoke(streamSurfaceView, Math.min(targetFps, displayHz), compat);
-                    } catch (Throwable ignored) {}
-                }
+                // (its frame rate is set once, in surfaceCreated())
             }
         } catch (Throwable ignored) {}
     }
@@ -1060,12 +1039,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void updateZoomButtonAppearance() {
-        if (overlayToggleButton != null) {
-            // Change background based on pan/zoom mode state
-            overlayToggleButton.setBackgroundResource(isPanZoomMode ?
-                    R.drawable.floating_menu_button_active : R.drawable.floating_menu_button);
-            // No need for alpha changes since the color indicates the state
-            overlayToggleButton.setAlpha(1.0f);
+        if (overlayToggleLook != null) {
+            // In the primary colors while pan/zoom mode is on
+            overlayToggleLook.setActive(isPanZoomMode);
         }
     }
 
@@ -1324,7 +1300,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                 hideGameMenu();
 
-                performanceOverlayView.setVisibility(View.GONE);
+                perfOverlay.setShown(false);
                 notificationOverlayView.setVisibility(View.GONE);
 
                 // Disable sensors while in PiP mode
@@ -1359,7 +1335,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 }
 
                 if (prefConfig.enablePerfOverlay) {
-                    performanceOverlayView.setVisibility(View.VISIBLE);
+                    perfOverlay.setShown(true);
                 }
 
                 notificationOverlayView.setVisibility(requestedNotificationOverlayVisibility);
@@ -1532,7 +1508,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private boolean mayReduceRefreshRate() {
-        return prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS ||
+        // Efficient: the panel at the stream's rate, not above it (a 60 FPS stream
+        // on a 120 Hz panel runs it at 60 Hz, for half the panel's refreshes)
+        return prefConfig.efficientEncoding ||
+                prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS ||
                 prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
                 (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED && prefConfig.reduceRefreshRate);
     }
@@ -1891,6 +1870,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         SpinnerDialog.closeDialogs(this);
         Dialog.closeDialogs();
+        if (streamDialogs != null) {
+            streamDialogs.closeAll();
+        }
 
         if (virtualController != null) {
             virtualController.hide();
@@ -2044,9 +2026,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         });
         workspaces.setDeskSize(deskWidth, deskHeight);
+        // (its views are put in the activity when it shows, and taken away when it hides)
         switcher = new SwitcherOverlay(this, workspaces, this::onSwitcherHidden);
-        ((ViewGroup) findViewById(android.R.id.content)).addView(switcher,
-                new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
     public boolean isDeskMode() {
@@ -3855,7 +3836,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         dialogText += "\n\n" + getResources().getString(R.string.nettest_text_blocked);
                     }
 
-                    Dialog.displayDialog(Game.this, getResources().getString(R.string.conn_error_title), dialogText, true);
+                    streamDialogs.showError(getResources().getString(R.string.conn_error_title), dialogText, true);
                     finishSecondScreen();
                 }
             }
@@ -3950,7 +3931,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                                     MoonBridge.stringifyPortFlags(portFlags, "\n");
                         }
 
-                        Dialog.displayDialog(Game.this, getResources().getString(R.string.conn_terminated_title),
+                        streamDialogs.showError(getResources().getString(R.string.conn_terminated_title),
                                 message, true);
                     }
                     else {
@@ -4265,17 +4246,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     @Override
-    public void onPerfUpdate(final String text) {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                if(prefConfig.enablePerfOverlayLite){
-                    performanceOverlayLite.setText(text);
-                }else{
-                    performanceOverlayBig.setText(text);
-                }
+    public void onPerfStats(final PerfStats stats) {
+        // Once a second, from the decoder: the overlay formats the numbers on the main thread
+        runOnUiThread(() -> {
+            if (perfOverlay != null) {
+                perfOverlay.update(stats);
             }
         });
+    }
+
+    @Override
+    public void onPerfUpdate(final String text) {
+        // (not called: the decoder gives this listener the numbers, onPerfStats)
     }
 
     @Override
@@ -4456,7 +4438,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
         final MouseModeOption[] optionArray = options.toArray(new MouseModeOption[0]);
 
-        new AlertDialog.Builder(context)
+        new MaterialAlertDialogBuilder(context)
                 .setTitle(getString(R.string.game_menu_select_mouse_mode))
                 .setItems(labels, (dialog, which) -> {
                     dialog.dismiss();
@@ -4535,16 +4517,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     public void toggleHUD() {
         prefConfig.enablePerfOverlay = !prefConfig.enablePerfOverlay;
-        if (prefConfig.enablePerfOverlay) {
-            performanceOverlayView.setVisibility(View.VISIBLE);
-            if(prefConfig.enablePerfOverlayLite){
-                performanceOverlayLite.setVisibility(View.VISIBLE);
-            }else{
-                performanceOverlayBig.setVisibility(View.VISIBLE);
-            }
-        } else {
-            performanceOverlayView.setVisibility(View.GONE);
-        }
+        perfOverlay.setShown(prefConfig.enablePerfOverlay);
     }
 
     //切换触控灵敏度开关
@@ -4566,7 +4539,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         } else {
             context = this;
         }
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new MaterialAlertDialogBuilder(context);
         builder.setTitle(R.string.game_dialog_title_quit_confirm);
         builder.setMessage(R.string.game_dialog_message_quit_confirm);
 

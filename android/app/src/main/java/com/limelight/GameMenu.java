@@ -1,18 +1,13 @@
 package com.limelight;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Handler;
-import android.os.Looper;
 import android.text.TextUtils;
-import android.view.ContextThemeWrapper;
-import android.view.View;
-import android.view.ViewTreeObserver;
-import android.view.Window;
-import android.widget.ArrayAdapter;
 import android.widget.Toast;
+
+import app.sloplight.ui.stream.StreamMenu;
 
 import com.limelight.binding.input.GameInputDevice;
 import com.limelight.binding.input.KeyboardTranslator;
@@ -28,7 +23,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Provide options for ongoing Game Stream.
  * <p>
- * Shown on back action in game activity.
+ * Shown on back action in game activity. The menus are Compose dialogs
+ * (StreamMenu), in the activity on the screen the menu is for: the stream's,
+ * or the phone's controls when the stream is on an external display.
  */
 public class GameMenu implements Game.GameMenuCallbacks {
 
@@ -58,16 +55,16 @@ public class GameMenu implements Game.GameMenuCallbacks {
     private final Game game;
     private final Context dialogScreenContext;
 
-    private AlertDialog currentDialog;
+    private final StreamMenu menu;
 
     public GameMenu(Game game, Context dialogScreenContext) {
         this.game = game;
         this.dialogScreenContext = dialogScreenContext;
+        this.menu = new StreamMenu(dialogScreenContext);
     }
 
     public GameMenu(Game game) {
-        this.game = game;
-        this.dialogScreenContext = game;
+        this(game, game);
     }
 
     private String getString(int id) {
@@ -106,50 +103,12 @@ public class GameMenu implements Game.GameMenuCallbacks {
     }
 
     private void showMenuDialog(String title, MenuOption[] options) {
-        int themeResId = game.getApplicationInfo().theme;
-
-        Context themedContext = new ContextThemeWrapper(dialogScreenContext, themeResId);
-        AlertDialog.Builder builder = new AlertDialog.Builder(themedContext);
-        builder.setTitle(title);
-
-        final ArrayAdapter<String> actions = new ArrayAdapter<>(themedContext, android.R.layout.simple_list_item_1);
-
-        builder.setAdapter(actions, (dialog, which) -> {
-            String label = actions.getItem(which);
-            for (MenuOption option : options) {
-                if (label != null && label.equals(option.label)) {
-                    run(option);
-                    break;
-                }
-            }
-        });
-
-        builder.setOnCancelListener(dialog -> hideMenu());
-
-        if (currentDialog != null) {
-            currentDialog.dismiss();
+        List<StreamMenu.Item> items = new ArrayList<>();
+        for (MenuOption option : options) {
+            // A pick closes the menu, then runs the option (Cancel: nothing to run)
+            items.add(new StreamMenu.Item(option.label, option.runnable == null ? null : () -> run(option)));
         }
-        currentDialog = builder.show();
-
-        Window window = currentDialog.getWindow();
-
-        if (window != null) {
-            View decorView = window.getDecorView();
-            decorView.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
-                @Override
-                public void onGlobalLayout() {
-
-                    decorView.getViewTreeObserver().removeOnGlobalLayoutListener(this);
-
-                    new Handler(Looper.getMainLooper()).post(() -> {
-                        for (MenuOption option : options) {
-                            actions.add(option.label);
-                        }
-                        actions.notifyDataSetChanged();
-                    });
-                }
-            });
-        }
+        menu.show(title, items, this::hideMenu);
     }
 
     private void showSpecialKeysMenu() {
@@ -306,12 +265,8 @@ public class GameMenu implements Game.GameMenuCallbacks {
                 () -> {
                     ArrayList<String> serverCmds = game.getServerCmds();
                     if (serverCmds.isEmpty()) {
-                        int themeResId = game.getApplicationInfo().theme;
-                        Context themedContext = new ContextThemeWrapper(dialogScreenContext, themeResId);
-                        new AlertDialog.Builder(themedContext)
-                                .setTitle(R.string.game_dialog_title_server_cmd_empty)
-                                .setMessage(R.string.game_dialog_message_server_cmd_empty)
-                                .show();
+                        menu.showMessage(getString(R.string.game_dialog_title_server_cmd_empty),
+                                getString(R.string.game_dialog_message_server_cmd_empty));
                     } else {
                         hideMenu();
                         this.showServerCmd(serverCmds);
@@ -339,14 +294,11 @@ public class GameMenu implements Game.GameMenuCallbacks {
 
     @Override
     public void hideMenu() {
-        if (currentDialog != null && currentDialog.isShowing()) {
-            currentDialog.dismiss();
-        }
-        currentDialog = null;
+        menu.dismiss();
     }
 
     @Override
     public boolean isMenuOpen() {
-        return currentDialog != null && currentDialog.isShowing();
+        return menu.isShowing();
     }
 }

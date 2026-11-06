@@ -46,3 +46,6 @@
 # MPAndroidChart
 -keep class com.github.mikephil.charting.** { *; }
 -dontwarn com.github.mikephil.charting.**
+# Optimization stays off as before AGP 9 (proguard-android.txt had it): the
+# JNI bridge and reflection-heavy parts were never checked against it
+-dontoptimize

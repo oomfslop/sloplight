@@ -4,8 +4,8 @@
 
     <!-- Non-root application name -->
     <!-- FIXME: We should set extractNativeLibs=false but this breaks installation on the Fire TV 3 -->
-    <application android:label="@string/app_label"
-        android:isGame="true"
-        android:appCategory="game"
-        tools:targetApi="o" />
+    <!-- Not declared a game: Android caps a game's frame rate (60 Hz on
+         Pixels, ro.surface_flinger.game_default_frame_rate_override; Flyme
+         too), for its screens and the stream alike -->
+    <application android:label="@string/app_label" />
 </manifest>

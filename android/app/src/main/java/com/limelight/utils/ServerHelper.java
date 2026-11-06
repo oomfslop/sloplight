@@ -10,7 +10,7 @@ import android.widget.Toast;
 
 import androidx.annotation.RequiresApi;
 
-import com.limelight.AppView;
+import com.limelight.AppExtras;
 import com.limelight.Game;
 import com.limelight.LimeLog;
 import com.limelight.R;
@@ -44,16 +44,16 @@ public class ServerHelper {
 
     public static Intent createPcShortcutIntent(Activity parent, ComputerDetails computer) {
         Intent i = new Intent(parent, ShortcutTrampoline.class);
-        i.putExtra(AppView.NAME_EXTRA, computer.name);
-        i.putExtra(AppView.UUID_EXTRA, computer.uuid);
+        i.putExtra(AppExtras.NAME_EXTRA, computer.name);
+        i.putExtra(AppExtras.UUID_EXTRA, computer.uuid);
         i.setAction(Intent.ACTION_DEFAULT);
         return i;
     }
 
     public static Intent createAppShortcutIntent(Activity parent, ComputerDetails computer, NvApp app) {
         Intent i = new Intent(parent, ShortcutTrampoline.class);
-        i.putExtra(AppView.NAME_EXTRA, computer.name);
-        i.putExtra(AppView.UUID_EXTRA, computer.uuid);
+        i.putExtra(AppExtras.NAME_EXTRA, computer.name);
+        i.putExtra(AppExtras.UUID_EXTRA, computer.uuid);
         i.putExtra(Game.EXTRA_APP_NAME, app.getAppName());
         i.putExtra(Game.EXTRA_APP_UUID, app.getAppUUID());
         i.putExtra(Game.EXTRA_APP_ID, ""+app.getAppId());
@@ -157,7 +157,7 @@ public class ServerHelper {
     /** App windows: the host's windows as workspaces, on the client's desk */
     public static void doStartDesk(Activity parent, ComputerDetails computer,
                                    ComputerManagerService.ComputerManagerBinder managerBinder) {
-        NvApp desk = new NvApp(parent.getString(R.string.applist_desk_tile), null, com.limelight.AppView.DESK_APP_ID, false);
+        NvApp desk = new NvApp(parent.getString(R.string.applist_desk_tile), null, AppExtras.DESK_APP_ID, false);
         Intent intent = createStartIntent(parent, desk, computer, managerBinder, false);
         intent.putExtra(Game.EXTRA_DESK, true);
         parent.startActivity(intent);

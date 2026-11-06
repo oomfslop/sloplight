@@ -5,7 +5,9 @@ buildscript {
         google()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.13.0'
+        classpath 'com.android.tools.build:gradle:9.5.1'
+        classpath 'org.jetbrains.kotlin:compose-compiler-gradle-plugin:2.4.21'
+        classpath 'org.jetbrains.kotlin:kotlin-serialization:2.4.21'
     }
 }
 
@@ -24,10 +26,10 @@ gradle.projectsEvaluated {
         description = 'Runs every unit-test task in all sub-projects'
     }
 
+    // (only the Test tasks are created for this, not every task: AGP 9 can't
+    // create some, such as the Compose preview ones of variants without tests)
     subprojects.each { p ->
-        p.tasks.matching { it.name.endsWith('UnitTest') }.all { t ->
-            agg.configure { dependsOn t }
-        }
+        agg.configure { dependsOn p.tasks.withType(Test).matching { it.name.endsWith('UnitTest') } }
     }
 }
 

@@ -21,6 +21,8 @@ import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.Stereo3DRenderer;
 import com.limelight.utils.TrafficStatsHelper;
+import app.sloplight.ui.stream.PerfStats;
+import app.sloplight.ui.stream.PerfStatsListener;
 
 import android.annotation.SuppressLint;
 import android.util.LongSparseArray;
@@ -612,7 +614,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         videoDecoder.configure(format, renderTarget, null, 0);
 
-        try { applySurfaceFrameRate(renderTarget, targetFps); } catch (Throwable ignored) {}
+        // (the surface's frame rate is Game's to set, in surfaceCreated(): a second
+        // vote here, made last, overrode its choice of refresh rate)
 
         try {
             MediaCodecInfo __info = (android.os.Build.VERSION.SDK_INT >= 21) ? videoDecoder.getCodecInfo() : null;
@@ -1643,6 +1646,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                 float decodeTimeMs = (float)lastTwo.decoderTimeMs / lastTwo.totalFramesReceived;
                 long rttInfo = MoonBridge.getEstimatedRttInfo();
+                // The overlay's bandwidth (KiB/s); negative: not known yet
+                float perfBandwidthKBps = -1f;
                 StringBuilder sb = new StringBuilder();
                 if(prefs.enablePerfOverlayLite){
                     if(TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED){
@@ -1650,6 +1655,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         if(lastNetDataNum!=0){
                             sb.append(context.getString(R.string.perf_overlay_lite_bandwidth) + ": ");
                             float realtimeNetData=(netData-lastNetDataNum)/1024f;
+                            perfBandwidthKBps = realtimeNetData;
                             if(realtimeNetData>=1000){
                                 sb.append(String.format("%.2f", realtimeNetData/1024f) +"M/s\t ");
                             }else{
@@ -1710,6 +1716,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         if(lastNetDataNum!=0){
                             sb.append(context.getString(R.string.perf_overlay_lite_bandwidth) + ": ");
                             float realtimeNetData=(netData-lastNetDataNum)/1024f;
+                            perfBandwidthKBps = realtimeNetData;
                             if(realtimeNetData>=1000){
                                 sb.append(String.format("%.2f", realtimeNetData/1024f) +"M/s\n");
                             }else{
@@ -1747,7 +1754,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 }
                 String fullLog = sb.toString();
                 if(prefs.enablePerfOverlay) {
-                    perfListener.onPerfUpdate(fullLog);
+                    if (perfListener instanceof PerfStatsListener) {
+                        // The numbers themselves: the overlay formats them, on the main thread
+                        ((PerfStatsListener) perfListener).onPerfStats(new PerfStats(
+                                initialWidth, initialHeight, fps.totalFps, fps.receivedFps, fps.renderedFps,
+                                decoder, (float)lastTwo.framesLost / lastTwo.totalFrames * 100, perfBandwidthKBps,
+                                (int)(rttInfo >> 32), (int)rttInfo,
+                                lastTwo.framesWithHostProcessingLatency > 0 ? (float)lastTwo.minHostProcessingLatency / 10 : Float.NaN,
+                                lastTwo.framesWithHostProcessingLatency > 0 ? (float)lastTwo.maxHostProcessingLatency / 10 : Float.NaN,
+                                lastTwo.framesWithHostProcessingLatency > 0 ? (float)lastTwo.totalHostProcessingLatency / 10 / lastTwo.framesWithHostProcessingLatency : Float.NaN,
+                                decodeTimeMs, Stereo3DRenderer.isActive, Stereo3DRenderer.threeDFps, Stereo3DRenderer.renderer, Stereo3DRenderer.drawDelay));
+                    } else {
+                        perfListener.onPerfUpdate(fullLog);
+                    }
                 }
                 // Best latency is only met at requested highest fps, rest can be ignored
                 Boolean targetFpsMatched = ((int) fps.totalFps == (int) prefs.fps);

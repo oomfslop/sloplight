@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Strings of the Compose settings and profiles screens -->
+<resources>
+    <string name="settings_search">Search settings</string>
+    <string name="settings_search_clear">Clear search</string>
+    <string name="settings_no_results">No matching settings</string>
+    <string name="settings_show_more">Show %1$d more</string>
+    <string name="settings_hdr_broken_shield">Update the firmware on your NVIDIA SHIELD Android TV to enable HDR</string>
+    <string name="settings_language_reset_restart">Language has been reset to default, please restart the app!</string>
+</resources>

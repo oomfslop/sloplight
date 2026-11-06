@@ -232,7 +232,7 @@ public class CachedAppAssetLoader {
                             @Override
                             public void onAnimationEnd(Animation animation) {
                                 // Fade in the new box art
-                                imageView.setImageBitmap(bitmap.bitmap);
+                                imageView.setImageBitmap(isBitmapPlaceholder(bitmap) ? null : bitmap.bitmap);
                                 imageView.startAnimation(AnimationUtils.loadAnimation(imageView.getContext(), R.anim.boxart_fadein));
                             }
 
@@ -243,7 +243,7 @@ public class CachedAppAssetLoader {
                     }
                     else {
                         // View is invisible already, so just fade in the new art
-                        imageView.setImageBitmap(bitmap.bitmap);
+                        imageView.setImageBitmap(isBitmapPlaceholder(bitmap) ? null : bitmap.bitmap);
                         imageView.startAnimation(AnimationUtils.loadAnimation(imageView.getContext(), R.anim.boxart_fadein));
                         imageView.setVisibility(View.VISIBLE);
                     }
@@ -349,7 +349,8 @@ public class CachedAppAssetLoader {
         if (bmp != null) {
             // Show the bitmap immediately
             imgView.setVisibility(View.VISIBLE);
-            imgView.setImageBitmap(bmp.bitmap);
+            // (the host's stand-in art is left out: the card and the name show)
+            imgView.setImageBitmap(isBitmapPlaceholder(bmp) ? null : bmp.bitmap);
 
             // Show the text if it's a placeholder bitmap
             textView.setVisibility(isBitmapPlaceholder(bmp) ? View.VISIBLE : View.GONE);

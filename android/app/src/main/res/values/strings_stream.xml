@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The desk's launcher / window switcher over the stream -->
+    <string name="switcher_search_hint">Search apps and windows</string>
+    <string name="switcher_search_hint_slot">Open in workspace %1$d…  type to search</string>
+    <string name="switcher_workspaces">Workspaces</string>
+    <string name="switcher_on_pc">On the PC\'s screen</string>
+    <string name="switcher_apps">Apps</string>
+    <string name="switcher_empty">Empty</string>
+    <string name="switcher_empty_detail">pick something for it</string>
+    <string name="switcher_side_by_side">%1$d side by side</string>
+    <string name="switcher_more_apps">Type to search all %1$d apps</string>
+    <string name="switcher_loading_apps">Loading the PC\'s apps…</string>
+    <string name="switcher_no_match">Nothing matches “%1$s”</string>
+    <string name="switcher_send_back">Send back to the PC\'s screen</string>
+    <string name="switcher_close_window">Close window</string>
+    <string name="switcher_open_own">Open in a workspace of its own</string>
+    <string name="switcher_open_beside">Open beside the window in front</string>
+    <string name="switcher_footer">%1$s+1–9 switch · %1$s+Shift+1–9 move window there · %1$s+Ctrl+1–9 swap · %1$s+arrows focus · %1$s+Shift+arrows move · %1$s+D this · %1$s+Shift+Q close · Shift+Enter open beside · Del send back to PC</string>
+    <string name="switcher_footer_service">Tap here and turn on “%1$s” to use Win instead of Alt</string>
+</resources>

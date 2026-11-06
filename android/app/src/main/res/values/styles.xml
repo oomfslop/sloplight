@@ -1,28 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
 
-    <!--
-        Base application theme, dependent on API level. This theme is replaced
-        by AppBaseTheme from res/values-vXX/styles.xml on newer devices.
-
-    -->
-    <style name="AppBaseTheme" parent="Theme.MaterialComponents.NoActionBar">
-        <!--
-            Theme customizations available in newer API levels can go in
-            res/values-vXX/styles.xml, while customizations related to
-            backward-compatibility can go here.
-        -->
+    <!-- Material 3 Expressive, dark (a streaming app), in the wallpaper's
+         colors where Android has them (DynamicColors in ArtemisApplication) -->
+    <style name="AppBaseTheme" parent="Theme.Material3Expressive.Dark.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- Avoid some systems like MIUI which break the visibility of games title -->
+        <item name="android:forceDarkAllowed" tools:targetApi="q">false</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.Sloplight.Dialog</item>
+        <!-- (the preference library's and AppCompat's own dialogs) -->
+        <item name="alertDialogTheme">@style/ThemeOverlay.Material3Expressive.Dialog.Alert</item>
     </style>
+
 
     <!-- Application theme. -->
     <style name="AppTheme" parent="AppBaseTheme">
-        <!-- All customizations that are NOT specific to a particular API-level can go here. -->
-        <item name="android:windowActionBar">false</item>
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:statusBarColor">#1A1A1A</item>
-        <item name="android:navigationBarColor">#1A1A1A</item>
-        <item name="android:colorBackground">#1A1A1A</item>
-        <item name="android:windowBackground">#1A1A1A</item>
+        <item name="android:windowBackground">?attr/colorSurface</item>
     </style>
 
     <style name="StreamBaseTheme" parent="AppBaseTheme">
@@ -49,12 +43,10 @@
         <item name="colorButtonNormal">@android:color/white</item>
     </style>
 
-    <style name="SettingsTheme" parent="Theme.AppCompat.NoActionBar">
-        <item name="android:statusBarColor">@android:color/transparent</item>
-        <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:colorBackground">@android:color/transparent</item>
-        <item name="android:windowBackground">@android:color/transparent</item>
-    </style>
+    <style name="SettingsTheme" parent="AppTheme" />
+
+    <style name="ThemeOverlay.Sloplight.Dialog" parent="ThemeOverlay.Material3Expressive.MaterialAlertDialog" />
+
 
     <style name="ExternalDisplayControllerTheme" parent="AppTheme">
         <item name="android:statusBarColor">@android:color/black</item>

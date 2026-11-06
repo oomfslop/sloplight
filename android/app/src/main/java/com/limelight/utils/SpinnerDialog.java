@@ -4,15 +4,24 @@ import java.util.ArrayList;
 import java.util.Iterator;
 
 import android.app.Activity;
-import android.app.ProgressDialog;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnCancelListener;
+import android.view.Gravity;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import androidx.appcompat.app.AlertDialog;
+
+import com.google.android.material.color.MaterialColors;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.loadingindicator.LoadingIndicator;
 
 public class SpinnerDialog implements Runnable,OnCancelListener {
     private final String title;
     private final String message;
     private final Activity activity;
-    private ProgressDialog progress;
+    private AlertDialog progress;
+    private TextView messageView;
     private final boolean finish;
 
     private static final ArrayList<SpinnerDialog> rundownDialogs = new ArrayList<>();
@@ -60,7 +69,7 @@ public class SpinnerDialog implements Runnable,OnCancelListener {
         activity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                progress.setMessage(message);
+                if (messageView != null) messageView.setText(message);
             }
         });
     }
@@ -75,11 +84,27 @@ public class SpinnerDialog implements Runnable,OnCancelListener {
 
         if (progress == null)
         {
-            progress = new ProgressDialog(activity);
+            // A Material dialog: the Expressive loading indicator beside the message
+            float density = activity.getResources().getDisplayMetrics().density;
+            LinearLayout content = new LinearLayout(activity);
+            content.setOrientation(LinearLayout.HORIZONTAL);
+            content.setGravity(Gravity.CENTER_VERTICAL);
+            int pad = Math.round(24 * density);
+            content.setPadding(pad, Math.round(8 * density), pad, Math.round(8 * density));
+            LoadingIndicator indicator = new LoadingIndicator(activity);
+            content.addView(indicator, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+            messageView = new TextView(activity);
+            messageView.setText(message);
+            messageView.setTextColor(MaterialColors.getColor(content, com.google.android.material.R.attr.colorOnSurfaceVariant));
+            messageView.setTextSize(16);
+            LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+            textParams.setMarginStart(Math.round(16 * density));
+            content.addView(messageView, textParams);
 
-            progress.setTitle(title);
-            progress.setMessage(message);
-            progress.setProgressStyle(ProgressDialog.STYLE_SPINNER);
+            progress = new MaterialAlertDialogBuilder(activity)
+                    .setTitle(title)
+                    .setView(content)
+                    .create();
             progress.setOnCancelListener(this);
 
             // If we want to finish the activity when this is killed, make it cancellable
