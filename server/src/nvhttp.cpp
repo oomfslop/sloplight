@@ -4267,8 +4267,11 @@ namespace nvhttp {
       while (std::getline(list, item, ',')) {
         if (auto h = parse_window_handle(item)) back.push_back(h);
       }
-      const auto front_text = get_arg(args, "front", "");
-      const std::uint64_t front = front_text.empty() ? 0 : parse_window_handle(front_text);
+      std::vector<std::uint64_t> front;
+      std::stringstream fronts(get_arg(args, "front", ""));
+      while (std::getline(fronts, item, ',')) {
+        if (auto h = parse_window_handle(item)) front.push_back(h);
+      }
       const bool ok = app_desk::pin(uuid, front, back);
       write_json(response, {{"status", ok}}, ok ? SimpleWeb::StatusCode::success_ok : SimpleWeb::StatusCode::client_error_not_found);
       return;

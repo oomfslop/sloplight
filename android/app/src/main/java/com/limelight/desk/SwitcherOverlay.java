@@ -197,7 +197,8 @@ public class SwitcherOverlay extends FrameLayout {
     private void updateFooter() {
         boolean meta = com.limelight.KeyboardAccessibilityService.running;
         String m = meta ? "Win" : "Alt";
-        String text = m + "+1–9 switch · " + m + "+Shift+1–9 swap · " + m + "+D this · " + m + "+Shift+Q close · Del send back to PC";
+        String text = m + "+1–9 switch · " + m + "+Shift+1–9 move window there · " + m + "+Ctrl+1–9 swap · " + m + "+arrows focus · " + m + "+Shift+arrows move · "
+                + m + "+D this · " + m + "+Shift+Q close · Shift+Enter open beside · Del send back to PC";
         if (!meta) {
             text += "\nTap here and turn on “" + getContext().getString(com.limelight.R.string.keyboard_service_label) + "” to use Win instead of Alt";
         }
@@ -250,7 +251,7 @@ public class SwitcherOverlay extends FrameLayout {
             case KeyEvent.KEYCODE_ENTER:
             case KeyEvent.KEYCODE_NUMPAD_ENTER:
             case KeyEvent.KEYCODE_DPAD_CENTER:
-                activate(selected);
+                activate(selected, event.isShiftPressed());
                 return true;
             case KeyEvent.KEYCODE_DEL:
                 if (query.length() > 0) {
@@ -322,6 +323,12 @@ public class SwitcherOverlay extends FrameLayout {
     }
 
     private void activate(int i) {
+        activate(i, false);
+    }
+
+    /** beside: a window or app opens next to the windows in front (or in the
+     *  workspace picked) instead of in a workspace of its own */
+    private void activate(int i, boolean beside) {
         if (i < 0 || i >= entries.size()) return;
         Entry e = entries.get(i);
         switch (e.kind) {
@@ -336,11 +343,11 @@ public class SwitcherOverlay extends FrameLayout {
                 rebuild();
                 break;
             case Entry.WINDOW:
-                ws.bring(e.window.hwnd, targetSlot);
+                ws.bring(e.window.hwnd, targetSlot, beside);
                 hide();
                 break;
             case Entry.APP:
-                ws.launch(e.app, targetSlot);
+                ws.launch(e.app, targetSlot, beside);
                 hide();
                 break;
             default:
@@ -366,7 +373,17 @@ public class SwitcherOverlay extends FrameLayout {
         for (int n = 1; n <= Workspaces.COUNT; n++) {
             Workspaces.Window w = ws.windowIn(n);
             if (w != null) {
-                if (matches(q, w.label(), w.process)) group.add(new Entry(Entry.WORKSPACE, n, w.label(), processName(w.process), w, null));
+                // Side by side ones: all their names, left to right; the focused one's icon
+                List<Workspaces.Window> tiles = ws.windowsIn(n);
+                StringBuilder title = new StringBuilder();
+                boolean match = false;
+                for (Workspaces.Window t : tiles) {
+                    if (title.length() > 0) title.append("  │  ");
+                    title.append(t.label());
+                    match = match || matches(q, t.label(), t.process);
+                }
+                String detail = tiles.size() > 1 ? tiles.size() + " side by side" : processName(w.process);
+                if (match) group.add(new Entry(Entry.WORKSPACE, n, title.toString(), detail, w, null));
             } else if (q.isEmpty() && n == firstEmptyToOffer()) {
                 group.add(new Entry(Entry.EMPTY, n, "Empty", "pick something for it", null, null));
             }
@@ -522,6 +539,18 @@ public class SwitcherOverlay extends FrameLayout {
                 menu.setOnMenuItemClickListener(item -> {
                     if (item.getItemId() == 1) ws.release(e.slot);
                     else ws.close(e.slot);
+                    return true;
+                });
+                menu.show();
+                return true;
+            });
+        } else if ((e.kind == Entry.WINDOW || e.kind == Entry.APP) && ws.canTileBeside()) {
+            row.setOnLongClickListener(v -> {
+                PopupMenu menu = new PopupMenu(c, v);
+                menu.getMenu().add(0, 1, 0, "Open in a workspace of its own");
+                menu.getMenu().add(0, 2, 1, "Open beside the window in front");
+                menu.setOnMenuItemClickListener(item -> {
+                    activate(index, item.getItemId() == 2);
                     return true;
                 });
                 menu.show();

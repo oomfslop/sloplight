@@ -17,6 +17,7 @@
   #include <algorithm>
   #include <array>
   #include <climits>
+  #include <cstdlib>
   #include <atomic>
   #include <chrono>
   #include <cstdio>
@@ -1261,22 +1262,59 @@ namespace app_desk {
   }
 
   namespace {
-    /** A phone's workspaces, held as they are by the host: the front window
-     *  can't be moved, resized or minimized by hand (a move is cancelled and
-     *  undone, a minimize undone, a restore maximized again), and the other
-     *  workspaces' windows can't be moved. Kept from Windows' own events, so
-     *  what a person does on the host is undone at once, with no round trip
-     *  to the phone. */
+    /** A phone's workspaces, held as they are by the host. The windows in
+     *  front (one, maximized, or up to a few side by side in columns of the
+     *  desk's work area) can't be moved, resized, minimized or (un)maximized
+     *  by hand, and the other workspaces' windows can't be moved. Kept from
+     *  Windows' own events, so what a person does on the host is undone at
+     *  once, with no round trip to the phone. */
     struct pins_t {
-      HWND front = nullptr;
+      std::vector<HWND> front;  ///< left to right
       std::set<HWND> back;
-      RECT desk {};  ///< the desk display, where the front window belongs
+      RECT desk {};  ///< the desk display, where the front windows belong
+      RECT work {};  ///< its work area (the part the phone shows)
     };
 
     std::mutex g_pin_mutex;
     std::map<std::string, pins_t> g_pins;  ///< client uuid -> pins
-    std::map<HWND, RECT> g_pin_home;  ///< fixed-size front windows: their place outside move loops
     std::set<HWND> g_pin_moving;  ///< pinned windows in a move/size loop now
+
+    /** Corrections of one window lately: one that won't take its place (a
+     *  minimum size wider than its column) is left as it is, not fought */
+    struct corrections_t {
+      std::chrono::steady_clock::time_point since;
+      int count = 0;
+    };
+
+    std::map<HWND, corrections_t> g_pin_corrections;
+    std::map<HWND, RECT> g_pin_asked;  ///< the size each front window was last asked to take
+    /** Heights windows wouldn't go under (a minimum size, as Calculator has),
+     *  so they are given that height the first time on later layouts */
+    std::map<HWND, LONG> g_pin_min_h;
+
+    /** The last correction sent to each window, and when: the events that
+     *  come before the window has done it are not more reasons to correct */
+    struct pending_t {
+      RECT want {};
+      std::chrono::steady_clock::time_point at;
+    };
+
+    std::map<HWND, pending_t> g_pin_pending;
+
+    /** False when this very correction was just sent (the window is on it);
+     *  otherwise it is remembered as sent */
+    bool not_pending(HWND hwnd, const RECT &want) {
+      std::lock_guard lock(g_pin_mutex);
+      const auto now = std::chrono::steady_clock::now();
+      auto &p = g_pin_pending[hwnd];
+      if (EqualRect(&p.want, &want) && now - p.at < std::chrono::milliseconds(400)) return false;
+      p.want = want;
+      p.at = now;
+      return true;
+    }
+
+    // What not_pending() remembers for corrections that aren't a place
+    constexpr RECT maximize_mark {-1, -1, -1, -1}, restore_mark {-2, -2, -2, -2};
     std::atomic<bool> g_pinning {false};
 
     enum class pin_role_e {
@@ -1285,11 +1323,30 @@ namespace app_desk {
       back
     };
 
-    pin_role_e pin_role(HWND hwnd, RECT *desk = nullptr) {
+    /** Where a front window belongs */
+    struct place_t {
+      RECT desk {};
+      RECT target {};  ///< its frame (its column or row, or the work area alone)
+      int tiles = 0;  ///< windows in front
+    };
+
+    pin_role_e pin_role(HWND hwnd, place_t *place = nullptr) {
       std::lock_guard lock(g_pin_mutex);
       for (const auto &[uuid, p] : g_pins) {
-        if (p.front == hwnd) {
-          if (desk) *desk = p.desk;
+        for (std::size_t i = 0; i < p.front.size(); ++i) {
+          if (p.front[i] != hwnd) continue;
+          if (place) {
+            const int n = static_cast<int>(p.front.size());
+            const LONG w = p.work.right - p.work.left, h = p.work.bottom - p.work.top;
+            const auto at = [n](LONG from, LONG length, std::size_t k) {
+              return from + static_cast<LONG>(length * static_cast<LONG>(k) / n);
+            };
+            place->desk = p.desk;
+            place->tiles = n;
+            // Side by side on a wide desk, one above the other on a tall one (a phone held upright)
+            place->target = w >= h ? RECT {at(p.work.left, w, i), p.work.top, at(p.work.left, w, i + 1), p.work.bottom} :
+                                     RECT {p.work.left, at(p.work.top, h, i), p.work.right, at(p.work.top, h, i + 1)};
+          }
           return pin_role_e::front;
         }
         if (p.back.contains(hwnd)) return pin_role_e::back;
@@ -1301,40 +1358,108 @@ namespace app_desk {
       return (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_THICKFRAME) != 0;
     }
 
-    /** The front window back in shape: on the desk, maximized when it can be,
-     *  else where it was */
-    void keep_front(HWND hwnd, const RECT &desk) {
+    /** False when the window was put back too often just now (logged once) */
+    bool may_correct(HWND hwnd) {
+      int count = 0;
+      {
+        std::lock_guard lock(g_pin_mutex);
+        const auto now = std::chrono::steady_clock::now();
+        auto &c = g_pin_corrections[hwnd];
+        if (now - c.since > std::chrono::seconds(3)) {
+          c.since = now;
+          c.count = 0;
+        }
+        count = ++c.count;
+      }
+      // (its title is asked of the window: not with the lock held)
+      if (count == 7) BOOST_LOG(info) << "Desk: " << describe_window(reinterpret_cast<std::uintptr_t>(hwnd)) << " won't take its place; left as it is";
+      return count < 7;
+    }
+
+    /** The window's frame (what is seen, without the invisible resize
+     *  borders) at this rect; the size only when it is sizable */
+    void place_frame(HWND hwnd, const RECT &target, bool size) {
+      RECT frame {}, win {};
+      if (!GetWindowRect(hwnd, &win)) return;
+      if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame)))) frame = win;
+      const LONG l = frame.left - win.left, t = frame.top - win.top, r = win.right - frame.right, b = win.bottom - frame.bottom;
+      UINT flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
+      if (!size) flags |= SWP_NOSIZE;
+      SetWindowPos(hwnd, nullptr, target.left - l, target.top - t, (target.right - target.left) + l + r, (target.bottom - target.top) + t + b, flags);
+    }
+
+    /** A front window back in its place: alone, maximized when it can be;
+     *  side by side, its column (a fixed-size one at its column's corner) */
+    void keep_front(HWND hwnd, const place_t &place) {
       if (!IsWindow(hwnd) || IsIconic(hwnd)) return;
       RECT now {};
       if (!GetWindowRect(hwnd, &now)) return;
       const POINT center {(now.left + now.right) / 2, (now.top + now.bottom) / 2};
-      const bool on_desk = IsRectEmpty(&desk) || PtInRect(&desk, center);
-      if (sizable(hwnd)) {
+      const bool on_desk = IsRectEmpty(&place.desk) || PtInRect(&place.desk, center);
+      const bool can_size = sizable(hwnd);
+      if (place.tiles <= 1 && can_size) {
         if (on_desk && IsZoomed(hwnd)) return;
+        if (on_desk && !not_pending(hwnd, maximize_mark)) return;
+        if (!may_correct(hwnd)) return;
         if (!on_desk) {
           // Taken to another display (Win+Shift+arrow): maximized on the desk again
           BOOST_LOG(info) << "Desk: " << describe_window(reinterpret_cast<std::uintptr_t>(hwnd)) << " left the desk; back in front";
           if (IsZoomed(hwnd)) ShowWindowAsync(hwnd, SW_RESTORE);
-          SetWindowPos(hwnd, nullptr, desk.left, desk.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+          SetWindowPos(hwnd, nullptr, place.desk.left, place.desk.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
         }
         ShowWindowAsync(hwnd, SW_MAXIMIZE);
         return;
       }
-      RECT home {};
+      if (IsZoomed(hwnd)) {
+        // Maximized in a column: restored first, the move that follows brings it here
+        if (not_pending(hwnd, restore_mark) && may_correct(hwnd)) ShowWindowAsync(hwnd, SW_RESTORE);
+        return;
+      }
+      RECT frame {};
+      if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame)))) frame = now;
+      auto close_to = [](LONG a, LONG b) {
+        return std::abs(a - b) <= 2;
+      };
+      bool asked = false;
+      LONG min_h = 0;
+      RECT want = place.target;
+      bool size = can_size;
+      const LONG frame_h = frame.bottom - frame.top, target_h = want.bottom - want.top;
       {
         std::lock_guard lock(g_pin_mutex);
-        auto it = g_pin_home.find(hwnd);
-        if (it == g_pin_home.end()) return;
-        home = it->second;
+        auto it = g_pin_asked.find(hwnd);
+        asked = it != g_pin_asked.end() && EqualRect(&it->second, &want);
+        // (where and as wide as it was asked: this is its answer to that, not an older move)
+        const bool took_width = std::abs(frame.left - want.left) <= 2 && std::abs(frame.top - want.top) <= 2 && std::abs(frame.right - want.right) <= 2;
+        if (asked && can_size && took_width && frame_h > target_h + 2) g_pin_min_h[hwnd] = frame_h;
+        if (auto m = g_pin_min_h.find(hwnd); m != g_pin_min_h.end()) min_h = m->second;
       }
-      if (EqualRect(&home, &now)) return;
-      SetWindowPos(hwnd, nullptr, home.left, home.top, home.right - home.left, home.bottom - home.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+      // Taller than the desk shows, and it won't be smaller: that height, the
+      // bottom on the desk's bottom, so all of what is in it shows and only
+      // some of its title bar is cut
+      if (can_size && min_h > target_h) {
+        want.top = want.bottom - min_h;
+      } else if (!can_size && frame_h > target_h + 2) {
+        want.top = want.bottom - frame_h;
+      }
+      if (asked && can_size && frame.right - frame.left > want.right - want.left + 2) {
+        size = false;  // wider than its column, as wide as it can be
+        want.top = want.bottom - frame_h;
+      }
+      bool in_place = close_to(frame.left, want.left) && close_to(frame.top, want.top);
+      if (size) in_place = in_place && close_to(frame.right, want.right) && close_to(frame.bottom, want.bottom);
+      if (in_place || !not_pending(hwnd, want) || !may_correct(hwnd)) return;
+      if (size) {
+        std::lock_guard lock(g_pin_mutex);
+        g_pin_asked[hwnd] = want;
+      }
+      place_frame(hwnd, want, size);
     }
 
     void CALLBACK on_pin_event(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG id_object, LONG id_child, DWORD, DWORD) {
       if (!g_pinning || !hwnd || id_object != OBJID_WINDOW || id_child != CHILDID_SELF) return;
-      RECT desk {};
-      const auto role = pin_role(hwnd, &desk);
+      place_t place;
+      const auto role = pin_role(hwnd, &place);
       if (role == pin_role_e::none) return;
       switch (event) {
         case EVENT_SYSTEM_MOVESIZESTART:
@@ -1352,28 +1477,54 @@ namespace app_desk {
             std::lock_guard lock(g_pin_mutex);
             g_pin_moving.erase(hwnd);
           }
-          if (role == pin_role_e::front) keep_front(hwnd, desk);
+          if (role == pin_role_e::front) keep_front(hwnd, place);
           break;
         case EVENT_SYSTEM_MINIMIZESTART:
           if (role == pin_role_e::front) {
             ShowWindowAsync(hwnd, SW_RESTORE);
-            BOOST_LOG(info) << "Desk: " << describe_window(reinterpret_cast<std::uintptr_t>(hwnd)) << " stays up (the phone's front workspace)";
+            BOOST_LOG(info) << "Desk: " << describe_window(reinterpret_cast<std::uintptr_t>(hwnd)) << " stays up (in front on the phone)";
           }
+          break;
+        case EVENT_SYSTEM_MINIMIZEEND:
+          // Back from minimized: its place may have changed meanwhile (alone now,
+          // or another column), and the moves of the restore came while it
+          // was still minimized
+          if (role == pin_role_e::front) keep_front(hwnd, place);
           break;
         case EVENT_OBJECT_LOCATIONCHANGE:
           if (role != pin_role_e::front || IsIconic(hwnd)) break;
           {
             std::lock_guard lock(g_pin_mutex);
             if (g_pin_moving.contains(hwnd)) break;
-            // A fixed-size window's place is wherever the phone put it last
-            if (!sizable(hwnd)) {
-              RECT r {};
-              if (GetWindowRect(hwnd, &r)) g_pin_home[hwnd] = r;
-              break;
-            }
           }
-          keep_front(hwnd, desk);
+          keep_front(hwnd, place);
           break;
+      }
+    }
+
+    /** Every front window looked at again now and then: what an event alone
+     *  didn't settle (a correction undone while the next was held back as a
+     *  duplicate) is put right within half a second */
+    void CALLBACK recheck_pins(HWND, UINT, UINT_PTR, DWORD) {
+      if (!g_pinning) return;
+      std::vector<HWND> fronts;
+      {
+        std::lock_guard lock(g_pin_mutex);
+        for (const auto &[uuid, p] : g_pins) {
+          for (HWND h : p.front) {
+            if (!g_pin_moving.contains(h)) fronts.push_back(h);
+          }
+        }
+      }
+      for (HWND h : fronts) {
+        place_t place;
+        if (pin_role(h, &place) != pin_role_e::front) continue;
+        // (a window in front is never minimized: the phone shows it)
+        if (IsWindow(h) && IsIconic(h)) {
+          if (not_pending(h, restore_mark)) ShowWindowAsync(h, SW_SHOWNOACTIVATE);
+          continue;
+        }
+        keep_front(h, place);
       }
     }
 
@@ -1386,6 +1537,7 @@ namespace app_desk {
           const auto a = SetWinEventHook(EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MINIMIZEEND, nullptr, on_pin_event, 0, 0, flags);
           const auto b = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, on_pin_event, 0, 0, flags);
           BOOST_LOG(info) << "Desk: workspace guard " << (a && b ? "watching" : "failed to hook") << " (" << GetLastError() << ')';
+          SetTimer(nullptr, 0, 500, recheck_pins);
           MSG msg;
           while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
             TranslateMessage(&msg);
@@ -1402,39 +1554,50 @@ namespace app_desk {
     }
   }  // namespace
 
-  bool pin(const std::string &client_uuid, std::uint64_t front, const std::vector<std::uint64_t> &back) {
-    RECT desk {};
+  bool pin(const std::string &client_uuid, const std::vector<std::uint64_t> &front, const std::vector<std::uint64_t> &back) {
+    RECT desk {}, work {};
     {
       std::lock_guard lock(g_mutex);
       auto it = g_desks.find(client_uuid);
       if (it == g_desks.end() || !it->second.open) return false;
-      find_monitor(it->second.device, &desk);
+      if (HMONITOR mon = find_monitor(it->second.device, &desk)) {
+        MONITORINFO mi {sizeof(mi)};
+        work = GetMonitorInfoW(mon, &mi) ? mi.rcWork : desk;
+      }
     }
-    const auto front_hwnd = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(front));
+    auto to_hwnd = [](std::uint64_t h) {
+      return reinterpret_cast<HWND>(static_cast<std::uintptr_t>(h));
+    };
     {
       std::lock_guard lock(g_pin_mutex);
-      if (!front && back.empty()) {
+      if (front.empty() && back.empty()) {
         g_pins.erase(client_uuid);
       } else {
         auto &p = g_pins[client_uuid];
-        p.front = front_hwnd;
+        p.front.clear();
+        for (auto h : front) p.front.push_back(to_hwnd(h));
         p.back.clear();
-        for (auto h : back) p.back.insert(reinterpret_cast<HWND>(static_cast<std::uintptr_t>(h)));
+        for (auto h : back) p.back.insert(to_hwnd(h));
         p.desk = desk;
+        p.work = work;
       }
-      // Places of windows no longer in front are forgotten
-      for (auto it = g_pin_home.begin(); it != g_pin_home.end();) {
-        bool keep = false;
-        for (const auto &[uuid, p] : g_pins) keep = keep || p.front == it->first;
-        it = keep ? std::next(it) : g_pin_home.erase(it);
-      }
-      RECT r {};
-      if (front_hwnd && !IsIconic(front_hwnd) && !sizable(front_hwnd) && GetWindowRect(front_hwnd, &r)) g_pin_home[front_hwnd] = r;
+      g_pin_corrections.clear();
+      g_pin_asked.clear();
+      g_pin_pending.clear();
       g_pinning = !g_pins.empty();
     }
     ensure_pin_guard();
-    if (front_hwnd) keep_front(front_hwnd, desk);
-    BOOST_LOG(info) << "Desk: workspaces pinned, front " << (front ? describe_window(front) : std::string("none")) << ", " << back.size() << " behind";
+    std::string names;
+    for (auto h : front) {
+      const HWND hwnd = to_hwnd(h);
+      names += (names.empty() ? "" : " | ") + describe_window(h);
+      // (the phone activates the focused one; the move that follows a
+      // restore puts each in its place)
+      if (IsIconic(hwnd)) ShowWindowAsync(hwnd, SW_SHOWNOACTIVATE);
+      place_t place;
+      if (pin_role(hwnd, &place) == pin_role_e::front) keep_front(hwnd, place);
+    }
+    BOOST_LOG(info) << "Desk: workspaces pinned, front " << (names.empty() ? std::string("none") : names) << ", " << back.size() << " behind";
     return true;
   }
 
@@ -1672,11 +1835,14 @@ namespace app_desk {
     // The client is the active app: its front window gets the focus in the
     // same step, so the host never shows the new order with the old focus.
     // (Unless it, a popup of it or its thread's menu has it already: a
-    // click got there first, and activating again would close its menu.)
+    // click got there first, and activating again would close its menu.
+    // Another window of its thread is not that: the windows of Windows
+    // Terminal, File Explorer or a browser share one thread.)
     if (focus) {
       HWND top = windows.front(), fg = GetForegroundWindow();
-      const bool has = fg && (fg == top || GetAncestor(fg, GA_ROOTOWNER) == top ||
-                              GetWindowThreadProcessId(fg, nullptr) == GetWindowThreadProcessId(top, nullptr));
+      const bool popup_of_thread = fg && GetWindowThreadProcessId(fg, nullptr) == GetWindowThreadProcessId(top, nullptr) &&
+                                   (GetWindowLongPtrW(fg, GWL_STYLE) & WS_CAPTION) != WS_CAPTION && !IsIconic(fg);
+      const bool has = fg && (fg == top || GetAncestor(fg, GA_ROOTOWNER) == top || popup_of_thread);
       if (!has) host_windows::action(reinterpret_cast<std::uintptr_t>(top), host_windows::op_e::activate);
     }
     if (windows.size() < 2) return true;
@@ -2594,7 +2760,7 @@ namespace app_desk {
     return false;
   }
 
-  bool pin(const std::string &, std::uint64_t, const std::vector<std::uint64_t> &) {
+  bool pin(const std::string &, const std::vector<std::uint64_t> &, const std::vector<std::uint64_t> &) {
     return false;
   }
 

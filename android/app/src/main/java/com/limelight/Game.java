@@ -430,7 +430,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 prefConfig.videoScaleMode = PreferenceConfiguration.ScaleMode.STRETCH;
             }
 
-            if (prefConfig.autoOrientation) {
+            // The desk follows the phone: held upright, it streams a tall desk
+            deskMode = getIntent().getBooleanExtra(EXTRA_DESK, false);
+            if (prefConfig.autoOrientation || deskMode) {
                 currentOrientation = getResources().getConfiguration().orientation;
             } else {
                 currentOrientation = Configuration.ORIENTATION_LANDSCAPE;
@@ -441,15 +443,19 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
             displayWidth = shouldInvertDecoderResolution ? prefConfig.height : prefConfig.width;
             displayHeight = shouldInvertDecoderResolution ? prefConfig.width : prefConfig.height;
+            if (deskMode) {
+                int longSide = Math.max(prefConfig.width, prefConfig.height), shortSide = Math.min(prefConfig.width, prefConfig.height);
+                displayWidth = portraitMode ? shortSide : longSide;
+                displayHeight = portraitMode ? longSide : shortSide;
+            }
 
             // Enter landscape unless we're on a square screen
             setPreferredOrientationForActivity();
         }
 
-        deskMode = getIntent().getBooleanExtra(EXTRA_DESK, false);
         if (deskMode) {
-            // The desk is made to measure: this screen's shape at the configured
-            // height, so windows fill the screen without bars. Everything after
+            // The desk is made to measure: this screen's shape (upright when the
+            // phone is) at the configured height, so windows fill the screen without bars. Everything after
             // (the video view's shape, its buffer) goes by this size.
             DisplayMetrics metrics = new DisplayMetrics();
             getWindowManager().getDefaultDisplay().getRealMetrics(metrics);
@@ -1182,6 +1188,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void setPreferredOrientationForActivity() {
+        if (deskMode && !onExternelDisplay) {
+            // Any way the phone is held: a turn reconnects at the new shape
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_USER);
+            return;
+        }
         Display display = getActiveDisplay(Game.this, prefConfig);
 
         // For semi-square displays, we use more complex logic to determine which orientation to use (if any)
@@ -1224,12 +1235,35 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
+    /** The desk streamed again in the phone's new orientation: the activity
+     *  is made again (the stream ends without closing the desk, the windows
+     *  and workspaces stay) and asks for the turned size. */
+    private final Runnable deskTurn = () -> {
+        if (isFinishing() || getResources().getConfiguration().orientation == currentOrientation) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode()) return;
+        LimeLog.info("Desk: turned, streaming it again " + (getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT ? "upright" : "sideways"));
+        turning = true;
+        recreate();
+    };
+
+    /** The activity is being made again for a turn: not finished when stopped */
+    private boolean turning;
+
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
 
         // Set requested orientation for possible new screen size
         setPreferredOrientationForActivity();
+
+        if (deskMode && !onExternelDisplay) {
+            // Turned: the desk is streamed again at the new shape, once the
+            // phone has settled (a quick turn and back is no change)
+            timerHandler.removeCallbacks(deskTurn);
+            if (newConfig.orientation != currentOrientation && newConfig.orientation != Configuration.ORIENTATION_UNDEFINED) {
+                timerHandler.postDelayed(deskTurn, 400);
+            }
+        }
 
         if (virtualController != null) {
             // Refresh layout of OSC for possible new screen size
@@ -1931,7 +1965,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         }
 
-        finish();
+        if (!turning) finish();
     }
 
     public static String formatCurrentTime(long currentTimeMillis) {
@@ -2031,7 +2065,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
      * capture service on, else left Alt (Android 17 swallows Meta combos
      * before an app sees them; the service gets keys before Android does), with:
      *   1-9         that workspace (an empty one: the launcher, to fill it)
-     *   Shift+1-9   the app in front swaps places with that workspace
+     *   Shift+1-9   the focused window moves to that workspace (beside its windows)
+     *   Ctrl+1-9    the windows in front swap places with that workspace
+     *   arrows      the focus to the next window side by side (Shift: the window)
      *   D           the launcher / switcher (as in i3; Space too, where
      *               Android lets it through: it switches the keyboard language)
      *   Shift+Q     close the window in front
@@ -2070,6 +2106,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             return switcher.isShowing();
         }
         if (deskMetaDown) {
+            // Shift or Ctrl on the way to a shortcut (Alt+Shift+→, Alt+Ctrl+1): they go
+            // through as they are, the held modifier doesn't (Alt+Shift switches the
+            // host's keyboard layout)
+            if (KeyEvent.isModifierKey(code) && !switcher.isShowing()) return false;
             if (deskShortcut(event)) {
                 deskMetaUsed = true;
                 deskEatenKeys.add(code);
@@ -2090,14 +2130,33 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         return false;
     }
 
+    /** The desk is taller than wide: its windows are one above the other */
+    private boolean deskTall() {
+        return displayHeight > displayWidth;
+    }
+
     private boolean deskShortcut(KeyEvent event) {
         int code = event.getKeyCode();
         if (event.getRepeatCount() > 0) {
-            return code == KeyEvent.KEYCODE_SPACE || code == KeyEvent.KEYCODE_D || (code >= KeyEvent.KEYCODE_1 && code <= KeyEvent.KEYCODE_9) || code == KeyEvent.KEYCODE_Q;
+            return code == KeyEvent.KEYCODE_SPACE || code == KeyEvent.KEYCODE_D || (code >= KeyEvent.KEYCODE_1 && code <= KeyEvent.KEYCODE_9) || code == KeyEvent.KEYCODE_Q
+                    || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT || (deskTall() && (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN));
+        }
+        // Side by side: the focus left or right, or (with Shift) the window
+        // itself; one above the other (the phone upright), up and down too
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT
+                || (deskTall() && (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN))) {
+            int by = code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_UP ? -1 : 1;
+            if (event.isShiftPressed()) workspaces.moveTile(by);
+            else workspaces.focusTile(by);
+            return true;
         }
         if (code >= KeyEvent.KEYCODE_1 && code <= KeyEvent.KEYCODE_9) {
             int n = code - KeyEvent.KEYCODE_0;
             if (event.isShiftPressed()) {
+                // The focused window beside workspace n's
+                if (switcher.isShowing()) switcher.hide();
+                workspaces.moveFocusedTo(n);
+            } else if (event.isCtrlPressed()) {
                 workspaces.swapWith(n);
             } else if (workspaces.isEmpty(n)) {
                 openSwitcher(n);

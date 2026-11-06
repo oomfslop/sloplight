@@ -961,16 +961,12 @@ public class NvHTTP {
                 "op=order&hwnds=" + list + "&focus=" + (focus ? 1 : 0), EMPTY_POST);
     }
 
-    /** A phone's workspaces: front stays put (maximized when it can be) and can't be
-     *  moved, resized or minimized by hand; back ones are the other workspaces */
-    public void pinDesk(String front, List<String> back) throws IOException {
-        StringBuilder list = new StringBuilder();
-        for (String h : back) {
-            if (list.length() > 0) list.append(',');
-            list.append(h);
-        }
+    /** A phone's workspaces: the front windows (left to right) are laid out side by
+     *  side, or maximized alone, and can't be moved, resized or minimized by hand;
+     *  back ones are the other workspaces' */
+    public void pinDesk(List<String> front, List<String> back) throws IOException {
         openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "actions/desk",
-                "op=pin&front=" + (front == null ? "" : front) + "&back=" + list, EMPTY_POST);
+                "op=pin&front=" + String.join(",", front) + "&back=" + String.join(",", back), EMPTY_POST);
     }
 
     /** Everything on the desk; held back up to waitMs until it differs from etag */

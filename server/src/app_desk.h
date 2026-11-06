@@ -94,11 +94,13 @@ namespace app_desk {
   /** Stack the desk's windows in this order, top-most first (the client's
    *  window order is the truth); with focus, the first one is activated. */
   bool order(const std::string &client_uuid, const std::vector<std::uint64_t> &top_first, bool focus);
-  /** A phone's workspaces: the front window stays on the desk as it is put
-   *  (maximized when it can be) and can't be moved, resized or minimized by
-   *  hand; the back ones (other workspaces) can't be moved. No front and no
-   *  back: nothing pinned. False: the client has no open desk. */
-  bool pin(const std::string &client_uuid, std::uint64_t front, const std::vector<std::uint64_t> &back);
+  /** A phone's workspaces: the front windows (left to right, or top to
+   *  bottom on a tall desk) are laid out on the desk, one maximized or
+   *  several in equal columns (rows when the desk is taller than wide), and
+   *  can't be moved, resized or minimized by hand; the back ones (other
+   *  workspaces) can't be moved. No front and no back: nothing pinned.
+   *  False: the client has no open desk. */
+  bool pin(const std::string &client_uuid, const std::vector<std::uint64_t> &front, const std::vector<std::uint64_t> &back);
 
   struct window_t {
     std::uint64_t handle = 0;
