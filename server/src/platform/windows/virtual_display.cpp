@@ -390,6 +390,9 @@ namespace VDISPLAY {
       return result;
     }
     result.recommended_percent = kWindowsScalePercentages[*recommended];
+    if (const auto max = scale_index(recommended_index + get.max_scale_relative)) {
+      result.max_percent = kWindowsScalePercentages[*max];
+    }
     // Newly created displays can report an unknown current DPI (1234568).
     // Only the recommendation is needed to calculate the write; leave the
     // previous value unknown and apply the requested scale on this session.

@@ -80,6 +80,7 @@ namespace VDISPLAY {
     std::uint32_t recommended_percent = 0;
     std::uint32_t previous_percent = 0;
     std::uint32_t current_percent = 0;
+    std::uint32_t max_percent = 0;  ///< the largest scale Windows offers for this display
     LONG status = ERROR_NOT_SUPPORTED;
   };
 

@@ -4119,7 +4119,7 @@ namespace stream {
         session->config.monitor.capture_output = launch_session.desk_display;
         session->config.monitor.hide_cursor = true;
         session->config.monitor.desk_client = launch_session.client_uuid;
-        session->audio_disabled = true;
+        session->audio_disabled = !launch_session.desk_audio;
       }
       BOOST_LOG(info) << "Session capture source: role=" << static_cast<int>(launch_session.role)
                       << " source=" << static_cast<int>(session->config.monitor.capture_source)

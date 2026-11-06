@@ -40,6 +40,7 @@ namespace host_windows {
     close,
     lower,  ///< to the bottom of the z-order, without activating
     dismiss,  ///< close the window's open menus (a click on its title bar does that on Windows)
+    stash,  ///< minimized without activating another window (a phone's workspace that isn't in front)
   };
 
   bool supported();

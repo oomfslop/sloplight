@@ -288,6 +288,10 @@ public class GameMenu implements Game.GameMenuCallbacks {
     public void showMenu(GameInputDevice device) {
         List<MenuOption> options = new ArrayList<>();
 
+        if (game.isDeskMode()) {
+            options.add(new MenuOption(getString(R.string.game_menu_apps_windows), () -> game.openSwitcher(0)));
+        }
+
         options.add(new MenuOption(getString(R.string.game_menu_disconnect), game::disconnect));
 
         options.add(new MenuOption(getString(R.string.game_menu_quit_session), game::quit));

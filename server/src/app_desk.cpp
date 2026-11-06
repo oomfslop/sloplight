@@ -605,8 +605,12 @@ namespace app_desk {
         }
         abd.rc = want;
         SHAppBarMessage(ABM_QUERYPOS, &abd);
+        const RECT suggested = abd.rc;
         abd.rc = want;
         SHAppBarMessage(ABM_SETPOS, &abd);
+        BOOST_LOG(debug) << "Desk: " << (edge == ABE_RIGHT ? "right" : "bottom") << " bar wants " << want.left << ',' << want.top << '-' << want.right << ',' << want.bottom
+                         << ", shell suggests " << suggested.left << ',' << suggested.top << '-' << suggested.right << ',' << suggested.bottom
+                         << ", set " << abd.rc.left << ',' << abd.rc.top << '-' << abd.rc.right << ',' << abd.rc.bottom;
         SetWindowPos(bar, nullptr, want.left, want.top, want.right - want.left, want.bottom - want.top, SWP_NOZORDER | SWP_NOACTIVATE);
       }
 
@@ -900,6 +904,10 @@ namespace app_desk {
       UINT get, set;
       BOOL was = FALSE;
     };
+    /** Windows' minimize / maximize / restore animation ("animate windows when
+     *  minimizing and maximizing"): a phone switching workspaces does both */
+    int g_min_animate = -1;  ///< the user's value while it is off (-1: not held)
+
     animation_t g_animations[] = {
       {SPI_GETCLIENTAREAANIMATION, SPI_SETCLIENTAREAANIMATION},
       {SPI_GETMENUANIMATION, SPI_SETMENUANIMATION},
@@ -937,6 +945,12 @@ namespace app_desk {
         // These take the value as the pointer argument
         SystemParametersInfoW(a.set, 0, reinterpret_cast<PVOID>(static_cast<std::uintptr_t>(FALSE)), SPIF_SENDCHANGE);
       }
+      ANIMATIONINFO anim {sizeof(anim)};
+      if (SystemParametersInfoW(SPI_GETANIMATION, sizeof(anim), &anim, 0)) {
+        g_min_animate = anim.iMinAnimate;
+        anim.iMinAnimate = 0;
+        SystemParametersInfoW(SPI_SETANIMATION, sizeof(anim), &anim, SPIF_SENDCHANGE);
+      }
       announce_settings();
       BOOST_LOG(info) << "Desk: window snapping off on the host while streaming windows (spi " << (ok ? "ok" : "failed") << ", was " << arranging << ')';
     }
@@ -960,6 +974,12 @@ namespace app_desk {
       SystemParametersInfoW(SPI_SETWINARRANGING, arranging ? TRUE : FALSE, nullptr, SPIF_SENDCHANGE);
       for (const auto &a : g_animations) {
         SystemParametersInfoW(a.set, 0, reinterpret_cast<PVOID>(static_cast<std::uintptr_t>(a.was)), SPIF_SENDCHANGE);
+      }
+      if (g_min_animate >= 0) {
+        ANIMATIONINFO anim {sizeof(anim)};
+        anim.iMinAnimate = g_min_animate;
+        SystemParametersInfoW(SPI_SETANIMATION, sizeof(anim), &anim, SPIF_SENDCHANGE);
+        g_min_animate = -1;
       }
       announce_settings();
       BOOST_LOG(info) << "Desk: window snapping restored on the host";
@@ -1036,6 +1056,22 @@ namespace app_desk {
     const int shown_w = w, shown_h = h;  // the client's screen; the mode may be larger
     fps = std::clamp(fps, 24, 240);
     dpi = std::clamp(dpi, 96, 384);
+    if (options.direct && VDISPLAY::sudovdaReady()) {
+      // Windows offers no scale that leaves the desktop smaller than about
+      // 1100x600 points (a phone's 1440 px tall screen: 225% at most). A
+      // display large enough for the scale asked for gets it; the client is
+      // shown its top-left corner (the stream is cut, not scaled) and the
+      // work area is kept to that corner, so windows stay where it sees them.
+      const int scale = dpi * 100 / 96;
+      const auto room = [scale](int points) {
+        return ((points * scale / 100 + 7) / 8) * 8;
+      };
+      w = std::max(w, room(1104));
+      h = std::max(h, room(640));
+      if (w != shown_w || h != shown_h) {
+        BOOST_LOG(info) << "Desk: " << w << 'x' << h << " for " << scale << "%, the client sees " << shown_w << 'x' << shown_h;
+      }
+    }
     std::lock_guard lock(g_mutex);
     auto &desk = g_desks[client_uuid];
     desk.options = options;
@@ -1084,7 +1120,11 @@ namespace app_desk {
     }
     const int want_aw = aw, want_ah = ah;
     RECT atlas_rect {};
-    if (!ensure_display(desk.atlas, "sloplight-atlas-" + client_uuid, "the atlas", aw, ah, afps, custom, sudovda, [&] {
+    if (desk.options.direct) {
+      // Streamed as it is: no atlas (one that is left from an earlier open goes)
+      remove_display(desk.atlas);
+      desk.atlas_window.reset();
+    } else if (!ensure_display(desk.atlas, "sloplight-atlas-" + client_uuid, "the atlas", aw, ah, afps, custom, sudovda, [&] {
           return atlas_position(ours());
         }, atlas_rect) || aw != want_aw || ah != want_ah) {
       BOOST_LOG(warning) << "Desk: no atlas display at " << want_aw << 'x' << want_ah << " (got " << aw << 'x' << ah << ')';
@@ -1113,9 +1153,16 @@ namespace app_desk {
     // The scale can only be set on an attached display; apply it now and
     // wait for it to show, then report what the desk really runs at.
     if (monitor_dpi(find_monitor(desk.device)) != dpi && !desk.monitor_path.empty()) {
-      const auto r = VDISPLAY::set_display_scale_percent(desk.monitor_path, static_cast<std::uint32_t>(dpi * 100 / 96));
+      auto r = VDISPLAY::set_display_scale_percent(desk.monitor_path, static_cast<std::uint32_t>(dpi * 100 / 96));
       BOOST_LOG(info) << "Desk: scale " << dpi * 100 / 96 << "% requested: found=" << r.target_found << " applied=" << r.applied << " current=" << r.current_percent
-                      << " recommended=" << r.recommended_percent << " status=" << r.status;
+                      << " recommended=" << r.recommended_percent << " max=" << r.max_percent << " status=" << r.status;
+      if (!r.applied && r.max_percent > 0 && r.max_percent < static_cast<std::uint32_t>(dpi * 100 / 96)) {
+        // More than Windows takes at this size: the most it does
+        dpi = static_cast<int>(r.max_percent * 96 / 100);
+        desk.info.dpi = dpi;
+        r = VDISPLAY::set_display_scale_percent(desk.monitor_path, r.max_percent);
+        BOOST_LOG(info) << "Desk: scale " << r.requested_percent << "% (Windows' largest here) applied=" << r.applied << " current=" << r.current_percent;
+      }
     }
     for (int i = 0; i < 30; ++i) {
       const int actual = monitor_dpi(find_monitor(desk.device));
@@ -1127,16 +1174,22 @@ namespace app_desk {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     hide_desk_taskbar(find_monitor(desk.device));
-    hide_desk_taskbar(find_monitor(desk.atlas.device));
+    if (!desk.options.direct) hide_desk_taskbar(find_monitor(desk.atlas.device));
     if (find_monitor(desk.device, &rect)) reserve_work_area(client_uuid, rect, shown_w, shown_h);
-    try {
-      desk.info.capture = utf_utils::to_utf8(desk.atlas.device);
-      desk.info.capture_size[0] = aw;
-      desk.info.capture_size[1] = ah;
-    } catch (...) {
+    if (desk.options.direct) {
+      desk.info.capture.clear();
+      desk.info.capture_size[0] = rect.right - rect.left;
+      desk.info.capture_size[1] = rect.bottom - rect.top;
+    } else {
+      try {
+        desk.info.capture = utf_utils::to_utf8(desk.atlas.device);
+        desk.info.capture_size[0] = aw;
+        desk.info.capture_size[1] = ah;
+      } catch (...) {
+      }
     }
-    find_monitor(desk.atlas.device, &atlas_rect);
-    if (!desk.atlas_window || !EqualRect(&desk.atlas_window->monitor(), &atlas_rect)) {
+    if (!desk.options.direct) find_monitor(desk.atlas.device, &atlas_rect);
+    if (!desk.options.direct && (!desk.atlas_window || !EqualRect(&desk.atlas_window->monitor(), &atlas_rect))) {
       desk.atlas_window.reset();
       desk.atlas_window = std::make_shared<desk_atlas::atlas_t>(atlas_rect);
     }
@@ -1144,7 +1197,7 @@ namespace app_desk {
     g_quiet_wanted = desk.options.quiet_idle;
     apply_host_tweaks();
     BOOST_LOG(info) << "Desk: open " << desk.info.display << ' ' << desk.info.rect[2] << 'x' << desk.info.rect[3] << '@' << fps << " at " << desk.info.dpi << " dpi"
-                    << (custom ? " (exact mode)" : " (catalog mode)") << ", atlas " << desk.info.capture;
+                    << (custom ? " (exact mode)" : " (catalog mode)") << (desk.options.direct ? std::string(", streamed directly") : ", atlas " + desk.info.capture);
     return desk.info;
   }
 
@@ -1207,7 +1260,186 @@ namespace app_desk {
     }).detach();
   }
 
+  namespace {
+    /** A phone's workspaces, held as they are by the host: the front window
+     *  can't be moved, resized or minimized by hand (a move is cancelled and
+     *  undone, a minimize undone, a restore maximized again), and the other
+     *  workspaces' windows can't be moved. Kept from Windows' own events, so
+     *  what a person does on the host is undone at once, with no round trip
+     *  to the phone. */
+    struct pins_t {
+      HWND front = nullptr;
+      std::set<HWND> back;
+      RECT desk {};  ///< the desk display, where the front window belongs
+    };
+
+    std::mutex g_pin_mutex;
+    std::map<std::string, pins_t> g_pins;  ///< client uuid -> pins
+    std::map<HWND, RECT> g_pin_home;  ///< fixed-size front windows: their place outside move loops
+    std::set<HWND> g_pin_moving;  ///< pinned windows in a move/size loop now
+    std::atomic<bool> g_pinning {false};
+
+    enum class pin_role_e {
+      none,
+      front,
+      back
+    };
+
+    pin_role_e pin_role(HWND hwnd, RECT *desk = nullptr) {
+      std::lock_guard lock(g_pin_mutex);
+      for (const auto &[uuid, p] : g_pins) {
+        if (p.front == hwnd) {
+          if (desk) *desk = p.desk;
+          return pin_role_e::front;
+        }
+        if (p.back.contains(hwnd)) return pin_role_e::back;
+      }
+      return pin_role_e::none;
+    }
+
+    bool sizable(HWND hwnd) {
+      return (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_THICKFRAME) != 0;
+    }
+
+    /** The front window back in shape: on the desk, maximized when it can be,
+     *  else where it was */
+    void keep_front(HWND hwnd, const RECT &desk) {
+      if (!IsWindow(hwnd) || IsIconic(hwnd)) return;
+      RECT now {};
+      if (!GetWindowRect(hwnd, &now)) return;
+      const POINT center {(now.left + now.right) / 2, (now.top + now.bottom) / 2};
+      const bool on_desk = IsRectEmpty(&desk) || PtInRect(&desk, center);
+      if (sizable(hwnd)) {
+        if (on_desk && IsZoomed(hwnd)) return;
+        if (!on_desk) {
+          // Taken to another display (Win+Shift+arrow): maximized on the desk again
+          BOOST_LOG(info) << "Desk: " << describe_window(reinterpret_cast<std::uintptr_t>(hwnd)) << " left the desk; back in front";
+          if (IsZoomed(hwnd)) ShowWindowAsync(hwnd, SW_RESTORE);
+          SetWindowPos(hwnd, nullptr, desk.left, desk.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+        }
+        ShowWindowAsync(hwnd, SW_MAXIMIZE);
+        return;
+      }
+      RECT home {};
+      {
+        std::lock_guard lock(g_pin_mutex);
+        auto it = g_pin_home.find(hwnd);
+        if (it == g_pin_home.end()) return;
+        home = it->second;
+      }
+      if (EqualRect(&home, &now)) return;
+      SetWindowPos(hwnd, nullptr, home.left, home.top, home.right - home.left, home.bottom - home.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+    }
+
+    void CALLBACK on_pin_event(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG id_object, LONG id_child, DWORD, DWORD) {
+      if (!g_pinning || !hwnd || id_object != OBJID_WINDOW || id_child != CHILDID_SELF) return;
+      RECT desk {};
+      const auto role = pin_role(hwnd, &desk);
+      if (role == pin_role_e::none) return;
+      switch (event) {
+        case EVENT_SYSTEM_MOVESIZESTART:
+          {
+            std::lock_guard lock(g_pin_mutex);
+            g_pin_moving.insert(hwnd);
+          }
+          // The move loop ends when the window loses the mouse capture,
+          // which its default handling of WM_CANCELMODE does
+          PostMessageW(hwnd, WM_CANCELMODE, 0, 0);
+          BOOST_LOG(info) << "Desk: a move or resize of " << describe_window(reinterpret_cast<std::uintptr_t>(hwnd)) << " is cancelled (a phone's workspace)";
+          break;
+        case EVENT_SYSTEM_MOVESIZEEND:
+          {
+            std::lock_guard lock(g_pin_mutex);
+            g_pin_moving.erase(hwnd);
+          }
+          if (role == pin_role_e::front) keep_front(hwnd, desk);
+          break;
+        case EVENT_SYSTEM_MINIMIZESTART:
+          if (role == pin_role_e::front) {
+            ShowWindowAsync(hwnd, SW_RESTORE);
+            BOOST_LOG(info) << "Desk: " << describe_window(reinterpret_cast<std::uintptr_t>(hwnd)) << " stays up (the phone's front workspace)";
+          }
+          break;
+        case EVENT_OBJECT_LOCATIONCHANGE:
+          if (role != pin_role_e::front || IsIconic(hwnd)) break;
+          {
+            std::lock_guard lock(g_pin_mutex);
+            if (g_pin_moving.contains(hwnd)) break;
+            // A fixed-size window's place is wherever the phone put it last
+            if (!sizable(hwnd)) {
+              RECT r {};
+              if (GetWindowRect(hwnd, &r)) g_pin_home[hwnd] = r;
+              break;
+            }
+          }
+          keep_front(hwnd, desk);
+          break;
+      }
+    }
+
+    void ensure_pin_guard() {
+      static std::once_flag once;
+      std::call_once(once, [] {
+        std::thread([] {
+          platf::syncThreadDesktop();
+          const DWORD flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
+          const auto a = SetWinEventHook(EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MINIMIZEEND, nullptr, on_pin_event, 0, 0, flags);
+          const auto b = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, on_pin_event, 0, 0, flags);
+          BOOST_LOG(info) << "Desk: workspace guard " << (a && b ? "watching" : "failed to hook") << " (" << GetLastError() << ')';
+          MSG msg;
+          while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+          }
+        }).detach();
+      });
+    }
+
+    void unpin(const std::string &client_uuid) {
+      std::lock_guard lock(g_pin_mutex);
+      g_pins.erase(client_uuid);
+      g_pinning = !g_pins.empty();
+    }
+  }  // namespace
+
+  bool pin(const std::string &client_uuid, std::uint64_t front, const std::vector<std::uint64_t> &back) {
+    RECT desk {};
+    {
+      std::lock_guard lock(g_mutex);
+      auto it = g_desks.find(client_uuid);
+      if (it == g_desks.end() || !it->second.open) return false;
+      find_monitor(it->second.device, &desk);
+    }
+    const auto front_hwnd = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(front));
+    {
+      std::lock_guard lock(g_pin_mutex);
+      if (!front && back.empty()) {
+        g_pins.erase(client_uuid);
+      } else {
+        auto &p = g_pins[client_uuid];
+        p.front = front_hwnd;
+        p.back.clear();
+        for (auto h : back) p.back.insert(reinterpret_cast<HWND>(static_cast<std::uintptr_t>(h)));
+        p.desk = desk;
+      }
+      // Places of windows no longer in front are forgotten
+      for (auto it = g_pin_home.begin(); it != g_pin_home.end();) {
+        bool keep = false;
+        for (const auto &[uuid, p] : g_pins) keep = keep || p.front == it->first;
+        it = keep ? std::next(it) : g_pin_home.erase(it);
+      }
+      RECT r {};
+      if (front_hwnd && !IsIconic(front_hwnd) && !sizable(front_hwnd) && GetWindowRect(front_hwnd, &r)) g_pin_home[front_hwnd] = r;
+      g_pinning = !g_pins.empty();
+    }
+    ensure_pin_guard();
+    if (front_hwnd) keep_front(front_hwnd, desk);
+    BOOST_LOG(info) << "Desk: workspaces pinned, front " << (front ? describe_window(front) : std::string("none")) << ", " << back.size() << " behind";
+    return true;
+  }
+
   void close(const std::string &client_uuid) {
+    unpin(client_uuid);
     g_shift_x = 0;
     g_shift_y = 0;
     std::lock_guard lock(g_mutex);
@@ -2359,6 +2591,10 @@ namespace app_desk {
   }
 
   bool park(const std::string &, std::uint64_t) {
+    return false;
+  }
+
+  bool pin(const std::string &, std::uint64_t, const std::vector<std::uint64_t> &) {
     return false;
   }
 

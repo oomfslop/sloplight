@@ -2836,6 +2836,15 @@ namespace video {
     return probe_status.advertised_capabilities;
   }
 
+  /** A desk streamed as it is (phones) is shown 1:1 from its top-left corner:
+   *  a mode larger than the client's screen (for Windows scaling beyond what
+   *  a display of the screen's size allows) is cut off, not scaled. */
+  void apply_desk_framing(platf::display_t &disp, const config_t &config) {
+    if (config.desk_client.empty()) return;
+    const auto options = app_desk::options(config.desk_client);
+    if (options && options->direct) disp.pad_output = true;
+  }
+
   void reset_display(
     std::shared_ptr<platf::display_t> &disp,
     const platf::mem_type_e &type,
@@ -2860,6 +2869,7 @@ namespace video {
       disp = platf::display(type, display_name, config, required_adapter);
       if (disp) {
         disp->recovery_capture_instance = capture_recovery::observations().begin_capture();
+        apply_desk_framing(*disp, config);
         break;
       }
 
@@ -3107,6 +3117,7 @@ namespace video {
       disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_config);
       if (disp) {
         disp->recovery_capture_instance = capture_recovery::observations().begin_capture();
+        apply_desk_framing(*disp, capture_config);
         break;
       }
 
@@ -5550,8 +5561,9 @@ namespace video {
     float ht = config.height;
 
     auto scalar = std::fminf(wt / wd, ht / hd);
-    // App-window capture is padded, not scaled, when it fits the frame.
-    const bool padded = display->pad_output && scalar >= 1.0f;
+    // App-window capture is shown 1:1 from the top-left: padded when it fits
+    // the frame, cut off when it is larger (a desk with room for its scale).
+    const bool padded = display->pad_output;
     if (padded) {
       scalar = 1.0f;
     }

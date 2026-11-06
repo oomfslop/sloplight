@@ -299,6 +299,20 @@ public class NvConnection {
         //
         
         NvApp app = context.streamConfig.getApp();
+
+        if (context.streamConfig.getDeskMode()) {
+            // App windows: the desk is opened first (at the stream's size and
+            // the scale the client asked for), then streamed. It runs beside
+            // whatever app the host is streaming, nothing is quit.
+            int scale = context.streamConfig.getDisplayScale() > 0 ? context.streamConfig.getDisplayScale() : 100;
+            h.openDesk(context.negotiatedWidth, context.negotiatedHeight, context.streamConfig.getLaunchRefreshRate(),
+                    96 * scale / 100, context.streamConfig.getEfficientEncoding() != 0, context.streamConfig.getQuietIdle());
+            if (!h.launchApp(context, "launch", null, app.getAppId(), context.negotiatedHdr)) {
+                context.connListener.displayMessage("The host didn't start the app windows stream");
+                return false;
+            }
+            return true;
+        }
         
         // If the client did not provide an exact app ID, do a lookup with the applist
         if (!context.streamConfig.getApp().isInitialized()) {

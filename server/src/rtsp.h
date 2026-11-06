@@ -114,6 +114,7 @@ namespace rtsp_stream {
     int display_scale_percent = 0;  ///< Windows scaling for this client's virtual display (a phone wants more than a monitor); 0: the host's setting
     bool quiet_idle = false;  ///< nothing repeated faster than about a frame a second while the picture stands still
     std::string desk_display;  ///< desk session: capture this display (the client's desk) instead of a window
+    bool desk_audio = false;  ///< desk session with the host's audio (phones: one app at a time, its sound with it)
     std::string virtual_display_catalog_error;
     bool client_display_mode_override;
     // Exact refresh requested by a per-client display-mode override, expressed

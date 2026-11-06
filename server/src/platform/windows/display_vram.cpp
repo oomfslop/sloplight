@@ -1356,8 +1356,12 @@ namespace platf::dxgi {
 
       // Ensure aspect ratio is maintained
       auto scalar = std::fminf(out_width / in_width, out_height / in_height);
-      if (pad_output && scalar >= 1.0f) {
-        // App-window capture fits in the frame: keep it 1:1, top-left.
+      // App-window capture stays 1:1 from the top-left: padded when it fits
+      // the frame, cut off when it is larger (the viewport reaches past the
+      // frame and the rasterizer clips it). Not with the planar 4:4:4 target:
+      // its planes are stacked in one texture, a taller viewport would draw
+      // into the next plane.
+      if (pad_output && (scalar >= 1.0f || format != DXGI_FORMAT_R16_UINT)) {
         scalar = 1.0f;
       }
       auto out_width_f = in_width * scalar;

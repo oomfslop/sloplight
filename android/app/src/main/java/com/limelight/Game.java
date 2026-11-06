@@ -9,6 +9,8 @@ import static com.limelight.utils.ServerHelper.getActiveDisplay;
 import static com.limelight.utils.ServerHelper.getSecondaryDisplay;
 
 import com.limelight.binding.PlatformBinding;
+import com.limelight.desk.SwitcherOverlay;
+import com.limelight.desk.Workspaces;
 import com.limelight.binding.audio.AndroidAudioRenderer;
 import com.limelight.binding.input.ControllerHandler;
 import com.limelight.binding.input.GameInputDevice;
@@ -268,6 +270,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public static final String EXTRA_VDISPLAY = "VirtualDisplay";
     public static final String EXTRA_SERVER_COMMANDS = "ServerCommands";
     public static final String EXTRA_DISPLAY_ID = "DisplayID";
+    public static final String EXTRA_DESK = "Desk";
 
     public static final String CLIPBOARD_IDENTIFIER = "ArtemisStreaming";
 
@@ -286,6 +289,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean clipboardSyncRunning = false;
 
     private NvHTTP httpConn;
+
+    // App windows (desk mode): workspaces of host windows and their switcher
+    private boolean deskMode;
+    private Workspaces workspaces;
+    private SwitcherOverlay switcher;
+    private boolean deskMetaDown, deskMetaSent, deskMetaUsed;
+    private final java.util.Set<Integer> deskEatenKeys = new java.util.HashSet<>();
 
     public interface GameMenuCallbacks {
         void showMenu(GameInputDevice devic);
@@ -436,6 +446,24 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             setPreferredOrientationForActivity();
         }
 
+        deskMode = getIntent().getBooleanExtra(EXTRA_DESK, false);
+        if (deskMode) {
+            // The desk is made to measure: this screen's shape at the configured
+            // height, so windows fill the screen without bars. Everything after
+            // (the video view's shape, its buffer) goes by this size.
+            DisplayMetrics metrics = new DisplayMetrics();
+            getWindowManager().getDefaultDisplay().getRealMetrics(metrics);
+            int screenLong = Math.max(metrics.widthPixels, metrics.heightPixels);
+            int screenShort = Math.min(metrics.widthPixels, metrics.heightPixels);
+            int shortSide = Math.min(displayWidth, displayHeight);
+            int longSide = Math.min(4096, Math.round((float) shortSide * screenLong / screenShort / 8) * 8);
+            if (displayWidth >= displayHeight) displayWidth = longSide;
+            else displayHeight = longSide;
+            prefConfig.width = Math.max(displayWidth, displayHeight);
+            prefConfig.height = Math.min(displayWidth, displayHeight);
+            LimeLog.info("Desk: " + displayWidth + "x" + displayHeight);
+        }
+
 
         if (
                 prefConfig.videoScaleMode == PreferenceConfiguration.ScaleMode.STRETCH ||
@@ -572,6 +600,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         appId = Game.this.getIntent().getIntExtra(EXTRA_APP_ID, StreamConfiguration.INVALID_APP_ID);
         uniqueId = Game.this.getIntent().getStringExtra(EXTRA_UNIQUEID);
         vDisplay = Game.this.getIntent().getBooleanExtra(EXTRA_VDISPLAY, false);
+        deskMode = Game.this.getIntent().getBooleanExtra(EXTRA_DESK, false);
         serverCommands = Game.this.getIntent().getStringArrayListExtra(EXTRA_SERVER_COMMANDS);
         boolean appSupportsHdr = Game.this.getIntent().getBooleanExtra(EXTRA_APP_HDR, false);
         byte[] derCertData = Game.this.getIntent().getByteArrayExtra(EXTRA_SERVER_CERT);
@@ -778,6 +807,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         StreamConfiguration config = new StreamConfiguration.Builder()
+                .setDeskMode(deskMode)
                 .setResolution(
                         displayWidth,
                         displayHeight
@@ -788,7 +818,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setEfficientEncoding(prefConfig.efficientEncoding)
                 .setEfficientLevel(BuildConfig.DEBUG && prefConfig.debugEfficientLevel >= 0 ? prefConfig.debugEfficientLevel : (prefConfig.efficientEncoding ? 1 : 0))
                 .setQuietIdle(prefConfig.quietIdle)
-                .setDisplayScale(prefConfig.desktopScale > 0 ? prefConfig.desktopScale : autoDesktopScale(displayWidth, displayHeight))
+                // (the desk asks for the scale as it is: the host takes the most Windows allows)
+                .setDisplayScale(prefConfig.desktopScale > 0 ? (deskMode ? prefConfig.desktopScale : windowsScaleLimit(prefConfig.desktopScale, displayWidth, displayHeight)) : autoDesktopScale(displayWidth, displayHeight))
                 .setResolutionScaleFactor(prefConfig.resolutionScaleFactor)
                 .setApp(app)
                 .setEnableUltraLowLatency(prefConfig.enableUltraLowLatency)
@@ -813,6 +844,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 PlatformBinding.getCryptoProvider(this), serverCert);
         controllerHandler = new ControllerHandler(this, conn, this, prefConfig);
         keyboardTranslator = new KeyboardTranslator(prefConfig);
+
+        if (deskMode && httpConn != null) {
+            setupWorkspaces(displayWidth, displayHeight);
+        }
 
         InputManager inputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
         inputManager.registerInputDeviceListener(keyboardTranslator, null);
@@ -1472,9 +1507,20 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         float streamPpi = dpi / fit;
         int percent = Math.round(streamPpi / 192f * 4) * 25;
         int windowsMax = (int) Math.floor(streamShort / 720f * 4) * 25;
-        int scale = Math.max(100, Math.min(Math.min(300, windowsMax), percent));
+        int scale = Math.max(100, Math.min(deskMode ? 300 : Math.min(300, windowsMax), percent));
         LimeLog.info("Desktop scale: " + streamPpi + " stream pixels per inch on this screen, " + scale + "%");
         return scale;
+    }
+
+    // Windows refuses a scale that leaves less than a 720 px tall desktop (it
+    // would stay at 100%): a larger one asked for is lowered to what this stream allows
+    private int windowsScaleLimit(int percent, int streamWidth, int streamHeight) {
+        int windowsMax = Math.max(100, (int) Math.floor(Math.min(streamWidth, streamHeight) / 720f * 4) * 25);
+        if (percent > windowsMax) {
+            LimeLog.info("Desktop scale: " + percent + "% is more than Windows takes at this resolution, " + windowsMax + "%");
+            return windowsMax;
+        }
+        return percent;
     }
 
     private float prepareDisplayForRendering(Display currentDisplay) {
@@ -1734,6 +1780,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         instance = null;
         timerHandler.removeCallbacksAndMessages(null);
 
+        if (workspaces != null) {
+            workspaces.stop();
+        }
+
         if (prefConfig.enableFullExDisplay) handleDisplayRemoved();
 
         if (controllerHandler != null) {
@@ -1917,6 +1967,158 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             setInputGrabState(!grabbedInput);
         }
     };
+
+    // --- App windows (desk mode) ---
+
+    private void setupWorkspaces(int deskWidth, int deskHeight) {
+        workspaces = new Workspaces(this, httpConn, getIntent().getStringExtra(EXTRA_PC_UUID), new Workspaces.Listener() {
+            @Override
+            public void onWorkspacesChanged() {
+                if (switcher != null) switcher.refresh();
+            }
+
+            @Override
+            public void onSwitched(int n, Workspaces.Window window) {
+                if (switcher == null) return;
+                if (n == 0) switcher.showHud("No workspaces");
+                else switcher.showHud(n + "   " + (window != null ? window.label() : ""));
+            }
+
+            @Override
+            public void onEmpty() {
+                if (switcher != null && !switcher.isShowing() && connected) openSwitcher(0);
+            }
+
+            @Override
+            public void onMessage(String text) {
+                if (switcher != null) switcher.showHud(text);
+            }
+        });
+        workspaces.setDeskSize(deskWidth, deskHeight);
+        switcher = new SwitcherOverlay(this, workspaces, this::onSwitcherHidden);
+        ((ViewGroup) findViewById(android.R.id.content)).addView(switcher,
+                new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    public boolean isDeskMode() {
+        return deskMode && switcher != null;
+    }
+
+    /** The launcher / window switcher; slot > 0: to fill that empty workspace */
+    public void openSwitcher(int slot) {
+        if (switcher == null) return;
+        // Keys held on the host now would stay down there while the switcher has them
+        releaseHostModifiers();
+        switcher.show(slot);
+    }
+
+    private void onSwitcherHidden() {
+        hideSystemUi(50);
+    }
+
+    private void releaseHostModifiers() {
+        int[] keys = {KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_LCONTROL, KeyboardTranslator.VK_LMENU};
+        if (modifierFlags != 0) {
+            for (int k : keys) {
+                conn.sendKeyboardInput((short) k, KeyboardPacket.KEY_UP, (byte) 0, (byte) 0);
+            }
+            modifierFlags = 0;
+        }
+    }
+
+    /**
+     * Desk-mode shortcuts, Meta (Win / Cmd / Search) with the keyboard
+     * capture service on, else left Alt (Android 17 swallows Meta combos
+     * before an app sees them; the service gets keys before Android does), with:
+     *   1-9         that workspace (an empty one: the launcher, to fill it)
+     *   Shift+1-9   the app in front swaps places with that workspace
+     *   D           the launcher / switcher (as in i3; Space too, where
+     *               Android lets it through: it switches the keyboard language)
+     *   Shift+Q     close the window in front
+     * The modifier is held back from the host until a key that isn't one of
+     * these comes (then both go), so the host doesn't see a lone Win (Start
+     * menu) or Alt (menu bar) press. Pressed and let go alone, it is sent as such.
+     * While the switcher is open it gets every key.
+     */
+    private boolean handleDeskKey(KeyEvent event, boolean down) {
+        int code = event.getKeyCode();
+        final boolean metaMode = KeyboardAccessibilityService.running;
+        final short modVk = (short) (metaMode ? KeyboardTranslator.VK_LWIN : KeyboardTranslator.VK_LMENU);
+        final int modFlag = metaMode ? KeyboardPacket.MODIFIER_META : KeyboardPacket.MODIFIER_ALT;
+        if (metaMode ? (code == KeyEvent.KEYCODE_META_LEFT || code == KeyEvent.KEYCODE_META_RIGHT) : code == KeyEvent.KEYCODE_ALT_LEFT) {
+            if (down) {
+                if (event.getRepeatCount() == 0) {
+                    deskMetaDown = true;
+                    deskMetaSent = false;
+                    deskMetaUsed = false;
+                }
+                return true;
+            }
+            deskMetaDown = false;
+            if (deskMetaSent) {
+                modifierFlags &= ~modFlag;
+                conn.sendKeyboardInput(modVk, KeyboardPacket.KEY_UP, (byte) modifierFlags, (byte) 0);
+            } else if (!deskMetaUsed && !switcher.isShowing()) {
+                conn.sendKeyboardInput(modVk, KeyboardPacket.KEY_DOWN, (byte) (modifierFlags | modFlag), (byte) 0);
+                conn.sendKeyboardInput(modVk, KeyboardPacket.KEY_UP, (byte) modifierFlags, (byte) 0);
+            }
+            deskMetaSent = false;
+            return true;
+        }
+        if (!down) {
+            if (deskEatenKeys.remove(code)) return true;
+            return switcher.isShowing();
+        }
+        if (deskMetaDown) {
+            if (deskShortcut(event)) {
+                deskMetaUsed = true;
+                deskEatenKeys.add(code);
+                return true;
+            }
+            if (!switcher.isShowing() && !deskMetaSent) {
+                // Not ours: the host gets the modifier now, then this key as usual
+                deskMetaSent = true;
+                modifierFlags |= modFlag;
+                conn.sendKeyboardInput(modVk, KeyboardPacket.KEY_DOWN, (byte) modifierFlags, (byte) 0);
+            }
+        }
+        if (switcher.isShowing()) {
+            switcher.onKey(event);
+            deskEatenKeys.add(code);
+            return true;
+        }
+        return false;
+    }
+
+    private boolean deskShortcut(KeyEvent event) {
+        int code = event.getKeyCode();
+        if (event.getRepeatCount() > 0) {
+            return code == KeyEvent.KEYCODE_SPACE || code == KeyEvent.KEYCODE_D || (code >= KeyEvent.KEYCODE_1 && code <= KeyEvent.KEYCODE_9) || code == KeyEvent.KEYCODE_Q;
+        }
+        if (code >= KeyEvent.KEYCODE_1 && code <= KeyEvent.KEYCODE_9) {
+            int n = code - KeyEvent.KEYCODE_0;
+            if (event.isShiftPressed()) {
+                workspaces.swapWith(n);
+            } else if (workspaces.isEmpty(n)) {
+                openSwitcher(n);
+            } else {
+                if (switcher.isShowing()) switcher.hide();
+                workspaces.switchTo(n);
+            }
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_D || code == KeyEvent.KEYCODE_SPACE) {
+            if (switcher.isShowing()) switcher.hide();
+            else openSwitcher(0);
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_Q && event.isShiftPressed()) {
+            int n = workspaces.current();
+            if (n > 0) workspaces.close(n);
+            return true;
+        }
+        return false;
+    }
 
     // Returns true if the key stroke was consumed
     private boolean handleSpecialKeys(int androidKeyCode, boolean down) {
@@ -2104,6 +2306,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         boolean handled = false;
 
+        if (deskMode && handleDeskKey(event, true)) {
+            return true;
+        }
+
         if (ControllerHandler.isGameControllerDevice(event.getDevice())) {
             // Always try the controller handler first, unless it's an alphanumeric keyboard device.
             // Otherwise, controller handler will eat keyboard d-pad events.
@@ -2193,6 +2399,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         boolean handled = false;
+        if (deskMode && handleDeskKey(event, false)) {
+            return true;
+        }
         if (ControllerHandler.isGameControllerDevice(event.getDevice())) {
             // Always try the controller handler first, unless it's an alphanumeric keyboard device.
             // Otherwise, controller handler will eat keyboard d-pad events.
@@ -3498,7 +3707,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             new Thread() {
                 public void run() {
                     conn.stop();
-                    if (httpConn != null && quitOnStop) {
+                    if (httpConn != null && quitOnStop && deskMode) {
+                        try {
+                            httpConn.closeDesk();
+                        } catch (Exception e) {
+                            LimeLog.warning("Desk: close failed: " + e);
+                        }
+                    } else if (httpConn != null && quitOnStop) {
                         try {
                             sleep(1000);
                             httpConn.quitApp();
@@ -3715,6 +3930,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 connected = true;
                 connecting = false;
                 updatePipAutoEnter();
+
+                if (workspaces != null) {
+                    workspaces.start();
+                }
 
                 // Hide the mouse cursor now after a short delay.
                 // Doing it before dismissing the spinner seems to be undone
@@ -4015,6 +4234,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void onBackPressed() {
+        if (switcher != null && switcher.isShowing()) {
+            switcher.hide();
+            return;
+        }
         if(prefConfig.enableBackMenu){
             showGameMenu(null);
             return;

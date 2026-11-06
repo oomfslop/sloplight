@@ -11,6 +11,9 @@ import java.util.List;
 
 public class KeyboardAccessibilityService extends AccessibilityService {
 
+    /** On: the stream gets keys before Android's own shortcuts (Win/Meta combos) */
+    public static volatile boolean running = false;
+
     //不屏蔽的按键列表
     private final static List BLACKLIST_KEYS = Arrays.asList(
             KeyEvent.KEYCODE_VOLUME_UP,
@@ -51,6 +54,7 @@ public class KeyboardAccessibilityService extends AccessibilityService {
     @Override
     public void onServiceConnected() {
         LimeLog.info("Keyboard service is connected");
+        running = true;
         AccessibilityServiceInfo info = new AccessibilityServiceInfo();
         info.packageNames = new String[] { BuildConfig.APPLICATION_ID };
         info.eventTypes = AccessibilityEvent.TYPES_ALL_MASK;
@@ -64,6 +68,18 @@ public class KeyboardAccessibilityService extends AccessibilityService {
     public void onAccessibilityEvent(AccessibilityEvent accessibilityEvent) {
 //        LimeLog.info("onAccessibilityEvent:"+accessibilityEvent.toString());
     }
+    @Override
+    public boolean onUnbind(android.content.Intent intent) {
+        running = false;
+        return super.onUnbind(intent);
+    }
+
+    @Override
+    public void onDestroy() {
+        running = false;
+        super.onDestroy();
+    }
+
     @Override
     public void onInterrupt() {
 

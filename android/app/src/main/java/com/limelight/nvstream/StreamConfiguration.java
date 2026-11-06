@@ -18,6 +18,7 @@ public class StreamConfiguration {
     private int efficientEncoding;
     private boolean quietIdle;
     private int displayScale;
+    private boolean deskMode;
     private int resolutionScaleFactor;
     private int clientRefreshRateX100;
     private int bitrate;
@@ -84,6 +85,12 @@ public class StreamConfiguration {
         // Sloplight hosts: Windows scaling for the virtual display, in percent (0: the host's)
         public StreamConfiguration.Builder setDisplayScale(int percent) {
             config.displayScale = percent;
+            return this;
+        }
+
+        // Sloplight hosts: stream the client's desk of app windows instead of an app
+        public StreamConfiguration.Builder setDeskMode(boolean enable) {
+            config.deskMode = enable;
             return this;
         }
 
@@ -226,6 +233,9 @@ public class StreamConfiguration {
     public int getEfficientEncoding() { return efficientEncoding; }
     public boolean getQuietIdle() { return quietIdle; }
     public int getDisplayScale() { return displayScale; }
+
+    /** App windows: the stream shows the client's desk (host windows moved onto a private display) */
+    public boolean getDeskMode() { return deskMode; }
 
     public int getResolutionScaleFactor() { return resolutionScaleFactor; }
     

@@ -4231,6 +4231,7 @@ namespace nvhttp {
       options.background_qp = num("bgqp", 0);
       options.efficient = num("efficient", 0) != 0;
       options.quiet_idle = num("quiet", 0) != 0;
+      options.direct = num("direct", 0) != 0;
       const auto desk = app_desk::open(uuid, num("w", 0), num("h", 0), num("fps", 60), num("dpi", 96), options);
       if (!desk.valid) {
         write_json(response, {{"status", false}, {"error", "the desk display could not be created"}}, SimpleWeb::StatusCode::server_error_service_unavailable);
@@ -4256,6 +4257,19 @@ namespace nvhttp {
       BOOST_LOG(info) << "Desk trace: client order " << get_arg(args, "hwnds", "") << (get_arg(args, "focus", "0") == "1" ? " +focus" : "")
                       << " (foreground " << app_desk::describe_window(app_desk::foreground_window()) << ')';
       const bool ok = app_desk::order(uuid, top_first, get_arg(args, "focus", "0") == "1");
+      write_json(response, {{"status", ok}}, ok ? SimpleWeb::StatusCode::success_ok : SimpleWeb::StatusCode::client_error_not_found);
+      return;
+    }
+    if (op == "pin") {
+      std::vector<std::uint64_t> back;
+      std::stringstream list(get_arg(args, "back", ""));
+      std::string item;
+      while (std::getline(list, item, ',')) {
+        if (auto h = parse_window_handle(item)) back.push_back(h);
+      }
+      const auto front_text = get_arg(args, "front", "");
+      const std::uint64_t front = front_text.empty() ? 0 : parse_window_handle(front_text);
+      const bool ok = app_desk::pin(uuid, front, back);
       write_json(response, {{"status", ok}}, ok ? SimpleWeb::StatusCode::success_ok : SimpleWeb::StatusCode::client_error_not_found);
       return;
     }
@@ -4823,6 +4837,7 @@ namespace nvhttp {
     launch_session->role_generation = launch_session->id;
     launch_session->host_audio = false;
     launch_session->continuous_audio = false;
+    launch_session->desk_audio = get_arg(args, "deskAudio", "0") == "1";
     if (!paired_client_uuid_enabled(launch_session->client_uuid)) {
       tree.put("root.<xmlattr>.status_code", 403);
       tree.put("root.<xmlattr>.status_message", "Paired client authorization was revoked before stream admission");

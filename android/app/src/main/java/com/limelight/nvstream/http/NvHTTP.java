@@ -474,7 +474,8 @@ public class NvHTTP {
     private HttpUrl getCompleteUrl(HttpUrl baseUrl, String path, String query) {
         return baseUrl.newBuilder()
                 .addPathSegments(path)
-                .query(query)
+                // Queries are built encoded (values that need it go through enc())
+                .encodedQuery(query)
                 .addQueryParameter("devicename", deviceName)
                 .addQueryParameter("uniqueid", uniqueId)
                 .addQueryParameter("uuid", UUID.randomUUID().toString())
@@ -884,6 +885,7 @@ public class NvHTTP {
             "&rikey="+bytesToHex(context.riKey.getEncoded()) +
             "&rikeyid="+context.riKeyId +
             (!enableHdr ? "" : "&hdrMode=1&clientHdrCapVersion=0&clientHdrCapSupportedFlagsInUint32=0&clientHdrCapMetaDataId=NV_STATIC_METADATA_TYPE_1&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0") +
+            (context.streamConfig.getDeskMode() ? "&desk=1&deskAudio=1" : "") +
             "&virtualDisplay=" + (context.streamConfig.getVirtualDisplay() ? 1 : 0) +
             (context.streamConfig.getEfficientEncoding() != 0 ? "&efficient=" + context.streamConfig.getEfficientEncoding() : "") +
             (context.streamConfig.getQuietIdle() ? "&quiet=1" : "") +
@@ -920,6 +922,100 @@ public class NvHTTP {
         }
 
         return true;
+    }
+
+    // App windows (Sloplight hosts): the client's desk, a private host display
+    // the stream shows, and the host windows moved onto it.
+
+    private static final RequestBody EMPTY_POST = RequestBody.create(new byte[0], MediaType.parse("text/plain"));
+
+    /** A query value, percent-encoded (queries are passed on as encoded) */
+    private static String enc(String s) {
+        try {
+            return java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20");
+        } catch (java.io.UnsupportedEncodingException e) {
+            return s;
+        }
+    }
+
+    /** Opens (or retunes) the desk, streamed as it is; JSON with its rect and dpi */
+    public String openDesk(int width, int height, int fps, int dpi, boolean efficient, boolean quiet) throws IOException {
+        return openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), "actions/desk",
+                "op=open&direct=1&w=" + width + "&h=" + height + "&fps=" + fps + "&dpi=" + dpi +
+                        "&efficient=" + (efficient ? 1 : 0) + "&quiet=" + (quiet ? 1 : 0), EMPTY_POST);
+    }
+
+    /** Puts every window on the desk back where it was */
+    public void closeDesk() throws IOException {
+        openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "actions/desk", "op=close", EMPTY_POST);
+    }
+
+    /** Stacks the desk's windows, top-most first; with focus the first one is activated */
+    public void orderDesk(List<String> topFirst, boolean focus) throws IOException {
+        StringBuilder list = new StringBuilder();
+        for (String h : topFirst) {
+            if (list.length() > 0) list.append(',');
+            list.append(h);
+        }
+        openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "actions/desk",
+                "op=order&hwnds=" + list + "&focus=" + (focus ? 1 : 0), EMPTY_POST);
+    }
+
+    /** A phone's workspaces: front stays put (maximized when it can be) and can't be
+     *  moved, resized or minimized by hand; back ones are the other workspaces */
+    public void pinDesk(String front, List<String> back) throws IOException {
+        StringBuilder list = new StringBuilder();
+        for (String h : back) {
+            if (list.length() > 0) list.append(',');
+            list.append(h);
+        }
+        openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "actions/desk",
+                "op=pin&front=" + (front == null ? "" : front) + "&back=" + list, EMPTY_POST);
+    }
+
+    /** Everything on the desk; held back up to waitMs until it differs from etag */
+    public String getDeskLayout(String etag, int waitMs) throws IOException {
+        return openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), "actions/desk-layout",
+                "etag=" + etag + "&wait=" + waitMs);
+    }
+
+    /** The host's top-level windows */
+    public String getHostWindows() throws IOException {
+        return openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "actions/windows");
+    }
+
+    /** Acts on a host window: adopt (onto the desk at x, y, w x h), release, close, activate... */
+    public void windowAction(String hwnd, String op, int x, int y, int w, int h) throws IOException {
+        openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "actions/window",
+                "hwnd=" + hwnd + "&op=" + op + "&x=" + x + "&y=" + y + "&w=" + w + "&h=" + h, EMPTY_POST);
+    }
+
+    public byte[] getWindowIcon(String hwnd) throws IOException {
+        ResponseBody body = openHttpConnection(httpClientLongConnectTimeout, getHttpsUrl(true), "actions/window-icon", "hwnd=" + hwnd, null);
+        try {
+            return body.bytes();
+        } finally {
+            body.close();
+        }
+    }
+
+    /** What the host's user can launch (Start menu apps); the host asks its shell the first time */
+    public String getLaunchables() throws IOException {
+        return openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), "actions/launchables");
+    }
+
+    /** Icons of launchable apps: JSON of key -> base64 PNG */
+    public String getLaunchableIcons(List<String> keys) throws IOException {
+        StringBuilder list = new StringBuilder();
+        for (String k : keys) {
+            if (list.length() > 0) list.append(',');
+            list.append(enc(k));
+        }
+        return openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), "actions/launchable-icons", "keys=" + list);
+    }
+
+    public void launchHostApp(String id) throws IOException {
+        openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "actions/launch", "id=" + enc(id), EMPTY_POST);
     }
 
     public String getClipboard() throws IOException {

@@ -152,6 +152,7 @@
     <string name="applist_connect_msg">Connecting to PC…</string>
     <string name="applist_menu_resume">Resume Session</string>
     <string name="applist_menu_start_vdisplay">Start in Virtual Display</string>
+    <string name="applist_desk_tile">Apps &amp; windows</string>
     <string name="applist_menu_start_primarydisplay">Start in Primary Display</string>
     <string name="applist_menu_quit">Quit Session</string>
     <string name="applist_menu_quit_and_start">Quit Current Game and Start</string>
@@ -384,6 +385,7 @@
     <string name="game_menu_toggle_mouse_on">Enable Controller Mouse Emulation</string>
     <string name="game_menu_toggle_mouse_off">Disable Controller Mouse Emulation</string>
     <string name="game_menu_disconnect">Disconnect</string>
+    <string name="game_menu_apps_windows">Apps and windows…</string>
     <string name="game_menu_cancel">Cancel</string>
     <string name="game_menu_task_manager">Open Task Manager</string>
     <string name="game_menu_send_keys">Send special keys</string>

@@ -154,6 +154,15 @@ public class ServerHelper {
         parent.startActivity(intent);
     }
 
+    /** App windows: the host's windows as workspaces, on the client's desk */
+    public static void doStartDesk(Activity parent, ComputerDetails computer,
+                                   ComputerManagerService.ComputerManagerBinder managerBinder) {
+        NvApp desk = new NvApp(parent.getString(R.string.applist_desk_tile), null, com.limelight.AppView.DESK_APP_ID, false);
+        Intent intent = createStartIntent(parent, desk, computer, managerBinder, false);
+        intent.putExtra(Game.EXTRA_DESK, true);
+        parent.startActivity(intent);
+    }
+
     public static void doNetworkTest(final Activity parent) {
         new Thread(new Runnable() {
             @Override

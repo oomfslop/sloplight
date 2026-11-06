@@ -242,6 +242,18 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                     return;
                 }
 
+                // The host's grants changed (app windows allowed): the grid follows
+                if (computer != null && details.permission != computer.permission) {
+                    computer.permission = details.permission;
+                    String raw = details.rawAppList != null ? details.rawAppList : lastRawApplist;
+                    if (raw != null) {
+                        try {
+                            updateUiWithAppList(NvHTTP.getAppListByReader(new StringReader(raw)));
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+
                 // App list is the same or empty
                 if (details.rawAppList == null || details.rawAppList.equals(lastRawApplist)) {
 
@@ -449,6 +461,11 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
 
         menu.setHeaderTitle(selectedApp.app.getAppName());
 
+        if (isDeskTile(selectedApp.app)) {
+            menu.add(Menu.NONE, START_OR_RESUME_ID, 1, getResources().getString(R.string.applist_menu_start_primarydisplay));
+            return;
+        }
+
         if (lastRunningAppId == 0) {
             if (prefConfig.useVirtualDisplay) {
                 menu.add(Menu.NONE, START_OR_RESUME_ID, 1, getResources().getString(R.string.applist_menu_start_primarydisplay));
@@ -506,6 +523,10 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         AdapterContextMenuInfo info = (AdapterContextMenuInfo) item.getMenuInfo();
         final AppObject app = (AppObject) appGridAdapter.getItem(info.position);
         int itemId = item.getItemId();
+        if (isDeskTile(app.app)) {
+            if (itemId == START_OR_RESUME_ID) startDesk();
+            return true;
+        }
         switch (itemId) {
             case START_WITH_QUIT:
             case START_WITH_QUIT_VDISPLAY: {
@@ -660,11 +681,38 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         });
     }
 
+    /** The "Apps & windows" tile: host windows as workspaces (Sloplight hosts that allow this device) */
+    public static final int DESK_APP_ID = -7;
+
+    private static boolean isDeskTile(NvApp app) {
+        return app.getAppId() == DESK_APP_ID;
+    }
+
+    private boolean hostAllowsDesk() {
+        return computer != null && computer.permission != -1 && (computer.permission & (1 << 30)) != 0;
+    }
+
+    private void startDesk() {
+        ServerHelper.doStartDesk(AppView.this, computer, managerBinder);
+    }
+
     private void updateUiWithAppList(final List<NvApp> appList) {
         AppView.this.runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 boolean updated = false;
+
+                // App windows first in the grid, when the host allows them
+                boolean hasDeskTile = false;
+                for (int i = 0; i < appGridAdapter.getCount(); i++) {
+                    if (isDeskTile(((AppObject) appGridAdapter.getItem(i)).app)) hasDeskTile = true;
+                }
+                if (hostAllowsDesk() && !hasDeskTile) {
+                    NvApp desk = new NvApp(getString(R.string.applist_desk_tile), null, DESK_APP_ID, false);
+                    desk.setAppIndex(-1);
+                    appGridAdapter.addApp(new AppObject(desk));
+                    updated = true;
+                }
 
                 // First handle app updates and additions
                 for (NvApp app : appList) {
@@ -701,8 +749,12 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                 // Next handle app removals
                 int i = 0;
                 while (i < appGridAdapter.getCount()) {
-                    boolean foundExistingApp = false;
                     AppObject existingApp = (AppObject) appGridAdapter.getItem(i);
+                    boolean foundExistingApp = false;
+                    if (isDeskTile(existingApp.app)) {
+                        i++;
+                        continue;
+                    }
 
                     // Check if this app is in the latest list
                     for (NvApp app : appList) {
@@ -748,6 +800,11 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
             public void onItemClick(AdapterView<?> arg0, View arg1, int pos,
                                     long id) {
                 AppObject app = (AppObject) appGridAdapter.getItem(pos);
+
+                if (isDeskTile(app.app)) {
+                    startDesk();
+                    return;
+                }
 
                 // Only open the context menu if something is running, otherwise start it
                 if (lastRunningAppId != 0) {

@@ -37,6 +37,7 @@ namespace host_windows {
       {"close", op_e::close},
       {"lower", op_e::lower},
       {"dismiss", op_e::dismiss},
+      {"stash", op_e::stash},
     };
     for (const auto &entry : table) {
       if (name == entry.name) {
@@ -521,6 +522,8 @@ namespace host_windows {
         return ShowWindow(hwnd, SW_MINIMIZE) != 0 || IsIconic(hwnd);
       case op_e::restore:
         return ShowWindow(hwnd, SW_RESTORE) != 0 || !IsIconic(hwnd);
+      case op_e::stash:
+        return ShowWindow(hwnd, SW_SHOWMINNOACTIVE) != 0 || IsIconic(hwnd);
       case op_e::maximize:
         return ShowWindow(hwnd, SW_MAXIMIZE) != 0 || IsZoomed(hwnd);
       case op_e::close:

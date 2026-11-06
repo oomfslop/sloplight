@@ -37,6 +37,7 @@ namespace app_desk {
     int background_qp = 0;  ///< background windows at lower quality: this much added to their quantizer (0-20)
     bool efficient = false;  ///< a quality ceiling: fewer bits for the same picture (no encode time added)
     bool quiet_idle = false;  ///< while nothing changes, a frame a second (not the minimum frame rate's repeats), and no blinking text cursor on the host
+    bool direct = false;  ///< no atlas: the session streams the desk itself (clients that show one window at a time, filling the screen: phones)
   };
 
   /** Make sure the client's desk exists with this size (host px), refresh rate
@@ -93,6 +94,11 @@ namespace app_desk {
   /** Stack the desk's windows in this order, top-most first (the client's
    *  window order is the truth); with focus, the first one is activated. */
   bool order(const std::string &client_uuid, const std::vector<std::uint64_t> &top_first, bool focus);
+  /** A phone's workspaces: the front window stays on the desk as it is put
+   *  (maximized when it can be) and can't be moved, resized or minimized by
+   *  hand; the back ones (other workspaces) can't be moved. No front and no
+   *  back: nothing pinned. False: the client has no open desk. */
+  bool pin(const std::string &client_uuid, std::uint64_t front, const std::vector<std::uint64_t> &back);
 
   struct window_t {
     std::uint64_t handle = 0;
