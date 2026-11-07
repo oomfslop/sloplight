@@ -60,6 +60,11 @@ thread_local! {
     static PRESS: RefCell<Option<Press>> = const { RefCell::new(None) };
     static NEXT_TOKEN: Cell<u64> = const { Cell::new(1) };
     static HITS: RefCell<HitCache> = RefCell::new(HitCache::default());
+    /// The last press's window and whether it was on the title bar: a double
+    /// click is a title-bar one only when both of its presses were (a second
+    /// click on a button that moved away, Edge's new-tab "+" as the tab
+    /// slides in, lands on bare title bar but is no double click there)
+    static LAST_ON_TITLE: Cell<Option<(u64, bool)>> = const { Cell::new(None) };
 }
 
 /// The host's hit test answers, by window and spot: asked ahead while the
@@ -294,6 +299,7 @@ fn down(hwnd: u64, button: i32, x: i32, y: i32, clicks: i32, cmd: bool) {
         }
         return;
     }
+    LAST_ON_TITLE.set(Some((hwnd, false)));
     with_press(|p| *p = Some(press));
     deliver(hwnd);
 }
@@ -374,9 +380,12 @@ pub fn hit_result(token: u64, hit: &str) {
     }) else {
         return;
     };
+    let before_on_title = LAST_ON_TITLE.replace(Some((hwnd, hit == "drag"))) == Some((hwnd, true));
     match hit {
         "drag" => {
-            if clicks >= 2 {
+            if clicks >= 2 && before_on_title {
+                // (a third click starts a new pair)
+                LAST_ON_TITLE.set(None);
                 desk::title_action(hwnd);
                 with_press(|p| *p = if released.is_some() { None } else { p.take().map(|mut p| { p.state = State::Swallowed; p }) });
                 return;
