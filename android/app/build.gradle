@@ -13,8 +13,9 @@ android {
         minSdk 24
         targetSdk 34
 
-        versionName "20.2.6"
-        versionCode = 57
+        // A release (CI, a sloplight-v* tag) names its version; local builds keep these
+        versionName System.getenv("SLOPLIGHT_VERSION_NAME") ?: "20.2.6"
+        versionCode = (System.getenv("SLOPLIGHT_VERSION_CODE") ?: "57") as int
 
         // Generate native debug symbols to allow Google Play to symbolicate our native crashes
         ndk.debugSymbolLevel = 'FULL'
@@ -107,6 +108,21 @@ android {
         }
     }
 
+    // Releases are signed with the key in SLOPLIGHT_KEYSTORE (CI decodes it from
+    // the repository's secrets); without one, with the debug key, so the APK
+    // still installs (but can't update one signed with the release key)
+    def releaseKeystore = System.getenv("SLOPLIGHT_KEYSTORE")
+    signingConfigs {
+        if (releaseKeystore) {
+            release {
+                storeFile file(releaseKeystore)
+                storePassword System.getenv("SLOPLIGHT_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("SLOPLIGHT_KEY_ALIAS")
+                keyPassword System.getenv("SLOPLIGHT_KEY_PASSWORD") ?: System.getenv("SLOPLIGHT_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix ".debug"
@@ -121,6 +137,7 @@ android {
             resValue "string", "app_label", "Sloplight"
             resValue "string", "app_label_root", "Sloplight (Root)"
             resValue "string", "app_label_game", "Sloplight (Game)"
+            signingConfig releaseKeystore ? signingConfigs.release : signingConfigs.debug
 
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -175,6 +192,7 @@ dependencies {
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.ui:ui-tooling-preview'
     implementation 'androidx.compose.foundation:foundation'
+    implementation 'androidx.compose.material:material-icons-extended'
     debugImplementation 'androidx.compose.ui:ui-tooling'
     implementation 'androidx.activity:activity-compose:1.13.0'
     implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.11.0'

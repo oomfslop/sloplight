@@ -9,6 +9,7 @@ on:
     tags: ['sloplight-v*']
     paths:
       - client/**
+      - android/**
       - moonlight-common-c/**
       - flake.nix
       - flake.lock
@@ -19,6 +20,7 @@ on:
       - master
     paths:
       - client/**
+      - android/**
       - moonlight-common-c/**
       - flake.nix
       - flake.lock
@@ -39,9 +41,15 @@ jobs:
           # Windows
           - os: windows-2025
             qt_version: 6.12.0
-          # macOS
+            name: windows
+          # macOS: built on the latest (Tahoe) and on Sequoia, the runner the
+          # client was built on before; each app runs on macOS 13 and later
           - os: macos-26
             qt_version: 6.11.2
+            name: macos26
+          - os: macos-15
+            qt_version: 6.11.2
+            name: macos15
 
     runs-on: ${{ matrix.os }}
     defaults:
@@ -138,7 +146,7 @@ jobs:
         uses: actions/upload-artifact@v6
         if: runner.os == 'Windows'
         with:
-          name: Moonlight-${{ runner.os }}-x64-${{ env.CI_VERSION }}
+          name: Moonlight-${{ matrix.name }}-x64-${{ env.CI_VERSION }}
           path: client/build/deploy-x64-release/*
           if-no-files-found: error
 
@@ -146,7 +154,7 @@ jobs:
         uses: actions/upload-artifact@v6
         if: runner.os == 'Windows'
         with:
-          name: Moonlight-${{ runner.os }}-arm64-${{ env.CI_VERSION }}
+          name: Moonlight-${{ matrix.name }}-arm64-${{ env.CI_VERSION }}
           path: client/build/deploy-arm64-release/*
           if-no-files-found: error
 
@@ -154,7 +162,7 @@ jobs:
         uses: actions/upload-artifact@v6
         if: runner.os == 'macOS'
         with:
-          name: Moonlight-${{ runner.os }}-${{ env.CI_VERSION }}
+          name: Moonlight-${{ matrix.name }}-${{ env.CI_VERSION }}
           path: client/build/installer-Release/*.dmg
           compression-level: 0
           if-no-files-found: error
@@ -162,7 +170,7 @@ jobs:
       - name: Upload Symbols
         uses: actions/upload-artifact@v6
         with:
-          name: zDevDbgSyms-${{ runner.os }}-${{ env.CI_VERSION }}
+          name: zDevDbgSyms-${{ matrix.name }}-${{ env.CI_VERSION }}
           path: |
             client/build/installer-*/*.dsym/*
             client/build/symbols-*/*.pdb
@@ -179,21 +187,101 @@ jobs:
       - name: Package Sloplight (macOS)
         if: runner.os == 'macOS'
         run: |
-          ditto -c -k --keepParent launcher/target/Sloplight.app "Sloplight-macos-arm64.zip"
-          shasum -a 256 "Sloplight-macos-arm64.zip" | tee -a "$GITHUB_STEP_SUMMARY"
+          ditto -c -k --keepParent launcher/target/Sloplight.app "Sloplight-${{ matrix.name }}-arm64.zip"
+          shasum -a 256 "Sloplight-${{ matrix.name }}-arm64.zip" | tee -a "$GITHUB_STEP_SUMMARY"
           echo 'The app is ad-hoc signed and not notarized: after unzipping, run `xattr -dr com.apple.quarantine Sloplight.app` or right-click → Open the first time.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Sloplight (macOS)
         uses: actions/upload-artifact@v6
         if: runner.os == 'macOS'
         with:
-          name: Sloplight-macos-arm64
-          path: client/Sloplight-macos-arm64.zip
+          name: Sloplight-${{ matrix.name }}-arm64
+          path: client/Sloplight-${{ matrix.name }}-arm64.zip
+          if-no-files-found: error
+
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    env:
+      # Release builds are named by the tag (sloplight-v1.2.3 -> 1.2.3); every
+      # run's code is higher than the last (and than local builds' 57)
+      SLOPLIGHT_VERSION_CODE: ${{ github.run_number }}000
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Set version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/sloplight-v* ]]; then
+            echo "SLOPLIGHT_VERSION_NAME=${GITHUB_REF#refs/tags/sloplight-v}" >> "$GITHUB_ENV"
+          else
+            echo "SLOPLIGHT_VERSION_NAME=0.0.0-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platforms;android-37.0 build-tools;37.0.0 ndk;27.2.12479018
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SLOPLIGHT_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.SLOPLIGHT_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SLOPLIGHT_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SLOPLIGHT_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            {
+              echo "SLOPLIGHT_KEYSTORE=$RUNNER_TEMP/release.jks"
+              echo "SLOPLIGHT_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "SLOPLIGHT_KEY_ALIAS=$KEY_ALIAS"
+              echo "SLOPLIGHT_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+          else
+            echo "No SLOPLIGHT_KEYSTORE_BASE64 secret: the APKs are signed with a throwaway debug key (they install, but can't update each other)." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build APKs
+        run: ./gradlew --no-daemon :app:assembleNonRoot_gameRelease
+
+      - name: Collect APKs
+        shell: bash
+        run: |
+          mkdir -p dist
+          for apk in app/build/outputs/apk/nonRoot_game/release/*.apk; do
+            abi=$(basename "$apk" .apk | sed -E 's/^app-nonRoot_game-//; s/-release(-unsigned)?$//')
+            cp "$apk" "dist/Sloplight-android-$abi.apk"
+          done
+          ls -l dist
+          (cd dist && shasum -a 256 *.apk) | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v6
+        with:
+          name: Sloplight-android
+          path: android/dist/*.apk
+          compression-level: 0
           if-no-files-found: error
 
   # Moonlight's own tags are v0.1.0…v6.x, so Sloplight releases use their own prefix.
   release-sloplight:
-    needs: build
+    needs: [build, android]
     if: startsWith(github.ref, 'refs/tags/sloplight-v')
     runs-on: ubuntu-latest
     permissions:
@@ -201,8 +289,18 @@ jobs:
     steps:
       - uses: actions/download-artifact@v7
         with:
-          name: Sloplight-macos-arm64
+          pattern: Sloplight-*
+          merge-multiple: true
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: Sloplight-macos-arm64.zip
+          generate_release_notes: true
+          body: |
+            - **Sloplight-macos26-arm64.zip**: built on macOS 26 (Tahoe)
+            - **Sloplight-macos15-arm64.zip**: built on macOS 15 (Sequoia)
+            - **Sloplight-android-<abi>.apk**: Android; most phones want arm64-v8a
+
+            The macOS apps are ad-hoc signed and not notarized: after unzipping, run `xattr -dr com.apple.quarantine Sloplight.app` or right-click → Open the first time.
+          files: |
+            Sloplight-*.zip
+            Sloplight-android-*.apk
