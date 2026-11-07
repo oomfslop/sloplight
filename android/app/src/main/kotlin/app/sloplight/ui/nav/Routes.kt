@@ -23,9 +23,13 @@ data class Apps(
 @Serializable
 data class AddHost(val address: String? = null, val name: String? = null) : Route
 
-/** The streaming settings */
+/** The settings: appearance, profiles and the streaming settings' categories */
 @Serializable
 data object Settings : Route
+
+/** One category of the streaming settings, all of it */
+@Serializable
+data class SettingsCategory(val key: String) : Route
 
 /** The settings profiles */
 @Serializable

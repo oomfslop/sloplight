@@ -3,7 +3,6 @@ package app.sloplight.ui.settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -14,6 +13,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -38,9 +38,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.limelight.R
 
@@ -134,7 +134,7 @@ private fun ChoiceDialog(
     )
 }
 
-/** The setting's message, its value large, a slider on whole steps */
+/** The setting's message, its exact value typed (with its unit), and a slider on whole steps */
 @Composable
 private fun SliderDialog(
     setting: Setting.Slider,
@@ -143,12 +143,21 @@ private fun SliderDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    var value by remember { mutableIntStateOf(initial.coerceIn(setting.min, maxOf(setting.min, setting.max))) }
+    val start = initial.coerceIn(setting.min, maxOf(setting.min, setting.max))
+    var value by remember { mutableIntStateOf(start) }
+    var field by remember {
+        val text = setting.plain(start)
+        mutableStateOf(TextFieldValue(text, TextRange(0, text.length)))
+    }
+    val typed = setting.parse(field.text)
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    val unit = setting.unit(context)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(setting.title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (setting.dialogMessage != 0) {
                     Text(
                         stringResource(setting.dialogMessage),
@@ -156,22 +165,46 @@ private fun SliderDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Spacer(Modifier.padding(top = 8.dp))
-                Text(
-                    setting.format(context, value),
-                    style = MaterialTheme.typography.displaySmallEmphasized,
-                    color = MaterialTheme.colorScheme.primary,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
+                OutlinedTextField(
+                    value = field,
+                    onValueChange = {
+                        field = it
+                        setting.parse(it.text)?.let { v -> value = v }
+                    },
+                    singleLine = true,
+                    isError = typed == null,
+                    supportingText = if (typed == null) {
+                        { Text(stringResource(R.string.settings_value_invalid)) }
+                    } else {
+                        null
+                    },
+                    suffix = unit?.let { { Text(it) } },
+                    label = { Text(stringResource(R.string.settings_value_edit)) },
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = if (setting.min < 0) KeyboardType.Text else KeyboardType.Decimal,
+                        imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { typed?.let(onConfirm) }),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
                 )
+                @Suppress("DEPRECATION")
                 Slider(
-                    value = value.toFloat(),
-                    onValueChange = { value = setting.snap(it) },
-                    valueRange = setting.min.toFloat()..maxOf(setting.min + 1, setting.max).toFloat(),
+                    value = setting.positionOf(value),
+                    onValueChange = {
+                        value = setting.valueAt(it)
+                        val text = setting.plain(value)
+                        field = TextFieldValue(text, TextRange(text.length))
+                    },
+                    valueRange = setting.positions(),
                 )
             }
         },
-        confirmButton = { TextButton(onClick = { onConfirm(value) }) { Text(stringResource(android.R.string.ok)) } },
+        confirmButton = {
+            TextButton(onClick = { typed?.let(onConfirm) }, enabled = typed != null) {
+                Text(stringResource(android.R.string.ok))
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
 }

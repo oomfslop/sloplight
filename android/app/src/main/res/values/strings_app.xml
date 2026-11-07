@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="host_status_online">Online</string>
+    <string name="host_status_not_paired">Not paired · tap to pair</string>
+    <string name="host_status_offline">Offline</string>
+    <string name="host_status_checking">Checking…</string>
+    <string name="host_status_running">Online · an app is running</string>
+    <string name="host_actions">More actions</string>
+    <string name="apps_heading">Apps</string>
+    <string name="apps_now_running">Running now</string>
+    <string name="apps_desk_summary">Your PC\'s windows, each in a workspace</string>
+    <string name="applist_menu_start">Start</string>
+    <string name="addpc_address_label">Address</string>
+    <string name="addpc_address_hint">The PC\'s IP address or name; a port after a colon if it isn\'t the usual one</string>
+    <string name="addpc_how_title">How hosts are found</string>
+    <string name="addpc_tip_lan_title">On the same network</string>
+    <string name="addpc_tip_lan">PCs running a host show up on their own; nothing to add</string>
+    <string name="addpc_tip_remote_title">Elsewhere</string>
+    <string name="addpc_tip_remote">Over a VPN such as Tailscale or the internet: add the PC by its address here</string>
+    <string name="addpc_tip_link_title">From a link</string>
+    <string name="addpc_tip_link">A pairing link from the host fills this in and pairs the PC at once</string>
+</resources>

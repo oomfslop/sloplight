@@ -85,6 +85,8 @@ sealed interface Setting {
         val source: ChoiceSource? = null,
         val effect: ChangeEffect = ChangeEffect.NONE,
         @DrawableRes val icon: Int = 0,
+        /** Short names of the entries: shown inline as connected buttons instead of a dialog */
+        @ArrayRes val shortEntries: Int = 0,
         override val enabledWhen: String? = null,
         override val visibleWhen: Feature? = null,
         override val hiddenInProfile: Boolean = false,
@@ -151,15 +153,22 @@ sealed interface Setting {
     ) : Setting
 }
 
-/**
- * A category of settings. Beyond the first [initiallyShown] ones the rest
- * sit behind a "show more" row (null: all shown).
- */
+/** A headed block of settings inside a category ([title] 0: no heading) */
+@Immutable
+data class SettingSection(
+    @StringRes val title: Int,
+    val settings: List<Setting>,
+    val visibleWhen: Feature? = null,
+)
+
+/** A category of settings: its page, made of sections; [summary] describes it in the hub */
 @Immutable
 data class SettingGroup(
     val key: String,
     @StringRes val title: Int,
-    val settings: List<Setting>,
-    val initiallyShown: Int? = null,
+    @StringRes val summary: Int,
+    val sections: List<SettingSection>,
     val visibleWhen: Feature? = null,
-)
+) {
+    val settings: List<Setting> = sections.flatMap { it.settings }
+}

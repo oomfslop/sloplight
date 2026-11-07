@@ -4,6 +4,36 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material3.ButtonGroupDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.ToggleButton
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import app.sloplight.data.AppearanceSettings
+import app.sloplight.data.ThemeMode
+import app.sloplight.data.rememberAppearance
+import app.sloplight.ui.components.SectionHeading
+import app.sloplight.ui.components.SegmentRow
+import app.sloplight.ui.components.SegmentedColumn
+import app.sloplight.ui.components.segmentShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
@@ -13,9 +43,17 @@ import com.limelight.R
 import com.limelight.preferences.PreferenceConfiguration
 import kotlin.system.exitProcess
 
-/** The streaming settings, over the app's default SharedPreferences */
+/**
+ * The settings' hub: how the app looks, the profiles, then each category of
+ * the streaming settings (search goes through all of them).
+ */
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onOpenCategory: (String) -> Unit,
+    onProfiles: () -> Unit,
+    activeProfile: String,
+) {
     val context = LocalContext.current
     // Read up front as the old screen did (it also migrates legacy prefs)
     val startLanguage = remember { PreferenceConfiguration.readPreferences(context).language }
@@ -29,6 +67,27 @@ fun SettingsScreen(onBack: () -> Unit) {
         store = store,
         title = stringResource(R.string.action_settings),
         onBack = leave,
+        onOpenGroup = onOpenCategory,
+        hubInfo = HubInfo(
+            onProfiles = onProfiles,
+            activeProfile = activeProfile,
+            appearanceTitle = stringResource(R.string.settings_appearance),
+            profilesTitle = stringResource(R.string.profiles_title),
+            aboutTitle = stringResource(R.string.settings_section_about),
+        ),
+    )
+}
+
+/** One category of the streaming settings, all of its settings */
+@Composable
+fun SettingsCategoryScreen(groupKey: String, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val store = remember { PrefsStore.default(context) }
+    SettingsContent(
+        store = store,
+        title = stringResource(groupOf(groupKey)?.title ?: R.string.action_settings),
+        onBack = onBack,
+        groupKey = groupKey,
     )
 }
 

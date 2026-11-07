@@ -22,17 +22,17 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeFlexibleTopAppBar
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedListItem
+import app.sloplight.ui.components.SegmentRow
+import app.sloplight.ui.components.SegmentGap
+import app.sloplight.ui.components.segmentShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
@@ -87,15 +87,12 @@ fun ProfilesScreen(onBack: () -> Unit, onEdit: (profileUuid: String?) -> Unit) {
     var deleting by remember { mutableStateOf<ProfileItem?>(null) }
     val listState = rememberLazyListState()
     val fabExpanded by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 } }
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
 
-    val container = MaterialTheme.colorScheme.surfaceContainer
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-        containerColor = container,
         topBar = {
-            LargeFlexibleTopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = container, scrolledContainerColor = container),
+            TopAppBar(
                 title = { Text(stringResource(R.string.profiles_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -204,11 +201,11 @@ private fun ProfileRow(
         DateUtils.getRelativeTimeSpanString(profile.modifiedUtc, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
             .toString()
     }
-    SegmentedListItem(
+    SegmentRow(
         selected = profile.active,
         onClick = onEdit,
-        shapes = ListItemDefaults.segmentedShapes(index, count),
-        modifier = modifier.padding(bottom = if (index < count - 1) ListItemDefaults.SegmentedGap else 0.dp),
+        shapes = segmentShape(index, count),
+        modifier = modifier.padding(bottom = if (index < count - 1) SegmentGap else 0.dp),
         leadingContent = { RadioButton(selected = profile.active, onClick = onToggleActive) },
         trailingContent = {
             Row {
@@ -224,7 +221,7 @@ private fun ProfileRow(
     ) {
         Text(
             profile.name,
-            style = MaterialTheme.typography.titleMediumEmphasized,
+            style = MaterialTheme.typography.titleMedium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -239,9 +236,9 @@ private fun EmptyProfiles() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        val shape = MaterialShapes.SoftBurst.toShape()
+        val shape = androidx.compose.foundation.shape.CircleShape
         Box(
-            modifier = Modifier.size(120.dp).background(MaterialTheme.colorScheme.secondaryContainer, shape),
+            modifier = Modifier.size(88.dp).background(MaterialTheme.colorScheme.secondaryContainer, shape),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -253,7 +250,7 @@ private fun EmptyProfiles() {
         }
         Text(
             stringResource(R.string.profile_manager_no_profiles_yet),
-            style = MaterialTheme.typography.titleLargeEmphasized,
+            style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.padding(top = 16.dp),
         )

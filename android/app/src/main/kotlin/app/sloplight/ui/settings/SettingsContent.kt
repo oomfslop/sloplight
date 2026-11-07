@@ -7,6 +7,25 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material3.ButtonGroupDefaults
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
+import androidx.compose.material3.ToggleButton
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.takeOrElse
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.RowScope
@@ -15,7 +34,6 @@ import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -24,11 +42,11 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeFlexibleTopAppBar
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedListItem
+import app.sloplight.ui.components.SegmentRow
+import app.sloplight.ui.components.SegmentGap
+import app.sloplight.ui.components.segmentShape
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -69,29 +87,70 @@ import com.limelight.preferences.PreferenceConfiguration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** A setting as listed, its texts resolved once */
+/** A setting as listed, its texts resolved once; [options]: a choice shown inline as buttons */
 @Immutable
-internal class SettingItem(val setting: Setting, val title: String, val summary: String?)
+internal class SettingItem(val setting: Setting, val title: String, val summary: String?, val options: List<ChoiceEntry>?)
 
-/** A visible category and its visible settings */
+/** A visible section of a category ([title] null: no heading) */
 @Immutable
-internal class GroupItem(val key: String, val title: String, val items: List<SettingItem>, val initiallyShown: Int?)
+internal class SectionItem(val key: String, val title: String?, val items: List<SettingItem>)
+
+/** A visible category and its visible sections */
+@Immutable
+internal class GroupItem(val key: String, val title: String, val summary: String, val sections: List<SectionItem>)
 
 /** A line of the list */
 @Immutable
 internal sealed interface Entry {
     val key: String
+    val type: Any get() = this::class
 
-    class Header(val group: GroupItem, val first: Boolean) : Entry {
-        override val key get() = "h:" + group.key
-    }
+    class Header(override val key: String, val title: String, val first: Boolean) : Entry
 
     class Row(val item: SettingItem, val index: Int, val count: Int) : Entry {
         override val key get() = item.setting.key
+        override val type: Any
+            get() = when (item.setting) {
+                is Setting.Toggle -> 1
+                is Setting.Slider -> 2
+                is Setting.Choice -> if (item.options != null) 3 else 4
+                else -> 4
+            }
     }
 
-    class More(val group: GroupItem, val index: Int, val count: Int, val hidden: Int, val summary: String) : Entry {
-        override val key get() = "m:" + group.key
+    /** (the hub) the appearance and profiles, above the categories */
+    /** (the main hub) the theme picker, wallpaper colors, the profiles row */
+    class Theme(val index: Int, val count: Int) : Entry {
+        override val key get() = "theme"
+    }
+
+    class Wallpaper(val index: Int, val count: Int) : Entry {
+        override val key get() = "wallpaper"
+    }
+
+    data object ProfilesLink : Entry {
+        override val key get() = "profiles"
+    }
+
+    data object Version : Entry {
+        override val key get() = "version"
+    }
+
+    data object DebugInfo : Entry {
+        override val key get() = "debug-info"
+    }
+
+    data object HubTop : Entry {
+        override val key get() = "hub"
+    }
+
+    data object StreamingHeader : Entry {
+        override val key get() = "streaming"
+    }
+
+    /** (the hub) a category, opening its page */
+    class GroupLink(val group: GroupItem, val index: Int, val count: Int) : Entry {
+        override val key get() = "g:" + group.key
     }
 
     data object NoResults : Entry {
@@ -113,6 +172,9 @@ internal fun SettingsContent(
     modifier: Modifier = Modifier,
     profileBase: PrefsStore? = null,
     actions: @Composable RowScope.() -> Unit = {},
+    groupKey: String? = null,
+    onOpenGroup: ((String) -> Unit)? = null,
+    hubInfo: HubInfo? = null,
 ) {
     val context = LocalContext.current
     val activity = LocalActivity.current
@@ -207,33 +269,49 @@ internal fun SettingsContent(
     val groups = remember(features, profileMode) { buildGroups(context, features, profileMode) }
     var searching by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
-    val expanded = remember { mutableStateMapOf<String, Boolean>() }
+    // Without pages of its own (the profile editor) a category opens inside this screen
+    var innerGroup by rememberSaveable { mutableStateOf<String?>(null) }
+    val hub = groupKey == null
     val entries by remember(groups) {
-        derivedStateOf { buildEntries(groups, if (searching) query.trim() else "", expanded) }
+        derivedStateOf {
+            val q = if (searching) query.trim() else ""
+            val open = groupKey ?: innerGroup
+            when {
+                hub && open == null && q.isEmpty() && hubInfo != null -> hubEntries(groups, hubInfo)
+                hub && open == null && q.isEmpty() -> buildList {
+                    groups.forEachIndexed { i, g -> add(Entry.GroupLink(g, i, groups.size)) }
+                }
+                open != null && q.isEmpty() -> buildEntries(groups.filter { it.key == open }, "")
+                else -> buildEntries(groups, q)
+            }
+        }
     }
     val closeSearch = {
         searching = false
         query = ""
     }
+    val back = {
+        if (innerGroup != null) innerGroup = null else onBack()
+    }
+    BackHandler(enabled = innerGroup != null) { innerGroup = null }
     BackHandler(enabled = searching, onBack = closeSearch)
 
     val listState = rememberLazyListState()
     LaunchedEffect(query) { if (searching) listState.scrollToItem(0) }
+    LaunchedEffect(innerGroup) { listState.scrollToItem(0) }
+    val shownTitle = innerGroup?.let { k -> groups.firstOrNull { it.key == k }?.title } ?: title
 
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-    // (rows on a darker container: each group reads as one block)
-    val container = MaterialTheme.colorScheme.surfaceContainer
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
         modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-        containerColor = container,
         topBar = {
             if (searching) {
                 SearchTopBar(query = query, onQueryChange = { query = it }, onClose = closeSearch)
             } else {
-                LargeFlexibleTopAppBar(
-                    title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                TopAppBar(
+                    title = { Text(shownTitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     navigationIcon = {
-                        IconButton(onClick = onBack) {
+                        IconButton(onClick = back) {
                             Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back))
                         }
                     },
@@ -243,7 +321,6 @@ internal fun SettingsContent(
                         }
                         actions()
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = container, scrolledContainerColor = container),
                     scrollBehavior = scrollBehavior,
                 )
             }
@@ -256,15 +333,24 @@ internal fun SettingsContent(
             contentPadding = PaddingValues(
                 start = padding.calculateStartPadding(direction) + 16.dp,
                 end = padding.calculateEndPadding(direction) + 16.dp,
-                top = padding.calculateTopPadding(),
+                top = padding.calculateTopPadding() + 8.dp,
                 bottom = padding.calculateBottomPadding() + 32.dp,
             ),
         ) {
-            items(entries, key = { it.key }, contentType = { it::class }) { entry ->
+            items(entries, key = { it.key }, contentType = { it.type }) { entry ->
                 when (entry) {
-                    is Entry.Header -> GroupHeader(entry.group.title, entry.first)
+                    is Entry.Header -> GroupHeader(entry.title, entry.first)
                     is Entry.Row -> SettingRow(entry.item, entry.index, entry.count, controller, changed)
-                    is Entry.More -> MoreRow(entry) { expanded[entry.group.key] = true }
+                    Entry.HubTop -> Unit
+                    Entry.StreamingHeader -> GroupHeader(stringResource(R.string.settings_streaming), first = hubInfo == null)
+                    is Entry.Theme -> ThemeRow(entry.index, entry.count)
+                    is Entry.Wallpaper -> WallpaperRow(entry.index, entry.count)
+                    Entry.ProfilesLink -> hubInfo?.let { ProfilesRow(it) }
+                    Entry.Version -> VersionRow()
+                    Entry.DebugInfo -> DebugInfoRow()
+                    is Entry.GroupLink -> GroupLinkRow(entry, changed) {
+                        if (onOpenGroup != null) onOpenGroup(entry.group.key) else innerGroup = entry.group.key
+                    }
                     Entry.NoResults -> Text(
                         stringResource(R.string.settings_no_results),
                         style = MaterialTheme.typography.bodyLarge,
@@ -340,9 +426,12 @@ private fun GroupHeader(title: String, first: Boolean) {
         title,
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = if (first) 8.dp else 28.dp, bottom = 8.dp),
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = if (first) 0.dp else 24.dp, bottom = 8.dp),
     )
 }
+
+/** Rows of disabled settings: their texts faded (the controls fade on their own) */
+private const val DisabledAlpha = 0.38f
 
 @Composable
 private fun SettingRow(
@@ -353,124 +442,309 @@ private fun SettingRow(
     changed: State<Set<String>>,
 ) {
     val s = item.setting
-    val shapes = ListItemDefaults.segmentedShapes(index, count)
+    val shapes = segmentShape(index, count)
     val enabled = controller.enabled(s)
     val title = if (s.key in changed.value) "*" + item.title else item.title
-    val modifier = Modifier.padding(bottom = if (index < count - 1) ListItemDefaults.SegmentedGap else 0.dp)
-    val supporting: (@Composable () -> Unit)? = item.summary?.let { { Text(it) } }
-    val leading: (@Composable () -> Unit)? =
-        if (s is Setting.Choice && s.icon != 0) {
-            { Icon(painterResource(s.icon), contentDescription = null) }
-        } else {
-            null
-        }
+    // Not dimmed as a whole: a disabled switch or slider would fade into the card
+    val modifier = Modifier
+        .padding(bottom = if (index < count - 1) SegmentGap else 0.dp)
+        .then(if (enabled) Modifier else Modifier.semantics(mergeDescendants = s !is Setting.Slider) { disabled() })
+    when {
+        s is Setting.Toggle -> ToggleRow(s, item, title, enabled, shapes, modifier, controller)
+        s is Setting.Slider -> SliderRow(s, item, title, enabled, shapes, modifier, controller)
+        s is Setting.Choice && item.options != null -> InlineChoiceRow(s, item, item.options, title, enabled, shapes, modifier, controller)
+        else -> ValueRow(s, item, title, enabled, shapes, modifier, controller)
+    }
+}
 
-    if (s is Setting.Toggle) {
-        val checked = controller.values.toggle(s)
-        // (a plain row with a switch: "checked" would tint every row that is on)
-        SegmentedListItem(
-            onClick = { controller.onToggle(s, !checked) },
-            shapes = shapes,
-            modifier = modifier,
-            enabled = enabled,
-            leadingContent = leading,
-            trailingContent = { Switch(checked = checked, onCheckedChange = null, enabled = enabled) },
-            supportingContent = supporting,
-        ) { Text(title) }
-        return
+/** A text's color: as is, or faded when disabled */
+@Composable
+private fun dimmed(enabled: Boolean): Color = if (enabled) Color.Unspecified else LocalContentColor.current.copy(alpha = DisabledAlpha)
+
+@Composable
+private fun Summary(text: String?, enabled: Boolean) {
+    if (text != null) Text(text, color = dimmed(enabled))
+}
+
+@Composable
+private fun LeadingIcon(s: Setting, enabled: Boolean) {
+    if (s is Setting.Choice && s.icon != 0) {
+        Icon(painterResource(s.icon), contentDescription = null, tint = dimmed(enabled).takeOrElse { LocalContentColor.current })
+    }
+}
+
+private fun leadingFor(s: Setting, enabled: Boolean): (@Composable () -> Unit)? =
+    if (s is Setting.Choice && s.icon != 0) {
+        { LeadingIcon(s, enabled) }
+    } else {
+        null
     }
 
+/** A switch at the end; the whole row toggles it */
+@Composable
+private fun ToggleRow(
+    s: Setting.Toggle,
+    item: SettingItem,
+    title: String,
+    enabled: Boolean,
+    shapes: Shape,
+    modifier: Modifier,
+    controller: SettingsController,
+) {
+    val checked = controller.values.toggle(s)
+    // (a plain row with a switch: "checked" would tint every row that is on)
+    SegmentRow(
+        onClick = if (enabled) {
+            { controller.onToggle(s, !checked) }
+        } else {
+            null
+        },
+        shapes = shapes,
+        modifier = modifier,
+        trailingContent = {
+            // A disabled switch keeps its normal colors, only lighter: its own disabled ones vanish on the card
+            Switch(
+                checked = checked,
+                onCheckedChange = null,
+                modifier = if (enabled) Modifier else Modifier.alpha(0.5f),
+            )
+        },
+        supportingContent = item.summary?.let { { Summary(it, enabled) } },
+    ) { Text(title, color = dimmed(enabled)) }
+}
+
+/**
+ * The title and the value, a slider below. The value while dragging stays
+ * in the row; it is saved when the drag ends. Tapping the value types it.
+ */
+@Composable
+private fun SliderRow(
+    s: Setting.Slider,
+    item: SettingItem,
+    title: String,
+    enabled: Boolean,
+    shapes: Shape,
+    modifier: Modifier,
+    controller: SettingsController,
+) {
     val context = LocalContext.current
+    val stored = controller.values.slider(s)
+    var dragged by remember { mutableStateOf<Int?>(null) }
+    val shown = dragged ?: stored
+    val range = remember(s) { s.positions() }
+    SegmentRow(
+        shapes = shapes,
+        modifier = modifier,
+        supportingContent = {
+            Column {
+                Summary(item.summary, enabled)
+                @Suppress("DEPRECATION")
+                Slider(
+                    value = s.positionOf(shown),
+                    onValueChange = { dragged = s.valueAt(it) },
+                    onValueChangeFinished = {
+                        dragged?.let { if (it != controller.values.slider(s)) controller.onSlider(s, it) }
+                        dragged = null
+                    },
+                    enabled = enabled,
+                    valueRange = range,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+            }
+        },
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, color = dimmed(enabled), modifier = Modifier.weight(1f).padding(end = 12.dp))
+            ValueChip(s.format(context, shown), enabled) { controller.open(s) }
+        }
+    }
+}
+
+/** A setting's value as a small tonal button (opens its dialog) */
+@Composable
+private fun ValueChip(text: String, enabled: Boolean, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = CircleShape,
+        color = if (enabled) colors.secondaryContainer else colors.onSurface.copy(alpha = 0.08f),
+        contentColor = if (enabled) colors.onSecondaryContainer else colors.onSurface.copy(alpha = DisabledAlpha),
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+        )
+    }
+}
+
+/** A few short options as connected buttons under the title */
+@Composable
+private fun InlineChoiceRow(
+    s: Setting.Choice,
+    item: SettingItem,
+    options: List<ChoiceEntry>,
+    title: String,
+    enabled: Boolean,
+    shapes: Shape,
+    modifier: Modifier,
+    controller: SettingsController,
+) {
+    val current = controller.values.choice(s)
+    SegmentRow(
+        shapes = shapes,
+        modifier = modifier,
+        leadingContent = leadingFor(s, enabled),
+        supportingContent = {
+            Column {
+                Summary(item.summary, enabled)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                ) {
+                    options.forEachIndexed { i, option ->
+                        ToggleButton(
+                            checked = option.value == current,
+                            onCheckedChange = { if (option.value != current) controller.onChoice(s, option.value) },
+                            enabled = enabled,
+                            shapes = when (i) {
+                                0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                                else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp),
+                            modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
+                        ) {
+                            Text(option.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        },
+    ) { Text(title, color = dimmed(enabled)) }
+}
+
+/** A row that opens a dialog, a link or an action; the current value under its title */
+@Composable
+private fun ValueRow(
+    s: Setting,
+    item: SettingItem,
+    title: String,
+    enabled: Boolean,
+    shapes: Shape,
+    modifier: Modifier,
+    controller: SettingsController,
+) {
     val value: String? = when (s) {
         is Setting.Choice -> {
             val v = controller.values.choice(s)
             controller.choiceList(s).nameOf(v) ?: v
         }
-        is Setting.Slider -> s.format(context, controller.values.slider(s))
         is Setting.Text -> controller.values.string(s.key, null)?.takeIf { it.isNotEmpty() }
         else -> null
     }
-    SegmentedListItem(
-        onClick = { controller.open(s) },
+    SegmentRow(
+        onClick = if (enabled) {
+            { controller.open(s) }
+        } else {
+            null
+        },
         shapes = shapes,
         modifier = modifier,
-        enabled = enabled,
-        leadingContent = leading,
-        trailingContent = when {
-            value != null -> {
-                {
-                    Text(
-                        value,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 128.dp),
-                    )
+        leadingContent = leadingFor(s, enabled),
+        trailingContent = if (s is Setting.Link) {
+            { Icon(SettingsIcons.OpenInNew, contentDescription = null, tint = dimmed(enabled).takeOrElse { LocalContentColor.current }) }
+        } else {
+            null
+        },
+        supportingContent = if (value != null || item.summary != null) {
+            {
+                Column {
+                    if (value != null) {
+                        Text(
+                            value,
+                            color = if (enabled) MaterialTheme.colorScheme.primary else dimmed(false),
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 2.dp, bottom = if (item.summary != null) 2.dp else 0.dp),
+                        )
+                    }
+                    Summary(item.summary, enabled)
                 }
             }
-            s is Setting.Link -> {
-                { Icon(SettingsIcons.OpenInNew, contentDescription = null) }
-            }
-            else -> null
+        } else {
+            null
         },
-        supportingContent = supporting,
-    ) { Text(title) }
+    ) { Text(title, color = dimmed(enabled)) }
 }
 
 @Composable
-private fun MoreRow(entry: Entry.More, onClick: () -> Unit) {
-    SegmentedListItem(
+private fun GroupLinkRow(entry: Entry.GroupLink, changed: State<Set<String>>, onClick: () -> Unit) {
+    // (a profile: "*" on the categories it changes)
+    val set = changed.value
+    val marked = set.isNotEmpty() && entry.group.sections.any { section -> section.items.any { it.setting.key in set } }
+    SegmentRow(
         onClick = onClick,
-        shapes = ListItemDefaults.segmentedShapes(entry.index, entry.count),
-        leadingContent = {
-            Icon(SettingsIcons.ExpandMore, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        shapes = segmentShape(entry.index, entry.count),
+        modifier = Modifier.padding(bottom = if (entry.index < entry.count - 1) SegmentGap else 0.dp),
+        leadingContent = { Icon(groupIcon(entry.group.key), contentDescription = null) },
+        trailingContent = {
+            Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         },
-        supportingContent = { Text(entry.summary, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        supportingContent = { Text(entry.group.summary, maxLines = 2, overflow = TextOverflow.Ellipsis) },
     ) {
-        Text(stringResource(R.string.settings_show_more, entry.hidden), color = MaterialTheme.colorScheme.primary)
+        Text(if (marked) "*" + entry.group.title else entry.group.title)
     }
 }
 
-/** The categories and settings this device (and a profile) shows */
+/** The categories, sections and settings this device (and a profile) shows */
 private fun buildGroups(context: Context, features: DeviceFeatures, profileMode: Boolean): List<GroupItem> =
     SettingsCatalog.groups.filter { it.visibleWhen in features }.mapNotNull { g ->
-        val items = g.settings
-            .filter { it.visibleWhen in features && !(profileMode && it.hiddenInProfile) }
-            .map { s ->
-                val summary = when {
-                    s.key == Keys.ENABLE_HDR && features.brokenHdr -> context.getString(R.string.settings_hdr_broken_shield)
-                    s.summary != 0 -> context.getString(s.summary)
-                    else -> null
-                }
-                SettingItem(s, context.getString(s.title), summary)
-            }
-        if (items.isEmpty()) null else GroupItem(g.key, context.getString(g.title), items, g.initiallyShown)
+        val sections = g.sections.withIndex().filter { it.value.visibleWhen in features }.mapNotNull { (i, section) ->
+            val items = section.settings
+                .filter { it.visibleWhen in features && !(profileMode && it.hiddenInProfile) }
+                .map { s -> settingItem(context, s, features) }
+            if (items.isEmpty()) null
+            else SectionItem("${g.key}:$i", section.title.takeIf { it != 0 }?.let(context::getString), items)
+        }
+        if (sections.isEmpty()) null else GroupItem(g.key, context.getString(g.title), context.getString(g.summary), sections)
     }
 
-/** The list's lines: each category's heading and rows (or those matching [query]) */
-private fun buildEntries(groups: List<GroupItem>, query: String, expanded: Map<String, Boolean>): List<Entry> {
+private fun settingItem(context: Context, s: Setting, features: DeviceFeatures): SettingItem {
+    val summary = when {
+        s.key == Keys.ENABLE_HDR && features.brokenHdr -> context.getString(R.string.settings_hdr_broken_shield)
+        s.summary != 0 -> context.getString(s.summary)
+        else -> null
+    }
+    val options = (s as? Setting.Choice)?.takeIf { it.shortEntries != 0 }?.let { c ->
+        val names = context.resources.getStringArray(c.shortEntries)
+        val values = context.resources.getStringArray(c.values)
+        values.mapIndexed { i, v -> ChoiceEntry(v, names.getOrElse(i) { v }) }
+    }
+    return SettingItem(s, context.getString(s.title), summary, options)
+}
+
+/**
+ * The list's lines: each section's heading and its rows. With a [query],
+ * only the matching rows, under "category › section" headings.
+ */
+private fun buildEntries(groups: List<GroupItem>, query: String): List<Entry> {
     val out = ArrayList<Entry>()
-    for (g in groups) {
-        if (query.isNotEmpty()) {
-            val matches = g.items.filter {
-                it.title.contains(query, ignoreCase = true) || it.summary?.contains(query, ignoreCase = true) == true
-            }
-            if (matches.isEmpty()) continue
-            out += Entry.Header(g, out.isEmpty())
-            matches.forEachIndexed { i, item -> out += Entry.Row(item, i, matches.size) }
-            continue
+    for (g in groups) for (section in g.sections) {
+        val rows = if (query.isEmpty()) section.items else section.items.filter {
+            it.title.contains(query, ignoreCase = true) || it.summary?.contains(query, ignoreCase = true) == true
         }
-        val limit = g.initiallyShown
-        val collapsed = limit != null && g.items.size > limit && expanded[g.key] != true
-        val shown = if (collapsed) g.items.take(limit!!) else g.items
-        val count = shown.size + if (collapsed) 1 else 0
-        out += Entry.Header(g, out.isEmpty())
-        shown.forEachIndexed { i, item -> out += Entry.Row(item, i, count) }
-        if (collapsed) {
-            val hidden = g.items.drop(limit!!)
-            out += Entry.More(g, shown.size, count, hidden.size, hidden.joinToString(", ") { it.title })
+        if (rows.isEmpty()) continue
+        val title = when {
+            query.isEmpty() -> section.title
+            section.title == null -> g.title
+            else -> g.title + " › " + section.title
         }
+        if (title != null) out += Entry.Header("h:" + section.key, title, out.isEmpty())
+        rows.forEachIndexed { i, item -> out += Entry.Row(item, i, rows.size) }
     }
     if (out.isEmpty() && query.isNotEmpty()) out += Entry.NoResults
     return out

@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -159,7 +159,7 @@ class StreamDialogs(private val activity: Activity) {
                     Text(s.title, style = MaterialTheme.typography.headlineSmall)
                     Spacer(Modifier.size(16.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        LoadingIndicator(Modifier.size(48.dp))
+                        CircularProgressIndicator(Modifier.size(40.dp))
                         Spacer(Modifier.width(16.dp))
                         Text(
                             s.message,

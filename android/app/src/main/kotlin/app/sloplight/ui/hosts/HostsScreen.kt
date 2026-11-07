@@ -4,6 +4,33 @@ import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.ExperimentalFoundationApi
+import app.sloplight.ui.components.SheetAction
+import app.sloplight.ui.components.ActionSheet
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.NetworkCheck
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.OpenInBrowser
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.StopCircle
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Password
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.PowerSettingsNew
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
+import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.clickable
+import app.sloplight.ui.components.segmentShape
+import app.sloplight.ui.components.cardColor
+import app.sloplight.ui.components.SegmentGap
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,22 +44,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeFlexibleTopAppBar
-import androidx.compose.material3.LoadingIndicator
-import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -42,7 +62,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -130,23 +149,26 @@ fun HostsScreen(
         }
     }
 
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            LargeFlexibleTopAppBar(
+            TopAppBar(
                 title = { Text(stringResource(R.string.app_title)) },
+                // The profile in use, when one is: it changes how every stream starts
+                subtitle = {
+                    if (activeProfile.isNotEmpty()) {
+                        Text(stringResource(R.string.settings_profiles_active, activeProfile), modifier = Modifier.clickable(onClick = onProfiles))
+                    }
+                },
                 actions = {
                     if (activity?.packageManager?.hasSystemFeature("amazon.hardware.fire_tv") != true) {
                         IconButton(onClick = { activity?.let(HelpLauncher::launchSetupGuide) }) {
-                            Icon(painterResource(R.drawable.ic_help), stringResource(R.string.help))
+                            Icon(Icons.AutoMirrored.Outlined.HelpOutline, stringResource(R.string.help))
                         }
                     }
                     IconButton(onClick = onSettings) {
-                        Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.action_settings))
-                    }
-                    FilledTonalIconButton(onClick = onAddHost) {
-                        Icon(painterResource(R.drawable.ic_add_plain), stringResource(R.string.title_add_pc))
+                        Icon(Icons.Outlined.Settings, stringResource(R.string.action_settings))
                     }
                 },
                 scrollBehavior = scrollBehavior,
@@ -154,10 +176,9 @@ fun HostsScreen(
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = onProfiles,
-                expanded = activeProfile.isNotEmpty(),
-                icon = { Icon(painterResource(R.drawable.ic_profiles), stringResource(R.string.profile_manager_choose_profile)) },
-                text = { Text(activeProfile) },
+                onClick = onAddHost,
+                icon = { Icon(painterResource(R.drawable.ic_add_plain), null) },
+                text = { Text(stringResource(R.string.add_pc_button)) },
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
@@ -166,18 +187,17 @@ fun HostsScreen(
         if (list.isNullOrEmpty()) {
             Searching(Modifier.padding(padding))
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 160.dp),
+            LazyColumn(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 96.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(SegmentGap),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                items(list, key = { it.uuid }) { host ->
+                itemsIndexed(list, key = { _, host -> host.uuid }) { index, host ->
                     var menu by remember { mutableStateOf(false) }
                     Box {
-                        HostCard(
+                        HostRow(
                             host = host,
+                            shape = segmentShape(index, list.size),
                             onClick = {
                                 when {
                                     !host.online -> menu = true
@@ -186,6 +206,7 @@ fun HostsScreen(
                                 }
                             },
                             onLongClick = { menu = true },
+                            onMenu = { menu = true },
                         )
                         HostMenu(
                             host = host,
@@ -268,7 +289,7 @@ fun HostsScreen(
     }
 }
 
-/** Nothing found yet: the Expressive loading indicator and what is going on */
+/** Nothing found yet: a progress ring and what is going on */
 @Composable
 private fun Searching(modifier: Modifier = Modifier) {
     Column(
@@ -276,7 +297,7 @@ private fun Searching(modifier: Modifier = Modifier) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        LoadingIndicator(Modifier.size(96.dp))
+        CircularProgressIndicator(Modifier.size(40.dp))
         Spacer(Modifier.height(24.dp))
         Text(
             stringResource(R.string.searching_pc),
@@ -289,14 +310,13 @@ private fun Searching(modifier: Modifier = Modifier) {
 }
 
 /**
- * A host: its monitor in a cookie shape, colored by its state (primary when it
- * can be streamed, tertiary while it waits to be paired, muted when it can't
- * be reached), a badge for the lock or the offline state, a wavy ring while
- * it is being reached, its name.
+ * A host: its monitor in a circle colored by its state (primary when it can
+ * be streamed, tertiary while it waits to be paired, muted when it can't be
+ * reached), its name, what state it is in; a ring while it is being reached.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun HostCard(host: Host, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun HostRow(host: Host, shape: Shape, onClick: () -> Unit, onLongClick: () -> Unit, onMenu: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val locked = host.online && !host.paired
     val (fill, ink) = when {
@@ -304,66 +324,52 @@ private fun HostCard(host: Host, onClick: () -> Unit, onLongClick: () -> Unit) {
         host.online -> colors.primaryContainer to colors.onPrimaryContainer
         else -> colors.surfaceContainerHighest to colors.onSurfaceVariant
     }
-    val cookie = MaterialShapes.Cookie9Sided.toShape()
+    val status = stringResource(
+        when {
+            host.state == ComputerDetails.State.UNKNOWN -> R.string.host_status_checking
+            !host.online -> R.string.host_status_offline
+            locked -> R.string.host_status_not_paired
+            host.runningGameId != 0 -> R.string.host_status_running
+            else -> R.string.host_status_online
+        }
+    )
     Surface(
-        shape = MaterialTheme.shapes.extraLarge,
-        color = colors.surfaceContainer,
+        shape = shape,
+        color = cardColor(),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(MaterialTheme.shapes.extraLarge)
+            .clip(shape)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick, role = Role.Button, onClickLabel = host.name),
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 20.dp, bottom = 18.dp),
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
         ) {
-            Box(Modifier.size(104.dp), contentAlignment = Alignment.Center) {
-                Box(
-                    Modifier.size(88.dp).clip(cookie).background(fill),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        painterResource(R.drawable.ic_computer_small), null, tint = ink,
-                        modifier = Modifier.size(44.dp).alpha(if (host.state == ComputerDetails.State.OFFLINE) 0.6f else 1f),
-                    )
-                }
-                if (host.state == ComputerDetails.State.UNKNOWN) {
-                    CircularWavyProgressIndicator(Modifier.size(104.dp))
-                }
-                val badge = when {
-                    host.state == ComputerDetails.State.OFFLINE -> Triple(R.drawable.ic_pc_offline, colors.surfaceContainerHighest, colors.onSurfaceVariant)
-                    locked -> Triple(R.drawable.ic_lock, colors.tertiary, colors.onTertiary)
-                    else -> null
-                }
-                if (badge != null) {
-                    Box(
-                        Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(4.dp)
-                            .size(34.dp)
-                            .background(colors.surfaceContainer, CircleShape)
-                            .padding(3.dp)
-                            .background(badge.second, CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(painterResource(badge.first), null, tint = badge.third, modifier = Modifier.size(18.dp))
-                    }
-                }
+            Box(Modifier.size(44.dp).background(fill, CircleShape), contentAlignment = Alignment.Center) {
+                Icon(painterResource(if (locked) R.drawable.ic_lock else R.drawable.ic_computer_small), null, tint = ink, modifier = Modifier.size(22.dp))
             }
-            Spacer(Modifier.height(10.dp))
-            Text(
-                host.name,
-                style = MaterialTheme.typography.titleMediumEmphasized,
-                color = colors.onSurface.copy(alpha = if (host.online) 1f else 0.6f),
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Column(Modifier.weight(1f).padding(start = 16.dp)) {
+                Text(
+                    host.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = colors.onSurface.copy(alpha = if (host.online) 1f else 0.6f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(status, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+            }
+            if (host.state == ComputerDetails.State.UNKNOWN) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
+            // The host's actions (the same as a long press)
+            IconButton(onClick = onMenu) {
+                Icon(Icons.Outlined.MoreVert, stringResource(R.string.host_actions), tint = colors.onSurfaceVariant)
+            }
         }
     }
 }
 
-/** A host's actions, as its state allows (what PcView's context menu offered) */
+/** A host's actions, as its state allows, as a sheet (what PcView's context menu offered) */
 @Composable
 private fun HostMenu(
     host: Host,
@@ -381,46 +387,68 @@ private fun HostMenu(
     onDelete: () -> Unit,
     onDetails: () -> Unit,
 ) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, shape = MaterialTheme.shapes.large) {
-        @Composable
-        fun item(text: Int, action: () -> Unit) =
-            DropdownMenuItem(text = { Text(stringResource(text)) }, onClick = { onDismiss(); action() })
+    if (!expanded) return
+    @Composable
+    fun a(text: Int, icon: androidx.compose.ui.graphics.vector.ImageVector, destructive: Boolean = false, action: () -> Unit) =
+        SheetAction(stringResource(text), icon, action, destructive)
 
-        val state = stringResource(
-            when (host.state) {
-                ComputerDetails.State.ONLINE -> R.string.pcview_menu_header_online
-                ComputerDetails.State.OFFLINE -> R.string.pcview_menu_header_offline
-                else -> R.string.pcview_menu_header_unknown
-            }
-        )
-        Text(
-            "${host.name} · $state",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        )
+    val main = buildList {
         when {
-            !host.online -> {
-                item(R.string.pcview_menu_send_wol, onWake)
-                item(R.string.pcview_menu_eol, onEol)
-            }
+            !host.online -> add(a(R.string.pcview_menu_send_wol, Icons.Outlined.PowerSettingsNew, action = onWake))
             !host.paired -> {
-                item(R.string.pcview_menu_pair_pc_otp, onPairOtp)
-                item(R.string.pcview_menu_pair_pc, onPair)
-                if (host.nvidiaServer) item(R.string.pcview_menu_eol, onEol) else item(R.string.pcview_menu_open_management_page, onManagement)
+                add(a(R.string.pcview_menu_pair_pc, Icons.Outlined.Link, action = onPair))
+                add(a(R.string.pcview_menu_pair_pc_otp, Icons.Outlined.Password, action = onPairOtp))
             }
             else -> {
                 if (host.runningGameId != 0) {
-                    item(R.string.applist_menu_resume, onResume)
-                    item(R.string.applist_menu_quit, onQuit)
+                    add(a(R.string.applist_menu_resume, Icons.Outlined.PlayArrow, action = onResume))
+                    add(a(R.string.applist_menu_quit, Icons.Outlined.StopCircle, action = onQuit))
                 }
-                if (host.nvidiaServer) item(R.string.pcview_menu_eol, onEol) else item(R.string.pcview_menu_open_management_page, onManagement)
-                item(R.string.pcview_menu_app_list, onAllApps)
+                add(a(R.string.pcview_menu_app_list, Icons.Outlined.VisibilityOff, action = onAllApps))
             }
         }
-        item(R.string.pcview_menu_test_network, onTestNetwork)
-        item(R.string.pcview_menu_delete_pc, onDelete)
-        item(R.string.pcview_menu_details, onDetails)
+    }
+    val tools = buildList {
+        if (host.online && !host.nvidiaServer) add(a(R.string.pcview_menu_open_management_page, Icons.Outlined.OpenInBrowser, action = onManagement))
+        else add(a(R.string.pcview_menu_eol, Icons.Outlined.Info, action = onEol))
+        add(a(R.string.pcview_menu_test_network, Icons.Outlined.NetworkCheck, action = onTestNetwork))
+        add(a(R.string.pcview_menu_details, Icons.Outlined.Description, action = onDetails))
+    }
+    val danger = listOf(a(R.string.pcview_menu_delete_pc, Icons.Outlined.Delete, destructive = true, action = onDelete))
+    ActionSheet(
+        onDismiss = onDismiss,
+        header = { HostSheetHeader(host) },
+        groups = listOf(main, tools, danger),
+    )
+}
+
+@Composable
+private fun HostSheetHeader(host: Host) {
+    val colors = MaterialTheme.colorScheme
+    val locked = host.online && !host.paired
+    val (fill, ink) = when {
+        locked -> colors.tertiaryContainer to colors.onTertiaryContainer
+        host.online -> colors.primaryContainer to colors.onPrimaryContainer
+        else -> colors.surfaceContainerHighest to colors.onSurfaceVariant
+    }
+    Box(Modifier.size(48.dp).background(fill, CircleShape), contentAlignment = Alignment.Center) {
+        Icon(painterResource(if (locked) R.drawable.ic_lock else R.drawable.ic_computer_small), null, tint = ink, modifier = Modifier.size(24.dp))
+    }
+    Column(Modifier.padding(start = 16.dp)) {
+        Text(host.name, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            stringResource(
+                when {
+                    host.state == ComputerDetails.State.UNKNOWN -> R.string.host_status_checking
+                    !host.online -> R.string.host_status_offline
+                    locked -> R.string.host_status_not_paired
+                    host.runningGameId != 0 -> R.string.host_status_running
+                    else -> R.string.host_status_online
+                }
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.onSurfaceVariant,
+        )
     }
 }
 
@@ -429,7 +457,7 @@ private fun HostMenu(
 private fun PairingDialog(prompt: PairingPrompt) {
     AlertDialog(
         onDismissRequest = {},
-        icon = { LoadingIndicator(Modifier.size(48.dp)) },
+        icon = { CircularProgressIndicator(Modifier.size(40.dp)) },
         title = { Text(stringResource(R.string.pair_pairing_title)) },
         text = {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
@@ -437,7 +465,7 @@ private fun PairingDialog(prompt: PairingPrompt) {
                     Text(stringResource(R.string.pair_pairing_msg), textAlign = TextAlign.Center)
                     Text(
                         prompt.pin,
-                        style = MaterialTheme.typography.displayMediumEmphasized,
+                        style = MaterialTheme.typography.displaySmall,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(vertical = 12.dp),
                     )

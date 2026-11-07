@@ -1,6 +1,29 @@
 package app.sloplight.ui.stream
 
 import android.app.Activity
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.CropSquare
+import androidx.compose.material.icons.outlined.Monitor
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.VerticalSplit
+import androidx.compose.material.icons.outlined.WebAsset
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.toShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.text.style.TextAlign
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Handler
@@ -401,17 +424,17 @@ class SwitcherOverlay(private val activity: Activity, private val ws: Workspaces
             contentAlignment = Alignment.Center,
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xB3000000))
+                .background(scheme.scrim.copy(alpha = 0.62f))
                 // A tap on the dimmed stream closes it
                 .pointerInput(Unit) { detectTapGestures { hide() } },
         ) {
-            val cardWidth = min(max(maxWidth - 48.dp, 280.dp), 720.dp)
-            // The card stays inside the screen: at most 85% of its height
-            val cardHeight = maxHeight * 0.85f
+            val cardWidth = min(max(maxWidth - 32.dp, 280.dp), 760.dp)
+            // The card stays inside the screen: at most 88% of its height
+            val cardHeight = maxHeight * 0.88f
             Surface(
-                shape = RoundedCornerShape(28.dp),
-                color = scheme.surfaceContainerHigh,
-                shadowElevation = 12.dp,
+                shape = RoundedCornerShape(32.dp),
+                color = scheme.surfaceContainer,
+                shadowElevation = 16.dp,
                 modifier = Modifier
                     .width(cardWidth)
                     // (always that tall, so it doesn't jump as the list is filtered)
@@ -422,45 +445,66 @@ class SwitcherOverlay(private val activity: Activity, private val ws: Workspaces
                 Column(Modifier.padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 10.dp)) {
                     SearchField()
                     Spacer(Modifier.size(8.dp))
-                    EntryList(Modifier.weight(1f))
+                    EntryGrid(Modifier.weight(1f), wide = cardWidth >= 560.dp)
                     Footer()
                 }
             }
         }
     }
 
+    /** The query (typed on the keyboard, as before), in a search pill; opened for a workspace: its number */
     @Composable
     private fun SearchField() {
         val scheme = MaterialTheme.colorScheme
         val empty = query.trim().isEmpty()
-        val text = when {
-            !empty -> query
-            targetSlot > 0 -> stringResource(R.string.switcher_search_hint_slot, targetSlot)
-            else -> stringResource(R.string.switcher_search_hint)
-        }
-        Text(
-            text = text,
-            color = if (empty) scheme.onSurfaceVariant else scheme.onSurface,
-            fontSize = 18.sp,
-            maxLines = 1,
-            overflow = if (empty) TextOverflow.Ellipsis else TextOverflow.StartEllipsis,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .background(scheme.surfaceContainerHighest, RoundedCornerShape(28.dp))
-                .padding(horizontal = 20.dp, vertical = 14.dp),
-        )
+                .heightIn(min = 48.dp)
+                .background(scheme.surfaceContainerHighest, CircleShape)
+                .padding(start = 16.dp, end = 8.dp),
+        ) {
+            Icon(Icons.Outlined.Search, null, tint = scheme.onSurfaceVariant)
+            Text(
+                text = if (empty) stringResource(R.string.switcher_search_hint) else query,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (empty) scheme.onSurfaceVariant else scheme.onSurface,
+                maxLines = 1,
+                overflow = if (empty) TextOverflow.Ellipsis else TextOverflow.StartEllipsis,
+                modifier = Modifier.weight(1f).padding(horizontal = 14.dp),
+            )
+            if (targetSlot > 0) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.background(scheme.primaryContainer, CircleShape).padding(start = 6.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+                ) {
+                    NumberBadge(targetSlot, filled = true, size = 24.dp)
+                    Text(
+                        stringResource(R.string.switcher_into_workspace),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = scheme.onPrimaryContainer,
+                        modifier = Modifier.padding(start = 8.dp),
+                    )
+                }
+            }
+        }
     }
 
+    /**
+     * Everything as one grid: headings across, workspaces as tiles (three a
+     * row when wide), the PC's windows as rows, apps as a launcher's icons.
+     * The selection is still a single index the keys move through.
+     */
     @Composable
-    private fun EntryList(modifier: Modifier) {
+    private fun EntryGrid(modifier: Modifier, wide: Boolean) {
         val list = entries
         val sel = selected
-        val state = rememberLazyListState()
-        val pad = with(LocalDensity.current) { 8.dp.roundToPx() }
-        // The selected row stays in view
+        val state = rememberLazyGridState()
+        val pad = with(LocalDensity.current) { 12.dp.roundToPx() }
+        // The selected item stays in view
         LaunchedEffect(sel, list) {
             if (sel < 0 || sel >= list.size) return@LaunchedEffect
-            // (once the list is laid out with these entries)
             snapshotFlow { state.layoutInfo.totalItemsCount }.first { it == list.size }
             val info = state.layoutInfo
             if (info.visibleItemsInfo.isEmpty()) return@LaunchedEffect
@@ -468,8 +512,8 @@ class SwitcherOverlay(private val activity: Activity, private val ws: Workspaces
             if (item == null) {
                 state.animateScrollToItem(sel)
             } else {
-                val top = item.offset - pad
-                val bottom = item.offset + item.size + pad
+                val top = item.offset.y - pad
+                val bottom = item.offset.y + item.size.height + pad
                 if (top < info.viewportStartOffset) {
                     state.animateScrollBy((top - info.viewportStartOffset).toFloat())
                 } else if (bottom > info.viewportEndOffset) {
@@ -477,138 +521,222 @@ class SwitcherOverlay(private val activity: Activity, private val ws: Workspaces
                 }
             }
         }
-        LazyColumn(state = state, modifier = modifier.fillMaxWidth()) {
-            itemsIndexed(list) { i, e -> EntryRow(e, i, i == sel) }
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(12),
+            state = state,
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+            modifier = modifier.fillMaxWidth(),
+        ) {
+            itemsIndexed(
+                list,
+                span = { _, e ->
+                    GridItemSpan(
+                        when (e.kind) {
+                            else -> maxLineSpan
+                        }
+                    )
+                },
+                contentType = { _, e -> e.kind },
+            ) { i, e ->
+                when (e.kind) {
+                    Entry.HEADER -> Text(
+                        e.title,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(start = 12.dp, top = if (i == 0) 2.dp else 8.dp, bottom = 2.dp),
+                    )
+                    Entry.NOTE -> Text(
+                        e.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    )
+                    // (workspaces, the PC's windows and apps: the same compact rows)
+                    else -> EntryRow(e, i, i == sel)
+                }
+            }
         }
     }
 
+    /** What all the items share: the press, the long press, the selection (a container and an outline) */
     @OptIn(ExperimentalFoundationApi::class)
+    @Composable
+    private fun Selectable(
+        index: Int,
+        isSelected: Boolean,
+        longPress: Boolean,
+        shape: Shape,
+        idle: Color,
+        modifier: Modifier = Modifier,
+        content: @Composable () -> Unit,
+    ) {
+        val scheme = MaterialTheme.colorScheme
+        val container by animateColorAsState(if (isSelected) scheme.secondaryContainer else idle, MaterialTheme.motionScheme.fastEffectsSpec(), label = "sel")
+        Box(
+            modifier
+                .clip(shape)
+                .background(container)
+                .combinedClickable(
+                    onLongClick = if (longPress) ({ menuFor = index }) else null,
+                    onClick = { activate(index) },
+                )
+        ) { content() }
+    }
+
+    /**
+     * A compact row: a workspace's number in a small cookie (filled for the
+     * one in front; an empty workspace a plus), the icon, the name, and what
+     * it is, dim, at the end.
+     */
     @Composable
     private fun EntryRow(e: Entry, index: Int, isSelected: Boolean) {
         val scheme = MaterialTheme.colorScheme
-        if (e.kind == Entry.HEADER || e.kind == Entry.NOTE) {
-            // Headings in the primary color, notes dim
-            Text(
-                text = e.title,
-                fontSize = 13.sp,
-                color = if (e.kind == Entry.HEADER) scheme.primary else scheme.onSurfaceVariant,
-                fontWeight = if (e.kind == Entry.HEADER) FontWeight.Bold else null,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = if (e.kind == Entry.HEADER) 12.dp else 6.dp, bottom = 6.dp),
-            )
-            return
-        }
-        val longPress = e.kind == Entry.WORKSPACE || ((e.kind == Entry.WINDOW || e.kind == Entry.APP) && e.canBeside)
-        val shape = RoundedCornerShape(28.dp)
+        val workspace = e.kind == Entry.WORKSPACE || e.kind == Entry.EMPTY
+        val empty = e.kind == Entry.EMPTY
+        val longPress = e.kind == Entry.WORKSPACE || e.canBeside
         Box {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 52.dp)
-                    .background(if (isSelected) scheme.secondaryContainer else Color.Transparent, shape)
-                    .combinedClickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = androidx.compose.material3.ripple(),
-                        onLongClick = if (longPress) ({ menuFor = index }) else null,
-                        onClick = { activate(index) },
-                    )
-                    .padding(start = 12.dp, top = 8.dp, end = 16.dp, bottom = 8.dp),
-            ) {
-                Badge(e)
-                Spacer(Modifier.width(10.dp))
-                Box(Modifier.size(28.dp)) {
-                    val bmp = e.icon
-                    if (bmp != null) {
-                        val image = remember(bmp) { bmp.asImageBitmap() }
-                        Image(image, contentDescription = null, modifier = Modifier.size(28.dp))
+            Selectable(index, isSelected, longPress, shape = CircleShape, idle = Color.Transparent, modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.heightIn(min = 44.dp).padding(start = 10.dp, end = 14.dp, top = 4.dp, bottom = 4.dp),
+                ) {
+                    if (workspace) {
+                        NumberBadge(e.slot, filled = e.front, size = 24.dp)
+                        Spacer(Modifier.width(10.dp))
                     }
-                }
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    text = e.title,
-                    fontSize = 15.sp,
-                    color = if (e.kind == Entry.EMPTY) scheme.onSurfaceVariant else scheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                if (!e.detail.isNullOrEmpty()) {
+                    Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                        if (empty) Icon(Icons.Outlined.Add, null, tint = scheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                        else AppIcon(e.icon, 24.dp)
+                    }
                     Text(
-                        text = e.detail,
-                        fontSize = 12.sp,
-                        color = scheme.onSurfaceVariant,
+                        e.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (empty) scheme.onSurfaceVariant else scheme.onSurface,
                         maxLines = 1,
-                        modifier = Modifier.padding(start = 12.dp),
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
                     )
+                    if (!e.detail.isNullOrEmpty()) {
+                        Text(e.detail, style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant, maxLines = 1)
+                    }
                 }
             }
-            if (longPress) {
-                DropdownMenu(expanded = menuFor == index, onDismissRequest = { menuFor = -1 }) {
-                    if (e.kind == Entry.WORKSPACE) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.switcher_send_back)) },
-                            onClick = { menuFor = -1; ws.release(e.slot) },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.switcher_close_window)) },
-                            onClick = { menuFor = -1; ws.close(e.slot) },
-                        )
-                    } else {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.switcher_open_own)) },
-                            onClick = { menuFor = -1; activate(index, false) },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.switcher_open_beside)) },
-                            onClick = { menuFor = -1; activate(index, true) },
-                        )
-                    }
-                }
+            ItemMenu(e, index)
+        }
+    }
+
+    /** A long press: a workspace's (send back, close) or a window's / app's (own workspace, beside) */
+    @Composable
+    private fun ItemMenu(e: Entry, index: Int) {
+        val longPress = e.kind == Entry.WORKSPACE || ((e.kind == Entry.WINDOW || e.kind == Entry.APP) && e.canBeside)
+        if (!longPress) return
+        DropdownMenu(expanded = menuFor == index, onDismissRequest = { menuFor = -1 }, shape = MaterialTheme.shapes.large) {
+            if (e.kind == Entry.WORKSPACE) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.switcher_send_back)) },
+                    leadingIcon = { Icon(Icons.Outlined.Monitor, null) },
+                    onClick = { menuFor = -1; ws.release(e.slot) },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.switcher_close_window)) },
+                    leadingIcon = { Icon(Icons.Outlined.Close, null) },
+                    onClick = { menuFor = -1; ws.close(e.slot) },
+                )
+            } else {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.switcher_open_own)) },
+                    leadingIcon = { Icon(Icons.Outlined.CropSquare, null) },
+                    onClick = { menuFor = -1; activate(index, false) },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.switcher_open_beside)) },
+                    leadingIcon = { Icon(Icons.Outlined.VerticalSplit, null) },
+                    onClick = { menuFor = -1; activate(index, true) },
+                )
             }
         }
     }
 
     @Composable
-    private fun Badge(e: Entry) {
-        val scheme = MaterialTheme.colorScheme
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(26.dp).let {
-            when {
-                e.kind != Entry.WORKSPACE && e.kind != Entry.EMPTY -> it
-                // The workspace in front: a filled primary circle; the others outlined
-                e.front -> it.background(scheme.primary, CircleShape)
-                else -> it.border(1.5.dp, scheme.outlineVariant, CircleShape)
-            }
-        }) {
-            if (e.kind == Entry.WORKSPACE || e.kind == Entry.EMPTY) {
-                Text(
-                    text = e.slot.toString(),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (e.front) scheme.onPrimary else scheme.onSurface,
-                )
-            }
+    private fun AppIcon(bmp: Bitmap?, size: androidx.compose.ui.unit.Dp) {
+        if (bmp != null) {
+            val image = remember(bmp) { bmp.asImageBitmap() }
+            Image(image, contentDescription = null, modifier = Modifier.size(size))
+        } else {
+            Icon(Icons.Outlined.WebAsset, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(size * 0.8f))
         }
     }
 
+    /** A workspace's number in a cookie shape: filled in the primary color, or quiet */
+    @Composable
+    private fun NumberBadge(n: Int, filled: Boolean, size: androidx.compose.ui.unit.Dp) {
+        val scheme = MaterialTheme.colorScheme
+        val cookie = MaterialShapes.Cookie9Sided.toShape()
+        Box(
+            Modifier.size(size).clip(cookie).background(if (filled) scheme.primary else scheme.surfaceContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                n.toString(),
+                style = if (size >= 32.dp) MaterialTheme.typography.titleMedium else MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (filled) scheme.onPrimary else scheme.onSurface,
+            )
+        }
+    }
+
+    /** The shortcuts as keycaps; without the keyboard service, how to get Win instead of Alt */
     @Composable
     private fun Footer() {
+        val scheme = MaterialTheme.colorScheme
         val m = if (metaMode) "Win" else "Alt"
-        var text = stringResource(R.string.switcher_footer, m)
-        if (!metaMode) {
-            text += "\n" + stringResource(R.string.switcher_footer_service, stringResource(R.string.keyboard_service_label))
-        }
-        Text(
-            text = text,
-            fontSize = 11.sp,
-            lineHeight = 15.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(interactionSource = null, indication = null) { openAccessibilitySettings() }
-                .padding(start = 12.dp, top = 6.dp, end = 12.dp, bottom = 2.dp),
+        val hints = listOf(
+            listOf(m, "1–9") to R.string.switcher_key_switch,
+            listOf(m, "⇧", "1–9") to R.string.switcher_key_move,
+            listOf(m, "Ctrl", "1–9") to R.string.switcher_key_swap,
+            listOf(m, "←→") to R.string.switcher_key_focus,
+            listOf(m, "D") to R.string.switcher_key_this,
+            listOf(m, "⇧", "Q") to R.string.switcher_key_close,
+            listOf("⇧", "Enter") to R.string.switcher_key_beside,
+            listOf("Del") to R.string.switcher_key_send_back,
         )
+        Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(horizontal = 4.dp),
+            ) {
+                for ((keys, label) in hints) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        keys.forEach { k ->
+                            Text(
+                                k,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = scheme.onSurface,
+                                modifier = Modifier
+                                    .padding(end = 3.dp)
+                                    .background(scheme.surfaceContainerHighest, RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                        Text(stringResource(label), style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant, modifier = Modifier.padding(start = 3.dp))
+                    }
+                }
+            }
+            if (!metaMode) {
+                Text(
+                    stringResource(R.string.switcher_footer_service, stringResource(R.string.keyboard_service_label)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = scheme.primary,
+                    modifier = Modifier
+                        .padding(top = 8.dp, start = 4.dp)
+                        .clickable(interactionSource = null, indication = null) { openAccessibilitySettings() },
+                )
+            }
+        }
     }
 
+    /** After a switch: the workspace's number in a cookie and the window's name, for a moment */
     @Composable
     private fun Hud() {
         val scheme = MaterialTheme.colorScheme
@@ -621,25 +749,35 @@ class SwitcherOverlay(private val activity: Activity, private val ws: Workspaces
             alpha.animateTo(0f, tween(250))
             hudDone(gen)
         }
+        // The text is "N   name" (or a message): the number goes in the badge
+        val number = hudText.trim().substringBefore(' ').toIntOrNull()
+        val name = if (number != null) hudText.trim().substringAfter(' ').trim() else hudText
         // (no Surface: touches go through to the stream)
         Box(Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 12.dp).graphicsLayer { this.alpha = alpha.value }) {
-            Text(
-                text = hudText,
-                color = scheme.inverseOnSurface,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
-                    .widthIn(max = 420.dp)
+                    .widthIn(max = 440.dp)
                     .graphicsLayer {
-                        shadowElevation = 6.dp.toPx()
+                        shadowElevation = 8.dp.toPx()
                         shape = CircleShape
                         clip = false
                     }
                     .background(scheme.inverseSurface, CircleShape)
-                    .padding(horizontal = 20.dp, vertical = 10.dp),
-            )
+                    .padding(start = if (number != null) 6.dp else 20.dp, end = 20.dp, top = 6.dp, bottom = 6.dp),
+            ) {
+                if (number != null) {
+                    NumberBadge(number, filled = true, size = 34.dp)
+                    Spacer(Modifier.width(12.dp))
+                }
+                Text(
+                    text = name,
+                    color = scheme.inverseOnSurface,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 

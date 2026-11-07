@@ -2,23 +2,41 @@ package app.sloplight.ui.addhost
 
 import android.app.Application
 import android.net.Uri
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeFlexibleTopAppBar
-import androidx.compose.material3.LoadingIndicator
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +59,21 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.sloplight.data.HostsRepository
 import app.sloplight.data.PendingPairing
+import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.toShape
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Wifi
+import app.sloplight.ui.components.SectionHeading
+import app.sloplight.ui.components.SegmentRow
+import app.sloplight.ui.components.SegmentedColumn
 import com.limelight.R
 import com.limelight.nvstream.http.ComputerDetails
 import com.limelight.nvstream.http.NvHTTP
@@ -136,8 +169,11 @@ class AddHostViewModel(application: Application) : AndroidViewModel(application)
 }
 
 /**
- * A host added by its address. From a link ([linkAddress] = address?pin=…),
- * it is offered with the link's name and added once confirmed.
+ * A host added by its address, as the journal's forms are: the address typed
+ * large in a hero card (what is happening shows in the card too: looking for
+ * the PC, or why it couldn't be added), how hosts are found under it, and
+ * "Add PC" as the floating button. From a link ([linkAddress] =
+ * address?pin=…), it is offered with the link's name and added once confirmed.
  */
 @Composable
 fun AddHostScreen(
@@ -150,8 +186,8 @@ fun AddHostScreen(
     var address by rememberSaveable { mutableStateOf(linkAddress?.substringBefore('?') ?: "") }
     var confirmLink by rememberSaveable { mutableStateOf(linkAddress != null && linkAddress.contains('?')) }
     val focus = remember { FocusRequester() }
-    val emptyMessage = stringResource(R.string.addpc_enter_ip)
     var emptyError by remember { mutableStateOf(false) }
+    val adding = state == AddState.Adding
 
     LaunchedEffect(state) { if (state == AddState.Added) onBack() }
     LaunchedEffect(Unit) { if (!confirmLink) focus.requestFocus() }
@@ -162,54 +198,57 @@ fun AddHostScreen(
 
     Scaffold(
         topBar = {
-            LargeFlexibleTopAppBar(
-                title = { Text(stringResource(R.string.title_add_pc)) },
+            TopAppBar(
+                title = { Text(stringResource(R.string.add_pc_button)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back)) }
                 },
             )
         },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = { if (!adding) submit() },
+                expanded = true,
+                icon = { Icon(Icons.Outlined.Check, null) },
+                text = { Text(stringResource(R.string.add_pc_button)) },
+                modifier = Modifier.imePadding(),
+            )
+        },
     ) { padding ->
         Column(
-            modifier = Modifier.padding(padding).padding(horizontal = 24.dp, vertical = 16.dp).fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 96.dp),
         ) {
-            OutlinedTextField(
-                value = address,
-                onValueChange = { address = it; emptyError = false },
-                label = { Text(stringResource(R.string.ip_hint)) },
-                leadingIcon = { Icon(painterResource(R.drawable.ic_computer_small), null) },
-                singleLine = true,
-                isError = emptyError,
-                supportingText = if (emptyError) {{ Text(emptyMessage) }} else null,
-                enabled = state != AddState.Adding,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done, autoCorrectEnabled = false),
-                keyboardActions = KeyboardActions(onDone = { submit() }),
-                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            AddressHero(
+                address = address,
+                onAddress = { address = it; emptyError = false; if (state is AddState.Failed) viewModel.dismissError() },
+                onDone = ::submit,
+                enabled = !adding,
+                adding = adding,
+                error = when {
+                    emptyError -> stringResource(R.string.addpc_enter_ip)
+                    state is AddState.Failed -> (state as AddState.Failed).message
+                    else -> null
+                },
+                focus = focus,
             )
-            Button(onClick = ::submit, enabled = state != AddState.Adding, modifier = Modifier.align(Alignment.End)) {
-                Text(stringResource(R.string.add_pc_button))
+            Spacer(Modifier.height(24.dp))
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                SectionHeading(stringResource(R.string.addpc_how_title))
+                SegmentedColumn(
+                    listOf<@Composable () -> Unit>(
+                        { Tip(Icons.Outlined.Wifi, R.string.addpc_tip_lan_title, R.string.addpc_tip_lan) },
+                        { Tip(Icons.Outlined.Language, R.string.addpc_tip_remote_title, R.string.addpc_tip_remote) },
+                        { Tip(Icons.Outlined.Link, R.string.addpc_tip_link_title, R.string.addpc_tip_link) },
+                    )
+                )
             }
         }
     }
 
-    if (state == AddState.Adding) {
-        AlertDialog(
-            onDismissRequest = {},
-            icon = { LoadingIndicator(Modifier.size(48.dp)) },
-            title = { Text(stringResource(R.string.title_add_pc)) },
-            text = { Text(stringResource(R.string.msg_add_pc)) },
-            confirmButton = {},
-        )
-    }
-    (state as? AddState.Failed)?.let {
-        AlertDialog(
-            onDismissRequest = viewModel::dismissError,
-            title = { Text(stringResource(R.string.conn_error_title)) },
-            text = { Text(it.message) },
-            confirmButton = { TextButton(onClick = viewModel::dismissError) { Text(stringResource(android.R.string.ok)) } },
-        )
-    }
     if (confirmLink && linkAddress != null) {
         val server = linkAddress.substringBefore('?')
         val shown = if (!linkName.isNullOrEmpty()) "$linkName ($server)" else server
@@ -221,4 +260,85 @@ fun AddHostScreen(
             dismissButton = { TextButton(onClick = { confirmLink = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
+}
+
+/**
+ * The hero: a tinted card with the address typed large; while the PC is
+ * looked for, a progress bar; when it couldn't be added, why, in the card.
+ */
+@Composable
+private fun AddressHero(
+    address: String,
+    onAddress: (String) -> Unit,
+    onDone: () -> Unit,
+    enabled: Boolean,
+    adding: Boolean,
+    error: String?,
+    focus: FocusRequester,
+) {
+    val colors = MaterialTheme.colorScheme
+    val tint = if (error != null) colors.error else colors.primary
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = tint.copy(alpha = 0.12f),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+    ) {
+        Box {
+            // A quiet shape in the corner, as the journal's hero cards have
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = 48.dp, y = (-48).dp)
+                    .requiredSize(140.dp)
+                    .clip(MaterialShapes.Cookie9Sided.toShape())
+                    .background(tint.copy(alpha = 0.12f))
+            )
+            Column(Modifier.padding(horizontal = 24.dp, vertical = 18.dp)) {
+                Text(stringResource(R.string.addpc_address_label), style = MaterialTheme.typography.labelLarge, color = colors.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                val style = MaterialTheme.typography.headlineLarge.copy(color = colors.onSurface)
+                BasicTextField(
+                    value = address,
+                    onValueChange = onAddress,
+                    enabled = enabled,
+                    singleLine = true,
+                    textStyle = style,
+                    cursorBrush = SolidColor(tint),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done, autoCorrectEnabled = false),
+                    keyboardActions = KeyboardActions(onDone = { onDone() }),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                    decorationBox = { field ->
+                        Box {
+                            if (address.isEmpty()) Text("192.168.1.20", style = style.copy(color = colors.onSurfaceVariant.copy(alpha = 0.5f)))
+                            field()
+                        }
+                    },
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(stringResource(R.string.addpc_address_hint), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                AnimatedVisibility(visible = adding, enter = fadeIn() + expandVertically(), exit = shrinkVertically() + fadeOut()) {
+                    Column(Modifier.padding(top = 16.dp)) {
+                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                        Text(stringResource(R.string.msg_add_pc), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp))
+                    }
+                }
+                AnimatedVisibility(visible = error != null && !adding, enter = fadeIn() + expandVertically(), exit = shrinkVertically() + fadeOut()) {
+                    Row(Modifier.padding(top = 16.dp), verticalAlignment = Alignment.Top) {
+                        Icon(Icons.Outlined.ErrorOutline, null, tint = colors.error, modifier = Modifier.size(20.dp))
+                        Text(error ?: "", style = MaterialTheme.typography.bodyMedium, color = colors.error, modifier = Modifier.padding(start = 8.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** How hosts are found: an icon, what, how */
+@Composable
+private fun Tip(icon: androidx.compose.ui.graphics.vector.ImageVector, title: Int, text: Int) {
+    SegmentRow(
+        shapes = RectangleShape,
+        leadingContent = { Icon(icon, null) },
+        supportingContent = { Text(stringResource(text)) },
+    ) { Text(stringResource(title)) }
 }

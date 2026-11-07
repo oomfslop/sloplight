@@ -10,7 +10,19 @@ import android.util.DisplayMetrics
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
+import android.graphics.Color
+import androidx.compose.runtime.LaunchedEffect
+import app.sloplight.data.rememberAppearance
+import app.sloplight.data.isDark
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -39,6 +51,7 @@ import app.sloplight.ui.nav.EditProfile
 import app.sloplight.ui.nav.Hosts
 import app.sloplight.ui.nav.Profiles
 import app.sloplight.ui.nav.Settings
+import app.sloplight.ui.nav.SettingsCategory
 import app.sloplight.ui.theme.SloplightTheme
 import com.limelight.LimeLog
 import com.limelight.R
@@ -75,7 +88,14 @@ class MainActivity : ComponentActivity() {
         Thread { AndroidCryptoProvider(this).clientCertificate }.start()
 
         setContent {
-            SloplightTheme {
+            val appearance = rememberAppearance()
+            val dark = appearance.isDark()
+            // The system bars' icons follow the app's theme, not only the system's
+            LaunchedEffect(dark) {
+                val style = if (dark) SystemBarStyle.dark(Color.TRANSPARENT) else SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+                enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+            }
+            SloplightTheme(darkTheme = dark, useDynamicColor = appearance.wallpaperColors) {
                 GlRendererProbe()
                 App(linkRoute = linkRoute, onLinkHandled = { linkRoute = null })
             }
@@ -239,6 +259,11 @@ private fun App(linkRoute: NavKey?, onLinkHandled: () -> Unit) {
             rememberSaveableStateHolderNavEntryDecorator(),
             rememberViewModelStoreNavEntryDecorator(),
         ),
+        // A short slide and fade (forward: in from the right; back: the other way);
+        // the screen that leaves fades fast, so the two don't show through each other
+        transitionSpec = { ScreenMotion.forward },
+        popTransitionSpec = { ScreenMotion.back },
+        predictivePopTransitionSpec = { ScreenMotion.back },
         entryProvider = entryProvider {
             entry<Hosts> {
                 HostsScreen(
@@ -264,7 +289,15 @@ private fun App(linkRoute: NavKey?, onLinkHandled: () -> Unit) {
                 AddHostScreen(onBack = { backStack.removeLastOrNull() }, linkAddress = key.address, linkName = key.name)
             }
             entry<Settings> {
-                app.sloplight.ui.settings.SettingsScreen(onBack = { backStack.removeLastOrNull() })
+                app.sloplight.ui.settings.SettingsScreen(
+                    onBack = { backStack.removeLastOrNull() },
+                    onOpenCategory = { backStack.add(SettingsCategory(it)) },
+                    onProfiles = { backStack.add(Profiles) },
+                    activeProfile = activeProfile,
+                )
+            }
+            entry<SettingsCategory> { key ->
+                app.sloplight.ui.settings.SettingsCategoryScreen(groupKey = key.key, onBack = { backStack.removeLastOrNull() })
             }
             entry<Profiles> {
                 app.sloplight.ui.profiles.ProfilesScreen(
@@ -276,5 +309,20 @@ private fun App(linkRoute: NavKey?, onLinkHandled: () -> Unit) {
                 app.sloplight.ui.profiles.EditProfileScreen(profileUuid = key.profileUuid, onBack = { backStack.removeLastOrNull() })
             }
         },
+    )
+}
+
+/** The screens' transitions */
+private object ScreenMotion {
+    private const val MS = 260
+    private val offset = { width: Int -> width / 5 }
+
+    val forward = ContentTransform(
+        slideInHorizontally(tween(MS, easing = FastOutSlowInEasing), offset) + fadeIn(tween(MS)),
+        slideOutHorizontally(tween(MS, easing = FastOutSlowInEasing)) { -offset(it) } + fadeOut(tween(MS / 2)),
+    )
+    val back = ContentTransform(
+        slideInHorizontally(tween(MS, easing = FastOutSlowInEasing)) { -offset(it) } + fadeIn(tween(MS)),
+        slideOutHorizontally(tween(MS, easing = FastOutSlowInEasing), offset) + fadeOut(tween(MS / 2)),
     )
 }

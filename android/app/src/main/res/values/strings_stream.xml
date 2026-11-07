@@ -18,4 +18,13 @@
     <string name="switcher_open_beside">Open beside the window in front</string>
     <string name="switcher_footer">%1$s+1–9 switch · %1$s+Shift+1–9 move window there · %1$s+Ctrl+1–9 swap · %1$s+arrows focus · %1$s+Shift+arrows move · %1$s+D this · %1$s+Shift+Q close · Shift+Enter open beside · Del send back to PC</string>
     <string name="switcher_footer_service">Tap here and turn on “%1$s” to use Win instead of Alt</string>
+    <string name="switcher_into_workspace">here</string>
+    <string name="switcher_key_switch">switch</string>
+    <string name="switcher_key_move">move window there</string>
+    <string name="switcher_key_swap">swap</string>
+    <string name="switcher_key_focus">focus</string>
+    <string name="switcher_key_this">this</string>
+    <string name="switcher_key_close">close</string>
+    <string name="switcher_key_beside">open beside</string>
+    <string name="switcher_key_send_back">send back to PC</string>
 </resources>

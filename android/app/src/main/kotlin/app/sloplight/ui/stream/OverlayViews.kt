@@ -23,7 +23,7 @@ internal fun overlayView(context: Context, keepClear: Boolean = false, content: 
         isFocusableInTouchMode = false
         descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
         if (keepClear && Build.VERSION.SDK_INT >= 33) setPreferKeepClear(true)
-        setContent { SloplightTheme(darkTheme = true) { content() } }
+        setContent { SloplightTheme(darkTheme = true, useDynamicColor = app.sloplight.data.AppearanceSettings.read(context).wallpaperColors) { content() } }
     }
 
 /** Sets up a ComposeView declared in a layout the same way as [overlayView] */
@@ -31,7 +31,7 @@ internal fun ComposeView.asOverlay(content: @Composable () -> Unit) {
     isFocusable = false
     isFocusableInTouchMode = false
     descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
-    setContent { SloplightTheme(darkTheme = true) { content() } }
+    setContent { SloplightTheme(darkTheme = true, useDynamicColor = app.sloplight.data.AppearanceSettings.read(context).wallpaperColors) { content() } }
 }
 
 internal fun Activity.contentRoot(): FrameLayout = findViewById(android.R.id.content)

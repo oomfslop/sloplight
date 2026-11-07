@@ -4,7 +4,100 @@
     <string name="settings_search">Search settings</string>
     <string name="settings_search_clear">Clear search</string>
     <string name="settings_no_results">No matching settings</string>
-    <string name="settings_show_more">Show %1$d more</string>
     <string name="settings_hdr_broken_shield">Update the firmware on your NVIDIA SHIELD Android TV to enable HDR</string>
     <string name="settings_language_reset_restart">Language has been reset to default, please restart the app!</string>
+    <string name="settings_streaming">Streaming</string>
+    <string name="settings_appearance">Appearance</string>
+    <string name="settings_theme">Theme</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_wallpaper_colors">Wallpaper colors</string>
+    <string name="settings_wallpaper_colors_summary">Colors from your wallpaper instead of Sloplight\'s own</string>
+    <string name="settings_profiles_none">None in use</string>
+    <string name="settings_profiles_active">In use: %1$s</string>
+    <string name="settings_value_edit">Enter a value</string>
+    <string name="settings_value_invalid">Not a number</string>
+
+    <!-- Categories: their names and what each is about (in the hub) -->
+    <string name="settings_group_video">Video &amp; quality</string>
+    <string name="settings_group_video_summary">Resolution, bitrate, latency and the picture</string>
+    <string name="settings_group_audio">Audio</string>
+    <string name="settings_group_audio_summary">Surround sound, equalizer and sound on the PC</string>
+    <string name="settings_group_gamepad">Controllers</string>
+    <string name="settings_group_gamepad_summary">Deadzone, buttons, motion and rumble</string>
+    <string name="settings_group_input">Touch &amp; mouse</string>
+    <string name="settings_group_input_summary">Touch modes, sensitivity, mouse and trackpad</string>
+    <string name="settings_group_keyboard">Keyboard</string>
+    <string name="settings_group_keyboard_summary">Physical and on-screen keyboards, custom keys</string>
+    <string name="settings_group_onscreen">On-screen controls</string>
+    <string name="settings_group_onscreen_summary">A virtual gamepad and keys on the touchscreen</string>
+    <string name="settings_group_ui">Stream screen</string>
+    <string name="settings_group_ui_summary">Menus, overlays, zoom and the clipboard</string>
+    <string name="settings_group_host">Host</string>
+    <string name="settings_group_host_summary">The host\'s virtual display and its games</string>
+    <string name="settings_group_misc">App &amp; about</string>
+    <string name="settings_group_misc_summary">Language, box art, updates and debug info</string>
+
+    <!-- Sections inside the categories -->
+    <string name="settings_section_quality">Quality</string>
+    <string name="settings_section_latency">Latency &amp; smoothness</string>
+    <string name="settings_section_screen">Screen</string>
+    <string name="settings_section_custom">Custom values</string>
+    <string name="settings_section_3d">3D</string>
+    <string name="settings_section_basics">Basics</string>
+    <string name="settings_section_usb">USB</string>
+    <string name="settings_section_mouse_emulation">Mouse emulation</string>
+    <string name="settings_section_motion">Motion</string>
+    <string name="settings_section_rumble">Rumble</string>
+    <string name="settings_section_touchscreen">Touchscreen</string>
+    <string name="settings_section_touch_sensitivity">Touch sensitivity</string>
+    <string name="settings_section_trackpad_mode">Trackpad mode</string>
+    <string name="settings_section_mouse">Mouse</string>
+    <string name="settings_section_physical_trackpad">Physical trackpad</string>
+    <string name="settings_section_physical_keyboard">Physical keyboard</string>
+    <string name="settings_section_onscreen_keyboard">On-screen keyboard</string>
+    <string name="settings_section_custom_keys">Custom keys</string>
+    <string name="settings_section_virtual_gamepad">Virtual gamepad</string>
+    <string name="settings_section_virtual_keys">Virtual keys</string>
+    <string name="settings_section_behavior">Behavior</string>
+    <string name="settings_section_zoom">Zoom</string>
+    <string name="settings_section_perf_overlay">Performance overlay</string>
+    <string name="settings_section_clipboard">Clipboard</string>
+    <string name="settings_section_host_display">Virtual display</string>
+    <string name="settings_section_host_games">Games</string>
+    <string name="settings_section_app">App</string>
+    <string name="settings_section_about">About</string>
+
+    <!-- Short names of choices shown as buttons; same order as their values -->
+    <string-array name="settings_short_video_format">
+        <item>Auto</item>
+        <item>AV1</item>
+        <item>HEVC</item>
+        <item>H.264</item>
+    </string-array>
+    <string-array name="settings_short_audio_config">
+        <item>Stereo</item>
+        <item>5.1</item>
+        <item>7.1</item>
+    </string-array>
+    <string-array name="settings_short_analog_scrolling">
+        <item>None</item>
+        <item>Right</item>
+        <item>Left</item>
+    </string-array>
+    <string-array name="settings_short_align">
+        <item>Left</item>
+        <item>Center</item>
+        <item>Right</item>
+    </string-array>
+    <string-array name="settings_short_render_mode">
+        <item>2D</item>
+        <item>3D</item>
+        <item>3D movie</item>
+    </string-array>
+    <string name="settings_version">Version</string>
+    <string name="settings_debug_info_summary">Controllers, vibration and the device\'s decoders</string>
+    <string name="apps_posters_small">Smaller posters</string>
+    <string name="apps_posters_large">Larger posters</string>
 </resources>

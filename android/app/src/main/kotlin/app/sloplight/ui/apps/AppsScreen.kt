@@ -6,9 +6,34 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.AddToHomeScreen
+import androidx.compose.material.icons.outlined.Dashboard
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.Monitor
+import androidx.compose.material.icons.outlined.ViewModule
+import androidx.compose.material.icons.outlined.StopCircle
+import androidx.compose.material.icons.outlined.SwapHoriz
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.Button
+import androidx.compose.ui.graphics.Shape
+import app.sloplight.data.BoxArt
+import app.sloplight.ui.components.ActionSheet
+import app.sloplight.ui.components.SectionHeading
+import app.sloplight.ui.components.SheetAction
+import app.sloplight.ui.components.cardColor
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,14 +49,14 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeFlexibleTopAppBar
-import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -103,6 +128,12 @@ fun AppsScreen(
     val activity = LocalActivity.current ?: return
     val apps by viewModel.apps.collectAsStateWithLifecycle()
     val prefs = remember { PreferenceConfiguration.readPreferences(activity) }
+    // The posters' size: the grid's own choice, switched from its top bar
+    var small by remember { mutableStateOf(prefs.smallIconMode) }
+    fun setSmall(on: Boolean) {
+        small = on
+        androidx.preference.PreferenceManager.getDefaultSharedPreferences(activity).edit().putBoolean("checkbox_small_icon_mode", on).apply()
+    }
     val snackbar = remember { SnackbarHostState() }
     var confirm by remember { mutableStateOf<Confirm?>(null) }
     var details by remember { mutableStateOf<AppItem?>(null) }
@@ -163,24 +194,29 @@ fun AppsScreen(
         confirm = Confirm.Quit { ServerHelper.doQuit(activity, c, item.app, b) { viewModel.pollNow() } }
     }
 
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            LargeFlexibleTopAppBar(
+            TopAppBar(
                 title = { Text(hostName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                subtitle = {
+                    if (activeProfile.isNotEmpty()) {
+                        Text(stringResource(R.string.settings_profiles_active, activeProfile), modifier = Modifier.clickable(onClick = onProfiles))
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back)) }
                 },
+                actions = {
+                    IconButton(onClick = { setSmall(!small) }) {
+                        Icon(
+                            if (small) Icons.Outlined.ViewModule else Icons.Outlined.GridView,
+                            stringResource(if (small) R.string.apps_posters_large else R.string.apps_posters_small),
+                        )
+                    }
+                },
                 scrollBehavior = scrollBehavior,
-            )
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onProfiles,
-                expanded = activeProfile.isNotEmpty(),
-                icon = { Icon(painterResource(R.drawable.ic_profiles), stringResource(R.string.profile_manager_choose_profile)) },
-                text = { Text(activeProfile) },
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
@@ -192,41 +228,62 @@ fun AppsScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                LoadingIndicator(Modifier.size(96.dp))
+                CircularProgressIndicator(Modifier.size(40.dp))
                 Text(stringResource(R.string.applist_refresh_msg), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp))
             }
         } else {
-            val small = prefs.smallIconMode
+            val desk = list.firstOrNull { it.isDesk }
+            val running = list.firstOrNull { it.running && !it.isDesk }
+            val grid = list.filterNot { it.isDesk }
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = if (small) 100.dp else 150.dp),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 96.dp),
+                columns = GridCells.Adaptive(minSize = if (small) 96.dp else 132.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 32.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                items(list, key = { it.id }) { item ->
+                if (running != null) {
+                    item(key = "now", span = { GridItemSpan(maxLineSpan) }, contentType = "now") {
+                        NowPlaying(
+                            item = running,
+                            boxArt = { viewModel.boxArt },
+                            onResume = { start(running, false) },
+                            onQuit = { quit(running) },
+                        )
+                    }
+                }
+                if (desk != null) {
+                    item(key = "desk", span = { GridItemSpan(maxLineSpan) }, contentType = "desk") {
+                        DeskCard(onClick = { start(desk, false) })
+                    }
+                }
+                if (running != null || desk != null) {
+                    item(key = "heading", span = { GridItemSpan(maxLineSpan) }, contentType = "heading") {
+                        SectionHeading(stringResource(R.string.apps_heading), Modifier.padding(top = 8.dp))
+                    }
+                }
+                items(grid, key = { it.id }, contentType = { "app" }) { item ->
                     var menu by remember { mutableStateOf(false) }
-                    Box {
-                        AppCard(
+                    AppPoster(
+                        item = item,
+                        boxArt = { viewModel.boxArt },
+                        small = small,
+                        onClick = {
+                            val runningId = viewModel.runningAppId
+                            when {
+                                runningId != 0 && prefs.resumeWithoutConfirm && runningId == item.id -> start(item, prefs.useVirtualDisplay)
+                                runningId != 0 -> menu = true
+                                else -> startChecked(item, prefs.useVirtualDisplay)
+                            }
+                        },
+                        onLongClick = { menu = true },
+                    )
+                    if (menu) {
+                        AppSheet(
                             item = item,
                             boxArt = { viewModel.boxArt },
-                            small = small,
-                            onClick = {
-                                val running = viewModel.runningAppId
-                                when {
-                                    item.isDesk -> start(item, false)
-                                    running != 0 && prefs.resumeWithoutConfirm && running == item.id -> start(item, prefs.useVirtualDisplay)
-                                    running != 0 -> menu = true
-                                    else -> startChecked(item, prefs.useVirtualDisplay)
-                                }
-                            },
-                            onLongClick = { menu = true },
-                        )
-                        AppMenu(
-                            item = item,
                             runningId = viewModel.runningAppId,
                             useVirtualDisplay = prefs.useVirtualDisplay,
-                            expanded = menu,
                             onDismiss = { menu = false },
                             onStart = { v -> startChecked(item, v) },
                             onQuitAndStart = { v -> confirm = Confirm.Quit { startChecked(item, v) } },
@@ -241,7 +298,7 @@ fun AppsScreen(
                                 }
                             },
                             onExport = {
-                                val c = computer() ?: return@AppMenu
+                                val c = computer() ?: return@AppSheet
                                 val export = { ShortcutHelper(activity).exportLauncherFile(c, item.app) }
                                 if (item.app.appUUID.isNullOrEmpty()) confirm = Confirm.Export(export) else export()
                             },
@@ -290,65 +347,122 @@ fun AppsScreen(
     }
 }
 
-/**
- * An app's card: its poster filling it (its name when it has none), outlined
- * in the primary color with a play badge while it runs, faded when hidden.
- */
-@OptIn(ExperimentalFoundationApi::class)
+/** An app's box art (the memory cache at once, else loaded), null when it has none */
 @Composable
-private fun AppCard(item: AppItem, boxArt: () -> app.sloplight.data.BoxArt?, small: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    val shape = if (small) MaterialTheme.shapes.large else MaterialTheme.shapes.extraLarge
+private fun rememberBoxArt(item: AppItem, boxArt: () -> BoxArt?): Bitmap? {
     val art by produceState<Bitmap?>(initialValue = boxArt()?.cached(item.app), item.id, boxArt()) {
         if (value == null && !item.isDesk) value = boxArt()?.load(item.app)
     }
-    Surface(
-        shape = shape,
-        color = colors.surfaceContainerHigh,
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(3f / 4f)
-            .alpha(if (item.hidden) 0.4f else 1f)
-            .then(if (item.running) Modifier.border(3.dp, colors.primary, shape) else Modifier)
-            .clip(shape)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick, role = Role.Button, onClickLabel = item.name),
+    return art
+}
+
+/** A poster: the box art, or the app's initial on a tinted card when it has none */
+@Composable
+private fun Poster(item: AppItem, boxArt: () -> BoxArt?, shape: Shape, modifier: Modifier = Modifier) {
+    val colors = MaterialTheme.colorScheme
+    val art = rememberBoxArt(item, boxArt)
+    Box(modifier.clip(shape).background(colors.secondaryContainer), contentAlignment = Alignment.Center) {
+        if (art != null) {
+            val image = remember(art) { art.asImageBitmap() }
+            Image(image, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        } else {
+            Text(
+                item.name,
+                style = MaterialTheme.typography.titleSmall,
+                color = colors.onSecondaryContainer,
+                textAlign = TextAlign.Center,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(8.dp),
+            )
+        }
+    }
+}
+
+/**
+ * An app: its poster (3:4) and its name under it; hidden ones faded with a
+ * mark. A tap starts it, a long press opens its actions.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AppPoster(item: AppItem, boxArt: () -> BoxArt?, small: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val shape = MaterialTheme.shapes.medium
+    Column(
+        Modifier
+            .alpha(if (item.hidden) 0.45f else 1f)
+            .clip(MaterialTheme.shapes.large)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick, role = Role.Button, onClickLabel = item.name)
+            .padding(4.dp),
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            val bitmap = art
-            if (bitmap != null) {
-                val image = remember(bitmap) { bitmap.asImageBitmap() }
-                Image(image, contentDescription = item.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            } else {
-                Text(
-                    item.name,
-                    style = if (small) MaterialTheme.typography.labelLargeEmphasized else MaterialTheme.typography.titleMediumEmphasized,
-                    color = colors.onSurface,
-                    textAlign = TextAlign.Center,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(12.dp),
+        Box {
+            Poster(item, boxArt, shape, Modifier.fillMaxWidth().aspectRatio(3f / 4f))
+            if (item.hidden) {
+                Icon(
+                    Icons.Outlined.VisibilityOff, null,
+                    tint = colors.onSurface,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).background(colors.surfaceContainerHighest, CircleShape).padding(4.dp).size(16.dp),
                 )
             }
-            if (item.running) {
-                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)))
-                Box(
-                    Modifier.size(if (small) 40.dp else 56.dp).background(colors.primary, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(painterResource(R.drawable.ic_play_plain), null, tint = colors.onPrimary, modifier = Modifier.size(if (small) 20.dp else 28.dp))
+        }
+        Text(
+            item.name,
+            style = if (small) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge,
+            color = colors.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 8.dp, start = 2.dp, end = 2.dp),
+        )
+    }
+}
+
+/** What runs on the host now: its poster, its name, resume and quit */
+@Composable
+private fun NowPlaying(item: AppItem, boxArt: () -> BoxArt?, onResume: () -> Unit, onQuit: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Surface(shape = MaterialTheme.shapes.large, color = colors.primaryContainer, contentColor = colors.onPrimaryContainer) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Poster(item, boxArt, MaterialTheme.shapes.small, Modifier.width(60.dp).aspectRatio(3f / 4f))
+            Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
+                Text(stringResource(R.string.apps_now_running), style = MaterialTheme.typography.labelMedium)
+                Text(item.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Button(onClick = onResume) {
+                    Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(18.dp))
+                    Text(stringResource(R.string.applist_menu_resume), modifier = Modifier.padding(start = 6.dp))
                 }
+                TextButton(onClick = onQuit) { Text(stringResource(R.string.applist_menu_quit)) }
             }
         }
     }
 }
 
-/** An app's actions, as what runs allows (what AppView's context menu offered) */
+/** The host's windows as workspaces (a Sloplight host that allows this device) */
 @Composable
-private fun AppMenu(
+private fun DeskCard(onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Surface(onClick = onClick, shape = MaterialTheme.shapes.large, color = cardColor()) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(48.dp).background(colors.tertiaryContainer, CircleShape), contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.Dashboard, null, tint = colors.onTertiaryContainer)
+            }
+            Column(Modifier.weight(1f).padding(start = 16.dp)) {
+                Text(stringResource(R.string.applist_desk_tile), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.apps_desk_summary), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+            }
+            Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = colors.onSurfaceVariant)
+        }
+    }
+}
+
+/** An app's actions, as what runs allows (what AppView's context menu offered), as a sheet */
+@Composable
+private fun AppSheet(
     item: AppItem,
+    boxArt: () -> BoxArt?,
     runningId: Int,
     useVirtualDisplay: Boolean,
-    expanded: Boolean,
     onDismiss: () -> Unit,
     onStart: (withVDisplay: Boolean) -> Unit,
     onQuitAndStart: (withVDisplay: Boolean) -> Unit,
@@ -358,47 +472,43 @@ private fun AppMenu(
     onShortcut: () -> Unit,
     onExport: () -> Unit,
 ) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, shape = MaterialTheme.shapes.large) {
-        @Composable
-        fun item(text: Int, action: () -> Unit) =
-            DropdownMenuItem(text = { Text(stringResource(text)) }, onClick = { onDismiss(); action() })
-
-        Text(
-            item.name,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        )
-        if (item.isDesk) {
-            item(R.string.applist_menu_start_primarydisplay) { onStart(false) }
-            return@DropdownMenu
-        }
+    val start = buildList {
         when {
-            runningId == 0 ->
-                if (useVirtualDisplay) item(R.string.applist_menu_start_primarydisplay) { onStart(false) }
-                else item(R.string.applist_menu_start_vdisplay) { onStart(true) }
+            runningId == 0 -> {
+                add(SheetAction(stringResource(R.string.applist_menu_start), Icons.Filled.PlayArrow, { onStart(useVirtualDisplay) }))
+                add(
+                    if (useVirtualDisplay) SheetAction(stringResource(R.string.applist_menu_start_primarydisplay), Icons.Outlined.Monitor, { onStart(false) })
+                    else SheetAction(stringResource(R.string.applist_menu_start_vdisplay), Icons.Outlined.DesktopWindows, { onStart(true) })
+                )
+            }
             runningId == item.id -> {
-                item(R.string.applist_menu_resume) { onStart(false) }
-                item(R.string.applist_menu_quit, onQuit)
+                add(SheetAction(stringResource(R.string.applist_menu_resume), Icons.Filled.PlayArrow, { onStart(false) }))
+                add(SheetAction(stringResource(R.string.applist_menu_quit), Icons.Outlined.StopCircle, onQuit, destructive = true))
             }
             useVirtualDisplay -> {
-                item(R.string.applist_menu_quit_and_start) { onQuitAndStart(true) }
-                item(R.string.applist_menu_quit_and_start_primarydisplay) { onQuitAndStart(false) }
+                add(SheetAction(stringResource(R.string.applist_menu_quit_and_start), Icons.Outlined.SwapHoriz, { onQuitAndStart(true) }))
+                add(SheetAction(stringResource(R.string.applist_menu_quit_and_start_primarydisplay), Icons.Outlined.Monitor, { onQuitAndStart(false) }))
             }
             else -> {
-                item(R.string.applist_menu_quit_and_start) { onQuitAndStart(false) }
-                item(R.string.applist_menu_quit_and_start_vdisplay) { onQuitAndStart(true) }
+                add(SheetAction(stringResource(R.string.applist_menu_quit_and_start), Icons.Outlined.SwapHoriz, { onQuitAndStart(false) }))
+                add(SheetAction(stringResource(R.string.applist_menu_quit_and_start_vdisplay), Icons.Outlined.DesktopWindows, { onQuitAndStart(true) }))
             }
         }
-        if (runningId != item.id || item.hidden) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.applist_menu_hide_app)) },
-                trailingIcon = { Checkbox(checked = item.hidden, onCheckedChange = null) },
-                onClick = { onDismiss(); onHide() },
-            )
-        }
-        item(R.string.applist_menu_details, onDetails)
-        item(R.string.applist_menu_scut, onShortcut)
-        item(R.string.applist_menu_export_launcher, onExport)
     }
+    val more = buildList {
+        if (runningId != item.id || item.hidden) {
+            add(SheetAction(stringResource(R.string.applist_menu_hide_app), Icons.Outlined.VisibilityOff, onHide, checked = item.hidden))
+        }
+        add(SheetAction(stringResource(R.string.applist_menu_scut), Icons.Outlined.AddToHomeScreen, onShortcut))
+        add(SheetAction(stringResource(R.string.applist_menu_export_launcher), Icons.Outlined.FileDownload, onExport))
+        add(SheetAction(stringResource(R.string.applist_menu_details), Icons.Outlined.Description, onDetails))
+    }
+    ActionSheet(
+        onDismiss = onDismiss,
+        header = {
+            Poster(item, boxArt, MaterialTheme.shapes.small, Modifier.width(48.dp).aspectRatio(3f / 4f))
+            Text(item.name, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 16.dp))
+        },
+        groups = listOf(start, more),
+    )
 }
