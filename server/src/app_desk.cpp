@@ -27,6 +27,7 @@
   #include <map>
   #include <set>
   #include <mutex>
+  #include <optional>
   #include <thread>
 
   #include <functional>
@@ -1767,15 +1768,35 @@ namespace app_desk {
       return true;
     }
     BOOST_LOG(info) << "Desk trace: adopting " << describe_window(handle) << " at " << x << ',' << y;
+    // Taken from another client's desk (a phone's workspace): that desk lets
+    // it go, its pins too (or the phone's guard would pull it back), and its
+    // home stays the one it had before that desk took it
+    std::optional<POINT> earlier_home;
+    for (auto &[uuid, other] : g_desks) {
+      if (uuid == client_uuid) continue;
+      if (auto a = other.adopted.find(hwnd); a != other.adopted.end()) {
+        earlier_home = a->second;
+        other.adopted.erase(a);
+      }
+    }
+    if (earlier_home) {
+      std::lock_guard pin_lock(g_pin_mutex);
+      for (auto &[uuid, p] : g_pins) {
+        std::erase(p.front, hwnd);
+        p.back.erase(hwnd);
+      }
+    }
     if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
-    // Maximized elsewhere: maximized on the desk (moved as its normal self)
-    const bool zoomed = IsZoomed(hwnd);
-    if (zoomed) ShowWindow(hwnd, SW_RESTORE);
+    // Maximized elsewhere: maximized on the desk (moved as its normal self).
+    // Not when a phone's workspace maximized it: that was the phone's doing,
+    // the window comes as its normal self.
+    const bool zoomed = IsZoomed(hwnd) && !earlier_home;
+    if (IsZoomed(hwnd)) ShowWindow(hwnd, SW_RESTORE);
     RECT frame {};
     if (!app_window_layout::frame_rect(hwnd, frame)) return false;
     // A window first seen on the desk itself (it opened there, or is parked
     // past its edge mid-drag) has no home elsewhere: the primary display
-    it->second.adopted[hwnd] = home_for(frame, rect);
+    it->second.adopted[hwnd] = earlier_home ? *earlier_home : home_for(frame, rect);
     settle_dpi_change(hwnd, GetDpiForWindow(hwnd), frame);
     // First time: keep it inside the desk.
     const LONG fw = frame.right - frame.left, fh = frame.bottom - frame.top;
