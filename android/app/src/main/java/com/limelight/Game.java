@@ -466,22 +466,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // The desk is made to measure: this screen's shape (upright when the
             // phone is) at the configured height, so windows fill the screen without bars. Everything after
             // (the video view's shape, its buffer) goes by this size.
-            // The camera cutout's edge is left out: the desk is the rest of the screen
-            DisplayMetrics metrics = new DisplayMetrics();
-            Display screen = getWindowManager().getDefaultDisplay();
-            screen.getRealMetrics(metrics);
-            int screenW = metrics.widthPixels, screenH = metrics.heightPixels;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && screen.getCutout() != null) {
-                android.view.DisplayCutout cutout = screen.getCutout();
-                screenW -= cutout.getSafeInsetLeft() + cutout.getSafeInsetRight();
-                screenH -= cutout.getSafeInsetTop() + cutout.getSafeInsetBottom();
-            }
-            int screenLong = Math.max(screenW, screenH);
-            int screenShort = Math.min(screenW, screenH);
-            int shortSide = Math.min(displayWidth, displayHeight);
-            int longSide = Math.min(4096, Math.round((float) shortSide * screenLong / screenShort / 8) * 8);
-            if (displayWidth >= displayHeight) displayWidth = longSide;
-            else displayHeight = longSide;
+            int[] desk = deskSize(displayWidth < displayHeight, Math.min(displayWidth, displayHeight));
+            displayWidth = desk[0];
+            displayHeight = desk[1];
             prefConfig.width = Math.max(displayWidth, displayHeight);
             prefConfig.height = Math.min(displayWidth, displayHeight);
             LimeLog.info("Desk: " + displayWidth + "x" + displayHeight);
@@ -720,9 +707,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 tombstonePrefs.getInt("CrashCount", 0),
                 connMgr.isActiveNetworkMetered(),
                 willStreamHdr,
-                shouldInvertDecoderResolution,
+                // (the desk's stream is already oriented as the phone is)
+                shouldInvertDecoderResolution && !deskMode,
                 glPrefs.glRenderer,
                 this);
+        // The desk turns with the phone: its stream changes size mid-stream
+        decoderRenderer.setResizable(deskMode);
 
 // --- Force tight thresholds (prefConfig.forceTightThresholds) ---
         try {
@@ -1180,7 +1170,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private void setPreferredOrientationForActivity() {
         if (deskMode && !onExternelDisplay) {
-            // Any way the phone is held: a turn reconnects at the new shape
+            // Any way the phone is held: a turn resizes the stream to the new shape
             setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_USER);
             return;
         }
@@ -1226,16 +1216,97 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
-    /** The desk streamed again in the phone's new orientation: the activity
-     *  is made again (the stream ends without closing the desk, the windows
-     *  and workspaces stay) and asks for the turned size. */
-    private final Runnable deskTurn = () -> {
-        if (isFinishing() || getResources().getConfiguration().orientation == currentOrientation) return;
+    /** The desk's size on this screen held upright or not: the screen's shape
+     *  (the camera cutout's edge left out) at this short side, the long side a
+     *  multiple of 8 */
+    private int[] deskSize(boolean upright, int shortSide) {
+        DisplayMetrics metrics = new DisplayMetrics();
+        Display screen = getWindowManager().getDefaultDisplay();
+        screen.getRealMetrics(metrics);
+        int screenW = metrics.widthPixels, screenH = metrics.heightPixels;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && screen.getCutout() != null) {
+            android.view.DisplayCutout cutout = screen.getCutout();
+            screenW -= cutout.getSafeInsetLeft() + cutout.getSafeInsetRight();
+            screenH -= cutout.getSafeInsetTop() + cutout.getSafeInsetBottom();
+        }
+        int screenLong = Math.max(screenW, screenH);
+        int screenShort = Math.min(screenW, screenH);
+        int longSide = Math.min(4096, Math.round((float) shortSide * screenLong / screenShort / 8) * 8);
+        return upright ? new int[] {shortSide, longSide} : new int[] {longSide, shortSide};
+    }
+
+    /** The desk in the phone's new orientation: the host retunes it and the
+     *  running stream follows in place. Where it can't (an older host, the
+     *  stream not up yet), the activity is made again (the stream ends without
+     *  closing the desk, the windows and workspaces stay) and asks for the
+     *  turned size. */
+    private final Runnable deskTurn = this::onDeskTurned;
+
+    /** A desk resize in flight (the host's answer not back yet) */
+    private boolean deskResizing;
+    /** The host didn't resize in place once: turns reconnect from now on */
+    private boolean deskResizeUnsupported;
+
+    private void onDeskTurned() {
+        int orientation = getResources().getConfiguration().orientation;
+        if (isFinishing() || orientation == currentOrientation || deskResizing) return;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode()) return;
-        LimeLog.info("Desk: turned, streaming it again " + (getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT ? "upright" : "sideways"));
+        boolean upright = orientation == Configuration.ORIENTATION_PORTRAIT;
+        if (connected && conn != null && httpConn != null && !deskResizeUnsupported) {
+            int[] size = deskSize(upright, Math.min(displayWidth, displayHeight));
+            LimeLog.info("Desk: turned " + (upright ? "upright" : "sideways") + ", resizing in place to " + size[0] + "x" + size[1]);
+            deskResizing = true;
+            final NvConnection c = conn;
+            new Thread(() -> {
+                boolean resized = false;
+                try {
+                    resized = c.resizeDesk(httpConn, size[0], size[1]);
+                } catch (Exception e) {
+                    LimeLog.warning("Desk: resize failed: " + e);
+                }
+                final boolean inPlace = resized;
+                runOnUiThread(() -> {
+                    deskResizing = false;
+                    if (isFinishing() || isDestroyed()) return;
+                    if (inPlace) {
+                        applyDeskSize(size[0], size[1], orientation);
+                    } else {
+                        LimeLog.info("Desk: no resize in place, streaming it again");
+                        deskResizeUnsupported = true;
+                    }
+                    // Turned again meanwhile (or a reconnect): once more
+                    if (getResources().getConfiguration().orientation != currentOrientation) {
+                        timerHandler.removeCallbacks(deskTurn);
+                        timerHandler.post(deskTurn);
+                    }
+                });
+            }, "DeskResize").start();
+            return;
+        }
+        LimeLog.info("Desk: turned, streaming it again " + (upright ? "upright" : "sideways"));
         turning = true;
         recreate();
-    };
+    }
+
+    /** The stream goes on at the desk's new size: everything sized by it follows
+     *  (the decoder follows the new SPS by itself; pointer and touch input go by
+     *  the view's size, which the aspect ratio sets) */
+    private void applyDeskSize(int width, int height, int orientation) {
+        currentOrientation = orientation;
+        displayWidth = width;
+        displayHeight = height;
+        prefConfig.width = Math.max(width, height);
+        prefConfig.height = Math.min(width, height);
+        try {
+            SurfaceView surfaceView = findFirstSurfaceViewFrom(findViewById(android.R.id.content));
+            if (surfaceView != null) surfaceView.getHolder().setFixedSize(width, height);
+        } catch (Throwable ignored) {}
+        if (prefConfig.videoScaleMode != PreferenceConfiguration.ScaleMode.STRETCH) {
+            streamContainer.setDesiredAspectRatio((double) width / (double) height);
+        }
+        if (workspaces != null) workspaces.deskResized(width, height);
+        LimeLog.info("Desk: resized in place to " + width + "x" + height + ", the stream goes on");
+    }
 
     /** The activity is being made again for a turn: not finished when stopped */
     private boolean turning;

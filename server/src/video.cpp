@@ -4962,6 +4962,22 @@ namespace video {
     return completed;
   }
 
+  /** A desk turned with the phone: the newest size asked for goes into the
+   *  session's config. True when it differs (the encoder is made again). */
+  bool take_desk_resize(const safe::mail_raw_t::event_t<std::pair<int, int>> &events, config_t &config) {
+    bool changed = false;
+    while (events->peek()) {
+      auto size = events->pop(0ms);
+      if (!size || (size->first == config.width && size->second == config.height)) continue;
+      BOOST_LOG(info) << "Desk resize: stream " << config.width << 'x' << config.height << " -> "
+                      << size->first << 'x' << size->second << ", encoder made again in place";
+      config.width = size->first;
+      config.height = size->second;
+      changed = true;
+    }
+    return changed;
+  }
+
   enum class encode_run_result_e {
     completed,
     native_nvenc_identity_failed,
@@ -5256,6 +5272,7 @@ namespace video {
     auto hdr_event = mail->event<hdr_info_t>(mail::hdr);
     auto invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
     auto bitrate_events = mail->event<int>(mail::dynamic_bitrate);
+    auto desk_resize_events = mail->event<std::pair<int, int>>(mail::desk_resize);
 
     {
       // Load a dummy image into the AVFrame to ensure we have something to encode
@@ -5329,6 +5346,11 @@ namespace video {
       const bool reinit_pending = reinit_event.peek();
       if (shutdown_event->peek() || !images->running() || reinit_pending) {
         force_sync_teardown = reinit_pending;
+        break;
+      }
+
+      // A new desk size: capture_async makes the encoder again with config
+      if (take_desk_resize(desk_resize_events, config)) {
         break;
       }
 
@@ -6426,6 +6448,7 @@ namespace video {
     rtx_hdr_metadata_refresh_state_t rtx_hdr_metadata_refresh;
 
     auto hdr_event = mail->event<hdr_info_t>(mail::hdr);
+    auto desk_resize_events = mail->event<std::pair<int, int>>(mail::desk_resize);
 #if defined(_WIN32) || (defined(__linux__) && defined(SUNSHINE_BUILD_CUDA))
     int consecutive_encoder_initialization_failures = 0;
 #endif
@@ -6453,6 +6476,9 @@ namespace video {
 
         display = source_ctx.display_wp->lock();
       }
+
+      // A desk size that came while no encoder ran
+      take_desk_resize(desk_resize_events, config);
 
       if (config.videoFormat == 3) {
         hdr_info_t hdr_info;

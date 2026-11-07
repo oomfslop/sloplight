@@ -183,6 +183,13 @@ namespace stream {
    */
   int set_bitrate_for_sessions(const std::string &client_uuid, int bitrate_kbps);
 
+  /**
+   * @brief A desk stream of this client to a new size in place: its encoder is
+   *        made again at width x height (a new IDR), the connection stays.
+   * @return Number of sessions that will follow (0: none running, or PyroWave).
+   */
+  int resize_desk_sessions(const std::string &client_uuid, int width, int height);
+
   /** Now, on the clock of the video frames' RTP timestamps (90 kHz since the
    *  broadcast epoch): lets a client match window layouts to the frames that
    *  show them. */

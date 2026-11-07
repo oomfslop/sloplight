@@ -945,6 +945,26 @@ public class NvHTTP {
                         "&efficient=" + (efficient ? 1 : 0) + "&quiet=" + (quiet ? 1 : 0), EMPTY_POST);
     }
 
+    /** The desk turned with the phone: retuned to this size, the running stream
+     *  follows in place. False: it doesn't (an older host, or no stream running);
+     *  the client reconnects then. */
+    public boolean resizeDesk(int width, int height, int fps, int dpi, boolean efficient, boolean quiet) throws IOException {
+        String resp;
+        try {
+            resp = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), "actions/desk",
+                    "op=resize&direct=1&w=" + width + "&h=" + height + "&fps=" + fps + "&dpi=" + dpi +
+                            "&efficient=" + (efficient ? 1 : 0) + "&quiet=" + (quiet ? 1 : 0), EMPTY_POST);
+        } catch (HostHttpResponseException e) {
+            // (an older host: op=resize is unknown there, nothing was changed)
+            return false;
+        }
+        try {
+            return new org.json.JSONObject(resp).optInt("resized", 0) > 0;
+        } catch (org.json.JSONException e) {
+            return false;
+        }
+    }
+
     /** Puts every window on the desk back where it was */
     public void closeDesk() throws IOException {
         openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "actions/desk", "op=close", EMPTY_POST);

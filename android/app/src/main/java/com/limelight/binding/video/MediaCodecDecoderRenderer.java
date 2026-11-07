@@ -132,6 +132,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private byte optimalSlicesPerFrame;
     private boolean refFrameInvalidationActive;
     private int initialWidth, initialHeight;
+    // A stream that may change size mid-stream (the desk turning with the phone)
+    private boolean resizable;
+    private int maxWidth, maxHeight;
     private boolean invertResolution;
     private int videoFormat;
     private Surface renderTarget;
@@ -368,6 +371,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.renderTarget = renderTarget;
     }
 
+    /** The stream may change size (a new SPS mid-stream): the decoder follows it.
+     *  Before setup(). */
+    public void setResizable(boolean resizable) {
+        this.resizable = resizable;
+    }
+
     public MediaCodecDecoderRenderer(Activity activity, PreferenceConfiguration prefs,
                                      CrashListener crashListener, int consecutiveCrashCount,
                                      boolean meteredData, boolean requestedHdr, boolean invertResolution,
@@ -548,8 +557,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Populate keys for adaptive playback
         if (adaptivePlayback) {
-            videoFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, initialWidth);
-            videoFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, initialHeight);
+            videoFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, Math.max(maxWidth, initialWidth));
+            videoFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, Math.max(maxHeight, initialHeight));
         }
 
         // Android 7.0 adds color options to the MediaFormat
@@ -758,6 +767,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return -3;
         }
         adaptivePlayback = MediaCodecHelper.decoderSupportsAdaptivePlayback(selectedDecoderInfo, mimeType);
+        // A stream that may turn: room for both orientations, so a new size is
+        // followed in-band (when the decoder takes a square that large)
+        maxWidth = initialWidth;
+        maxHeight = initialHeight;
+        if (adaptivePlayback && resizable) {
+            int side = Math.max(initialWidth, initialHeight);
+            try {
+                if (selectedDecoderInfo.getCapabilitiesForType(mimeType).getVideoCapabilities().isSizeSupported(side, side)) {
+                    maxWidth = maxHeight = side;
+                }
+            } catch (Exception e) {
+                // (buggy codecs: just this orientation)
+            }
+            LimeLog.info("Resizable stream: adaptive playback up to " + maxWidth + "x" + maxHeight);
+        }
         fusedIdrFrame = MediaCodecHelper.decoderSupportsFusedIdrFrame(selectedDecoderInfo, mimeType);
 
         for (int tryNumber = 0;; tryNumber++) {
@@ -1799,6 +1823,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // Annex B NALUs (including NALUs with escape sequences)
                 SeqParameterSet sps = H264Utils.readSPS(spsBuf);
 
+                if (resizable) {
+                    org.jcodec.common.model.Size size = H264Utils.getPicSize(sps);
+                    followStreamSize(size.getWidth(), size.getHeight());
+                    if (stopping) {
+                        return MoonBridge.DR_OK;
+                    }
+                }
+
                 // Some decoders rely on H264 level to decide how many buffers are needed
                 // Since we only need one frame buffered, we'll set the level as low as we can
                 // for known resolution combinations. Reference frame invalidation may need
@@ -1933,6 +1965,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             else if (decodeUnitType == MoonBridge.BUFFER_TYPE_SPS) {
                 numSpsIn++;
 
+                if (resizable && (videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H265) != 0) {
+                    int[] size = hevcSpsSize(decodeUnitData, decodeUnitLength);
+                    if (size != null) {
+                        followStreamSize(size[0], size[1]);
+                        if (stopping) {
+                            return MoonBridge.DR_OK;
+                        }
+                    }
+                }
+
                 // Batch this to submit together with other CSD per AOSP docs
                 byte[] naluBuffer = new byte[decodeUnitLength];
                 System.arraycopy(decodeUnitData, 0, naluBuffer, 0, decodeUnitLength);
@@ -2063,6 +2105,129 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         return MoonBridge.DR_OK;
+    }
+
+    /** A new picture size in an IDR's SPS (the desk turned with the phone). Within
+     *  the adaptive playback bounds the decoder follows it in-band; otherwise it is
+     *  stopped and configured again for it on the same surface (all decoder threads
+     *  quiesced, as for codec recovery). Called on the input thread, before the
+     *  IDR's CSD is submitted. */
+    private void followStreamSize(int width, int height) {
+        if (width <= 0 || height <= 0 || (width == initialWidth && height == initialHeight)) {
+            return;
+        }
+        boolean inBand = adaptivePlayback && width <= maxWidth && height <= maxHeight;
+        LimeLog.info("Stream resize: " + initialWidth + "x" + initialHeight + " -> " + width + "x" + height +
+                (inBand ? " (decoder follows in-band)" : " (decoder configured again)"));
+        initialWidth = width;
+        initialHeight = height;
+        if (inBand || configuredFormat == null) {
+            return;
+        }
+
+        configuredFormat.setInteger(MediaFormat.KEY_WIDTH, width);
+        configuredFormat.setInteger(MediaFormat.KEY_HEIGHT, height);
+        if (adaptivePlayback) {
+            maxWidth = Math.max(maxWidth, width);
+            maxHeight = Math.max(maxHeight, height);
+            configuredFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, maxWidth);
+            configuredFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, maxHeight);
+        }
+
+        // (configuring clears the CSD gathered so far for this IDR: the VPS)
+        ArrayList<byte[]> vps = new ArrayList<>(vpsBuffers);
+        ArrayList<byte[]> sps = new ArrayList<>(spsBuffers);
+        ArrayList<byte[]> pps = new ArrayList<>(ppsBuffers);
+        codecRecoveryType.compareAndSet(CR_RECOVERY_TYPE_NONE, CR_RECOVERY_TYPE_RESTART);
+        doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
+        vpsBuffers.addAll(vps);
+        spsBuffers.addAll(sps);
+        ppsBuffers.addAll(pps);
+    }
+
+    /** The picture size an HEVC SPS (Annex B, with its start code) gives, or null */
+    private static int[] hevcSpsSize(byte[] data, int length) {
+        try {
+            int start = data[2] == 0x01 ? 3 : 4;
+            // Without emulation prevention bytes, past the 2-byte NAL header
+            byte[] rbsp = new byte[length];
+            int n = 0, zeros = 0;
+            for (int i = start + 2; i < length; i++) {
+                int b = data[i] & 0xff;
+                if (zeros >= 2 && b == 0x03) {
+                    zeros = 0;
+                    continue;
+                }
+                zeros = b == 0 ? zeros + 1 : 0;
+                rbsp[n++] = (byte) b;
+            }
+            BitReader r = new BitReader(rbsp, n);
+            r.skip(4); // sps_video_parameter_set_id
+            int subLayers = r.bits(3); // sps_max_sub_layers_minus1
+            r.skip(1);
+            r.skip(96); // general profile, tier and level
+            boolean[] profilePresent = new boolean[8], levelPresent = new boolean[8];
+            for (int i = 0; i < subLayers; i++) {
+                profilePresent[i] = r.bits(1) == 1;
+                levelPresent[i] = r.bits(1) == 1;
+            }
+            if (subLayers > 0) {
+                r.skip(2 * (8 - subLayers));
+            }
+            for (int i = 0; i < subLayers; i++) {
+                if (profilePresent[i]) r.skip(88);
+                if (levelPresent[i]) r.skip(8);
+            }
+            r.ue(); // sps_seq_parameter_set_id
+            int chroma = r.ue();
+            boolean separatePlanes = chroma == 3 && r.bits(1) == 1;
+            int width = r.ue(), height = r.ue();
+            if (r.bits(1) == 1) {
+                // Conformance window, in chroma samples
+                int subW = (chroma == 1 || chroma == 2) && !separatePlanes ? 2 : 1;
+                int subH = chroma == 1 && !separatePlanes ? 2 : 1;
+                int left = r.ue(), right = r.ue(), top = r.ue(), bottom = r.ue();
+                width -= subW * (left + right);
+                height -= subH * (top + bottom);
+            }
+            return width > 0 && height > 0 ? new int[] {width, height} : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static final class BitReader {
+        private final byte[] data;
+        private final int length;
+        private int pos;
+
+        BitReader(byte[] data, int length) {
+            this.data = data;
+            this.length = length;
+        }
+
+        int bits(int n) {
+            int v = 0;
+            for (int i = 0; i < n; i++) {
+                if (pos >= length * 8) throw new IndexOutOfBoundsException("SPS too short");
+                v = (v << 1) | ((data[pos >> 3] >> (7 - (pos & 7))) & 1);
+                pos++;
+            }
+            return v;
+        }
+
+        void skip(int n) {
+            if (pos + n > length * 8) throw new IndexOutOfBoundsException("SPS too short");
+            pos += n;
+        }
+
+        int ue() {
+            int zeros = 0;
+            while (bits(1) == 0) {
+                if (++zeros > 31) throw new IllegalStateException("Bad Exp-Golomb code");
+            }
+            return zeros == 0 ? 0 : (1 << zeros) - 1 + bits(zeros);
+        }
     }
 
     private boolean replaySps() {

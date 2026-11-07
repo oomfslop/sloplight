@@ -4205,8 +4205,10 @@ namespace nvhttp {
 
   /**
    * @brief The client's desk: `op=open&w&h&fps&dpi` creates (or retunes) its
-   * private display and answers with the display to stream; `op=close` puts
-   * every adopted window back and lets the display idle out.
+   * private display and answers with the display to stream; `op=resize` (same
+   * arguments) retunes it and the client's running stream follows in place
+   * (`resized`: how many streams do; 0: the client reconnects); `op=close`
+   * puts every adopted window back and lets the display idle out.
    */
   void post_desk(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
@@ -4222,7 +4224,7 @@ namespace nvhttp {
         return fallback;
       }
     };
-    if (op == "open") {
+    if (op == "open" || op == "resize") {
       app_desk::options_t options;
       options.unfocused_divisor = num("unfocused", 1);
       options.skip_covered = num("covered", 0) == 0;
@@ -4239,6 +4241,14 @@ namespace nvhttp {
       }
       auto out = desk_json(desk);
       out["status"] = true;
+      if (op == "resize") {
+        // The stream is the client's size (the display's mode may be larger)
+        const int w = num("w", 0) & ~1, h = num("h", 0) & ~1;
+        const int resized = stream::resize_desk_sessions(uuid, w, h);
+        BOOST_LOG(info) << "Desk resize: client " << uuid << " turned to " << w << 'x' << h << ", "
+                        << resized << " stream(s) follow in place" << (resized ? "" : " (none running: the client reconnects)");
+        out["resized"] = resized;
+      }
       write_json(response, out);
       return;
     }
@@ -4287,7 +4297,7 @@ namespace nvhttp {
       write_json(response, out);
       return;
     }
-    write_json(response, {{"status", false}, {"error", "op must be open, close or get"}}, SimpleWeb::StatusCode::client_error_bad_request);
+    write_json(response, {{"status", false}, {"error", "op must be open, resize, close or get"}}, SimpleWeb::StatusCode::client_error_bad_request);
   }
 
   /**

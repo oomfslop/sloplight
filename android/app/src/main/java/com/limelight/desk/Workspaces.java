@@ -900,6 +900,15 @@ public class Workspaces {
         deskH = h;
     }
 
+    /** The desk turned in place: the shown workspace is laid out again for its
+     *  new shape (pinned again, so the host takes the new work area) */
+    public void deskResized(int w, int h) {
+        setDeskSize(w, h);
+        actions.execute(() -> pinnedKey = "");
+        int n = current();
+        if (n > 0) switchTo(n);
+    }
+
     /** A window alone in its workspace, on the desk and filling it: maximized
      *  (no borders to drag, a title bar that doesn't move it), or at the
      *  desk's size when it can't be. Side by side ones the host lays out. */

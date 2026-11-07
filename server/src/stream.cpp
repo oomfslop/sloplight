@@ -647,6 +647,7 @@ namespace stream {
       safe::mail_raw_t::event_t<bool> idr_events;
       safe::mail_raw_t::event_t<std::pair<int64_t, int64_t>> invalidate_ref_frames_events;
       safe::mail_raw_t::event_t<int> bitrate_events;
+      safe::mail_raw_t::event_t<std::pair<int, int>> desk_resize_events;
       // The HTTP bitrate control path runs concurrently with the UDP sender.
       // Keep its per-frame pacing input atomic instead of racing on monitor config.
       std::atomic<int> pacing_bitrate_kbps {0};
@@ -829,6 +830,26 @@ namespace stream {
 
   int set_bitrate_for_sessions(const std::string &client_uuid, int bitrate_kbps) {
     return broadcast_controls.set_bitrate_for_sessions(client_uuid, bitrate_kbps);
+  }
+
+  int resize_desk_sessions(const std::string &client_uuid, int width, int height) {
+    if (client_uuid.empty() || width <= 0 || height <= 0) return 0;
+    auto ref = broadcast.try_ref();
+    if (!ref) return 0;
+    auto &ctx = *ref.get();
+    auto lg = ctx.control_server._sessions.lock();
+    int count = 0;
+    for (auto *s : *ctx.control_server._sessions) {
+      if (!s || !s->video.desk_resize_events || s->config.monitor.desk_client != client_uuid) continue;
+      if (s->state.load(std::memory_order_acquire) != session::state_e::RUNNING) continue;
+      // PyroWave's encode loop doesn't rebuild for a new size: the client reconnects
+      if (s->config.monitor.videoFormat == 3) continue;
+      s->config.monitor.width = width;
+      s->config.monitor.height = height;
+      s->video.desk_resize_events->raise(std::make_pair(width, height));
+      ++count;
+    }
+    return count;
   }
 
   static const char *state_name(session::state_e st) {
@@ -4147,6 +4168,7 @@ namespace stream {
       session->video.idr_events = mail->event<bool>(mail::idr);
       session->video.invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
       session->video.bitrate_events = mail->event<int>(mail::dynamic_bitrate);
+      session->video.desk_resize_events = mail->event<std::pair<int, int>>(mail::desk_resize);
       session->video.lowseq = 0;
       session->video.ping_payload = launch_session.av_ping_payload;
       if (config.encryptionFlagsEnabled & SS_ENC_VIDEO) {

@@ -56,6 +56,7 @@ namespace mail {
   MAIL(gamepad_feedback);
   MAIL(hdr);
   MAIL(dynamic_bitrate);  // Runtime encoder bitrate change (kbps), posted from the HTTP /bitrate handler
+  MAIL(desk_resize);  // A desk stream's new size (w, h), posted when the client turns its desk
 #undef MAIL
 
 }  // namespace mail

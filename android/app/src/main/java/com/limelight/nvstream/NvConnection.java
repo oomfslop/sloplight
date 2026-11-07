@@ -508,6 +508,21 @@ public class NvConnection {
         }
     }
 
+    /** The desk turned with the phone: the host retunes it and the running stream
+     *  follows at width x height in place. False: it doesn't, the caller reconnects.
+     *  Not on the UI thread. */
+    public boolean resizeDesk(NvHTTP h, int width, int height) throws IOException {
+        StreamConfiguration c = context.streamConfig;
+        int scale = c.getDisplayScale() > 0 ? c.getDisplayScale() : 100;
+        boolean resized = h.resizeDesk(width, height, c.getLaunchRefreshRate(), 96 * scale / 100,
+                c.getEfficientEncoding() != 0, c.getQuietIdle());
+        if (resized) {
+            context.negotiatedWidth = width;
+            context.negotiatedHeight = height;
+        }
+        return resized;
+    }
+
     public void sendMousePosition(short x, short y, short referenceWidth, short referenceHeight)
     {
         if (!isMonkey) {
