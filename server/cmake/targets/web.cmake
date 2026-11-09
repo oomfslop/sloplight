@@ -1,6 +1,7 @@
 set(SUNSHINE_WEB_SOURCE_DIR "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web")
-set(SUNSHINE_WEB_OUTPUT_DIR "${CMAKE_BINARY_DIR}/assets/web")
-set(SUNSHINE_WEB_STAMP "${CMAKE_BINARY_DIR}/web_ui.stamp")
+set(SUNSHINE_WEB_OUTPUT_DIR "${CMAKE_BINARY_DIR}/web_ui")
+set(SUNSHINE_WEB_EMBED_SOURCE "${CMAKE_BINARY_DIR}/generated/web_ui_files.cpp")
+set(SUNSHINE_WEB_EMBED_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/scripts/embed_web_ui.cmake")
 
 set(SUNSHINE_WEB_SOURCES)
 # npm ci creates and replaces node_modules while this target runs.  Do not use
@@ -26,26 +27,23 @@ foreach(SUNSHINE_WEB_ROOT_SOURCE IN LISTS SUNSHINE_WEB_ROOT_SOURCES)
 endforeach()
 
 find_program(SUNSHINE_NPM_EXECUTABLE NAMES npm.cmd npm)
-
-if(SUNSHINE_NPM_EXECUTABLE)
-    add_custom_command(
-        OUTPUT "${SUNSHINE_WEB_STAMP}"
-        COMMAND "${SUNSHINE_NPM_EXECUTABLE}" ci --ignore-scripts --no-audit --no-fund --prefer-offline
-        COMMAND "${CMAKE_COMMAND}" -E env
-                "SUNSHINE_WEB_OUTPUT_DIR=${SUNSHINE_WEB_OUTPUT_DIR}"
-                "${SUNSHINE_NPM_EXECUTABLE}" run build
-        COMMAND "${CMAKE_COMMAND}" -E touch "${SUNSHINE_WEB_STAMP}"
-        WORKING_DIRECTORY "${SUNSHINE_WEB_SOURCE_DIR}"
-        BYPRODUCTS "${SUNSHINE_WEB_OUTPUT_DIR}/index.html"
-        DEPENDS ${SUNSHINE_WEB_SOURCES}
-        COMMENT "Building the Vibeshine browser interface"
-        USES_TERMINAL
-    )
-    add_custom_target(web_ui DEPENDS "${SUNSHINE_WEB_STAMP}" "${SUNSHINE_WEB_OUTPUT_DIR}/index.html")
-else()
-    add_custom_target(web_ui
-        COMMAND "${CMAKE_COMMAND}" -E echo "npm is required to build the Vibeshine browser interface"
-        COMMAND "${CMAKE_COMMAND}" -E false
-        COMMENT "Unable to build the Vibeshine browser interface"
-    )
+if(NOT SUNSHINE_NPM_EXECUTABLE)
+    message(FATAL_ERROR "npm is required to build the Vibeshine browser interface")
 endif()
+
+add_custom_command(
+    OUTPUT "${SUNSHINE_WEB_EMBED_SOURCE}"
+    COMMAND "${SUNSHINE_NPM_EXECUTABLE}" ci --ignore-scripts --no-audit --no-fund --prefer-offline
+    COMMAND "${CMAKE_COMMAND}" -E env
+            "SUNSHINE_WEB_OUTPUT_DIR=${SUNSHINE_WEB_OUTPUT_DIR}"
+            "${SUNSHINE_NPM_EXECUTABLE}" run build
+    COMMAND "${CMAKE_COMMAND}"
+            "-DWEB_DIR=${SUNSHINE_WEB_OUTPUT_DIR}"
+            "-DOUT_FILE=${SUNSHINE_WEB_EMBED_SOURCE}"
+            -P "${SUNSHINE_WEB_EMBED_SCRIPT}"
+    WORKING_DIRECTORY "${SUNSHINE_WEB_SOURCE_DIR}"
+    DEPENDS ${SUNSHINE_WEB_SOURCES} "${SUNSHINE_WEB_EMBED_SCRIPT}"
+    COMMENT "Building the Vibeshine browser interface"
+    USES_TERMINAL
+)
+add_custom_target(web_ui DEPENDS "${SUNSHINE_WEB_EMBED_SOURCE}")

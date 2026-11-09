@@ -146,8 +146,7 @@ def inspect_archive(archive, version):
                                   entry.linkname != f'vibeshine-{version}'):
                 raise DeployError(f'Unexpected symlink: {name}')
         members[name] = entry
-    required = FIXED | {f'usr/bin/vibeshine-{version}',
-                        'usr/share/vibeshine/web/index.html'}
+    required = FIXED | {f'usr/bin/vibeshine-{version}'}
     required.update(f'usr/src/vibeshine-drm-{version.split("-")[0]}/{name}' for name in
                     ('Makefile', 'build-module', 'dkms.conf', 'vkms_drv.c',
                      'vibeshine_drm_uapi.h', 'vibeshine_drm_version.h', 'vibeshine_drm_vrr.h'))

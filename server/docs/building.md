@@ -2,10 +2,10 @@
 Sunshine binaries are built using [CMake](https://cmake.org) and requires `cmake` > 3.25.
 The browser interface is built with Node.js and npm. CMake's `web_ui` target
 installs the locked dependencies with lifecycle scripts disabled, generates the
-design tokens, type-checks the Vue source, and writes the production bundle to
-`<build-dir>/assets/web`. The `sunshine` target and installer packaging depend on
-this target, and packaging fails rather than shipping an incomplete
-configuration interface.
+design tokens, type-checks the Vue source, writes the production bundle to
+`<build-dir>/web_ui` and embeds it into the `sunshine` executable, so the
+interface always matches the server binary. npm is required to configure the
+project.
 
 For frontend-only development, run `npm ci --ignore-scripts` and `npm run dev`
 from `src_assets/common/assets/web`. Use `npm run build` for a production bundle.

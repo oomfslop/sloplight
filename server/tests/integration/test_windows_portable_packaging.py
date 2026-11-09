@@ -82,8 +82,7 @@ int main(void) { return zlib1_fixture() + libwebrtc_fixture() + zero_filled_fixt
             "assets/apps.json": '{"apps": [{"name": "Desktop"}]}',
             "assets/desktop.png": "fixture image",
             "assets/steam.png": "fixture image",
-            "assets/web/index.html": '<script src="assets/app.js"></script>',
-            "assets/web/assets/app.js": "console.log('app');",
+            "assets/tray/sunshine.ico": "fixture icon",
             "assets/shaders/directx/cursor_vs.hlsl": "fixture shader",
             "plugins/playnite/SunshinePlaynite/extension.yaml": "Id: fixture",
             "plugins/playnite/SunshinePlaynite/VibeshinePlaynite.dll": "fixture managed plugin",
@@ -361,7 +360,6 @@ include(CPack)
         missing("tools/sunshine_wgc_capture.exe", "Required portable runtime file missing: tools/sunshine_wgc_capture.exe")
         missing("tools/vibeshine_dualsense_audio.dll", "Required portable runtime file missing: tools/vibeshine_dualsense_audio.dll")
         missing("plugins/playnite/SunshinePlaynite/VibeshinePlaynite.dll", "Required portable runtime file missing")
-        missing("assets/web/assets/app.js", "Portable Web UI bundle missing")
         crt = redist / "vcruntime140_1.dll"
         crt_backup = crt.read_bytes()
         crt.unlink()
@@ -442,7 +440,7 @@ include(CPack)
                 env={**os.environ, "SystemRoot": str(system_root)})
             run([*configure, f"-DSUNSHINE_PORTABLE_REDISTRIBUTABLE_DIRS={redist}"])
             print("PASS: a configured System32 search directory cannot supply redistributed CRTs")
-        path = payload / "assets/web/index.html"
+        path = payload / "assets/tray/sunshine.ico"
         backup = path.read_bytes()
         path.write_bytes(b"")
         run(package, success=False, contains="Required portable runtime file is empty")

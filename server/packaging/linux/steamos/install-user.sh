@@ -119,9 +119,7 @@ trap 'exit 143' TERM HUP
 cp -a -- "$payload"/. "$stage"/
 [[ -f "$stage/bin/vibeshine" && -x "$stage/bin/vibeshine" && ! -L "$stage/bin/vibeshine" ]] || \
   die "copied payload failed validation"
-for asset in apps.json web/index.html; do
-  [[ -f "$stage/share/vibeshine/$asset" ]] || die "payload is missing share/vibeshine/$asset"
-done
+[[ -f "$stage/share/vibeshine/apps.json" ]] || die "payload is missing share/vibeshine/apps.json"
 if ! "$stage/bin/vibeshine" --help > "$transaction/preflight.log" 2>&1; then
   head -c 4096 "$transaction/preflight.log" >&2
   die "payload cannot run on this SteamOS version; the previous installation was preserved"

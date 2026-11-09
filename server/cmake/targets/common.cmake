@@ -12,6 +12,8 @@ endforeach()
 
 include(${CMAKE_MODULE_PATH}/targets/web.cmake)
 add_dependencies(sunshine web_ui)
+target_sources(sunshine PRIVATE "${SUNSHINE_WEB_EMBED_SOURCE}")
+set_source_files_properties("${SUNSHINE_WEB_EMBED_SOURCE}" PROPERTIES COMPILE_OPTIONS -Wno-overlength-strings)
 
 # platform specific target definitions
 if(WIN32)

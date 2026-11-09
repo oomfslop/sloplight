@@ -71,6 +71,7 @@
 #include "host_stats.h"
 #include "video.h"
 #include "webrtc_stream.h"
+#include "web_ui.h"
 
 #ifdef _WIN32
   #include "platform/windows/service_startup.h"
@@ -1403,22 +1404,6 @@ namespace confighttp {
   // Consolidated redirect helper: use the const char* variant below.
 
   namespace {
-    bool is_safe_web_path(std::string_view relative_path) {
-      if (relative_path.empty() || relative_path.front() == '/' || relative_path.find('\\') != std::string_view::npos ||
-          relative_path.find('%') != std::string_view::npos || relative_path.find(':') != std::string_view::npos ||
-          relative_path.find('\0') != std::string_view::npos) {
-        return false;
-      }
-
-      const fs::path path {relative_path};
-      if (path.is_absolute() || path.has_root_name() || path.has_root_directory()) {
-        return false;
-      }
-      return std::ranges::none_of(path, [](const fs::path &part) {
-        return part == "..";
-      });
-    }
-
     SimpleWeb::CaseInsensitiveMultimap web_headers(std::string_view content_type, bool cache_immutable) {
       SimpleWeb::CaseInsensitiveMultimap headers;
       headers.emplace("Content-Type", std::string {content_type});
@@ -1434,19 +1419,13 @@ namespace confighttp {
     }
 
     void serve_web_file(resp_https_t response, req_https_t request, std::string_view relative_path) {
-      if (!is_safe_web_path(relative_path)) {
+      const auto file = std::ranges::lower_bound(web_ui::files, relative_path, {}, &web_ui::file_t::path);
+      if (file == web_ui::files.end() || file->path != relative_path) {
         not_found(response, request);
         return;
       }
 
-      const fs::path file_path = fs::path {WEB_DIR} / fs::path {relative_path};
-      std::error_code error;
-      if (!fs::is_regular_file(file_path, error) || error) {
-        not_found(response, request);
-        return;
-      }
-
-      auto extension = file_path.extension().string();
+      auto extension = fs::path {relative_path}.extension().string();
       if (!extension.empty() && extension.front() == '.') {
         extension.erase(0, 1);
       }
@@ -1457,19 +1436,13 @@ namespace confighttp {
         return;
       }
 
-      std::ifstream input {file_path, std::ios::binary};
-      if (!input) {
-        not_found(response, request);
-        return;
-      }
-
       const bool cache_immutable = extension == "css" || extension == "js" || extension == "woff2";
-      response->write(success_ok, input, web_headers(mime_type->second, cache_immutable));
+      response->write(success_ok, file->data, web_headers(mime_type->second, cache_immutable));
     }
   }  // namespace
 
   /**
-   * @brief Serve a built browser asset from the isolated web root.
+   * @brief Serve a file of the built browser interface.
    */
   void getWebAsset(resp_https_t response, req_https_t request) {
     print_req(request);
@@ -1504,42 +1477,6 @@ namespace confighttp {
       return;
     }
     serve_web_file(std::move(response), std::move(request), "index.html");
-  }
-
-  /**
-   * @brief Get the favicon image.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   * @todo combine function with getSunshineLogoImage
-   * @todo use mime_types map
-   */
-  void getFaviconImage(resp_https_t response, req_https_t request) {
-    print_req(request);
-
-    std::ifstream in(WEB_DIR "images/sunshine.ico", std::ios::binary);
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "image/x-icon");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(success_ok, in, headers);
-  }
-
-  /**
-   * @brief Get the Sunshine logo image.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   * @todo combine function with getFaviconImage
-   * @todo use mime_types map
-   */
-  void getSunshineLogoImage(resp_https_t response, req_https_t request) {
-    print_req(request);
-
-    std::ifstream in(WEB_DIR "images/logo-sunshine-45.png", std::ios::binary);
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "image/png");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(success_ok, in, headers);
   }
 
   /**

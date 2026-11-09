@@ -18,7 +18,7 @@ export default defineConfig({
   build: {
     outDir: configuredOutputDirectory
       ? resolve(configuredOutputDirectory)
-      : fileURLToPath(new URL('../../../../build/assets/web', import.meta.url)),
+      : fileURLToPath(new URL('../../../../build/web_ui', import.meta.url)),
     emptyOutDir: true,
     target: 'es2022',
   },

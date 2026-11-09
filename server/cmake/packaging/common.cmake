@@ -32,18 +32,6 @@ foreach(asset ${ALL_ASSETS})  # Copy assets to build directory, excluding the br
             DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/assets")
 endforeach()
 
-# Vite writes the complete browser application directly into the runtime asset
-# tree. Fail packaging when it has not been built so an installer can never
-# silently ship an API-only configuration endpoint.
-install(CODE "
-    if(NOT EXISTS \"${CMAKE_CURRENT_BINARY_DIR}/assets/web/index.html\")
-        message(FATAL_ERROR \"Vibeshine Web UI is missing. Build the web_ui target before packaging.\")
-    endif()
-" COMPONENT assets)
-install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/assets/web/"
-        DESTINATION "${SUNSHINE_ASSETS_DIR}/web"
-        COMPONENT assets)
-
 # platform specific packaging
 if(WIN32)
     include(${CMAKE_MODULE_PATH}/packaging/windows.cmake)

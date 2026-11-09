@@ -46,9 +46,7 @@ vibeshine_unit=vibeshine-steamos.service
 [[ -n "$payload" && -d "$payload" && ! -L "$payload" ]] || die '--payload must name a real directory'
 payload=$(CDPATH= cd -- "$payload" && pwd -P)
 [[ -f "$payload/bin/vibeshine" && -x "$payload/bin/vibeshine" && ! -L "$payload/bin/vibeshine" ]] || die 'payload executable is missing'
-for asset in apps.json web/index.html; do
-  [[ -f "$payload/share/vibeshine/$asset" ]] || die "payload is missing $asset"
-done
+[[ -f "$payload/share/vibeshine/apps.json" ]] || die "payload is missing apps.json"
 for command in python3 systemctl curl timeout flock ss; do command -v "$command" >/dev/null || die "missing $command"; done
 systemctl --user is-active --quiet "$vibeshine_unit" && die 'Vibeshine is already running'
 [[ ! -e "$install_root/current" || -L "$install_root/current" ]] || die 'bundle current must be a symlink'

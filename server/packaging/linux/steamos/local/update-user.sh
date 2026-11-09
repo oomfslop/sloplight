@@ -52,9 +52,7 @@ runtime_file="$install_root/local-runtime.env"
 [[ -n "$payload" && -d "$payload" && ! -L "$payload" ]] || die '--payload must name a real directory'
 payload=$(CDPATH= cd -- "$payload" && pwd -P)
 [[ -f "$payload/bin/vibeshine" && -x "$payload/bin/vibeshine" && ! -L "$payload/bin/vibeshine" ]] || die 'payload executable is missing'
-for asset in apps.json web/index.html; do
-  [[ -f "$payload/share/vibeshine/$asset" ]] || die "payload is missing $asset"
-done
+[[ -f "$payload/share/vibeshine/apps.json" ]] || die "payload is missing apps.json"
 for command in python3 systemctl journalctl curl timeout flock ss readlink; do
   command -v "$command" >/dev/null || die "missing $command"
 done

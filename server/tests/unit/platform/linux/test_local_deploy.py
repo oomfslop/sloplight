@@ -45,7 +45,7 @@ def version_checkout(tag='v1.20.0'):
 def package(extra=(), omit=()):
     stream = io.BytesIO()
     names = deploy.FIXED | {
-        f'usr/bin/vibeshine-{VERSION}', 'usr/share/vibeshine/web/index.html',
+        f'usr/bin/vibeshine-{VERSION}',
         'usr/src/vibeshine-drm-1.19.0/vibeshine_drm_version.h',
     }
     names.update('usr/src/vibeshine-drm-1.19.0/' + name for name in
@@ -151,7 +151,7 @@ class ArchiveTests(unittest.TestCase):
                     deploy.inspect_archive(archive, VERSION)
 
     def test_file_modes_do_not_trust_archive_privilege_bits(self):
-        self.assertEqual(deploy.install_mode('usr/share/vibeshine/web/index.html', 0o7777), 0o644)
+        self.assertEqual(deploy.install_mode('usr/share/vibeshine/apps.json', 0o7777), 0o644)
         self.assertEqual(deploy.install_mode('usr/libexec/vibeshine/vibeshine-display-power', 0o4777), 0o755)
         self.assertEqual(deploy.install_mode('usr/libexec/vibeshine/vibeshine-display-observer', 0o4777), 0o755)
         self.assertEqual(deploy.install_mode('usr/libexec/vibeshine/vibeshine-touch-map', 0o4777), 0o755)
@@ -589,7 +589,7 @@ class FilesTests(unittest.TestCase):
         self.assertFalse((self.root / new).exists())
 
     def test_corrupt_backup_is_rejected_before_any_restore(self):
-        name = 'usr/share/vibeshine/web/index.html'
+        name = 'usr/share/vibeshine/apps.json'
         target = self.place(name)
         saved = self.files.snapshot([name])
         target.write_bytes(b'current')

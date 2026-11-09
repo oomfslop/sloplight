@@ -495,13 +495,13 @@ if(${SUNSHINE_TRAY} STREQUAL 1)
     install(FILES "${CMAKE_SOURCE_DIR}/sunshine.svg"
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
             RENAME "${PROJECT_FQDN}-tray.svg")
-    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/sunshine-playing.svg"
+    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/tray/sunshine-playing.svg"
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
             RENAME "${PROJECT_FQDN}-playing.svg")
-    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/sunshine-pausing.svg"
+    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/tray/sunshine-pausing.svg"
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
             RENAME "${PROJECT_FQDN}-pausing.svg")
-    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/sunshine-locked.svg"
+    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/tray/sunshine-locked.svg"
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
             RENAME "${PROJECT_FQDN}-locked.svg")
 

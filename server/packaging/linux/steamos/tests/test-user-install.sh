@@ -27,11 +27,10 @@ install -d \
   "$test_root/fakebin" \
   "$test_root/home" \
   "$test_root/payload/bin" \
-  "$test_root/payload/share/vibeshine/web" \
+  "$test_root/payload/share/vibeshine" \
   "$test_root/runtime"
 install -m 0755 /usr/bin/env "$test_root/payload/bin/vibeshine"
-touch "$test_root/payload/share/vibeshine/apps.json" \
-  "$test_root/payload/share/vibeshine/web/index.html"
+touch "$test_root/payload/share/vibeshine/apps.json"
 cat > "$test_root/fakebin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STEAMOS_TEST_LOG"

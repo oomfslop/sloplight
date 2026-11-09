@@ -26,8 +26,6 @@
 
 #include <Simple-Web-Server/server_https.hpp>
 
-#define WEB_DIR SUNSHINE_ASSETS_DIR "/web/"
-
 namespace confighttp {
   using resp_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response>;
   using req_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request>;

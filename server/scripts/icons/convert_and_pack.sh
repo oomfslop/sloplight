@@ -38,9 +38,9 @@ echo "using icon sizes:"
 # shellcheck disable=SC2068  # intentionally word split
 echo ${icon_sizes[@]}
 
-src_vectors=("../../src_assets/common/assets/web/public/images/sunshine-locked.svg"
-             "../../src_assets/common/assets/web/public/images/sunshine-pausing.svg"
-             "../../src_assets/common/assets/web/public/images/sunshine-playing.svg"
+src_vectors=("../../src_assets/common/assets/tray/sunshine-locked.svg"
+             "../../src_assets/common/assets/tray/sunshine-pausing.svg"
+             "../../src_assets/common/assets/tray/sunshine-playing.svg"
              "../../sunshine.svg")
 
 echo "using sources vectors:"

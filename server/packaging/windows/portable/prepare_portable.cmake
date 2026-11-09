@@ -113,18 +113,6 @@ function(sunshine_prepare_windows_portable)
             message(FATAL_ERROR "Required portable runtime file is empty: ${_required}")
         endif()
     endforeach()
-    foreach(_web_assets IN ITEMS assets/web/assets)
-        file(GLOB _scripts "${PORTABLE_STAGE}/${_web_assets}/*.js")
-        if(NOT _scripts)
-            message(FATAL_ERROR "Portable Web UI bundle missing: ${_web_assets}")
-        endif()
-        foreach(_script IN LISTS _scripts)
-            file(SIZE "${_script}" _size)
-            if(_size EQUAL 0)
-                message(FATAL_ERROR "Portable Web UI bundle is empty: ${_script}")
-            endif()
-        endforeach()
-    endforeach()
 
     # Catch imports satisfied on a developer's machine but absent from the ZIP.
     # zlib/TrueHDR are also checked explicitly above because they are dlopened.
