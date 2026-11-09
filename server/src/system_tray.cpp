@@ -454,7 +454,7 @@ namespace system_tray {
         "Click here to complete the pairing process",
         TRAY_ICON_LOCKED,
         []() {
-          launch_ui("/clients");
+          launch_ui("/pair");
         }
       );
     });

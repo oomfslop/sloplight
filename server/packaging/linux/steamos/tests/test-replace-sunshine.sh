@@ -10,11 +10,11 @@ if [[ $(id -u) -eq 0 ]]; then
 fi
 test_root=$(mktemp -d /tmp/vibeshine-replace-test.XXXXXXXX)
 trap 'rm -rf -- "$test_root"' EXIT
-mkdir -p "$test_root/fakebin" "$test_root/payload/bin" "$test_root/payload/share/vibeshine/web/v2"
+mkdir -p "$test_root/fakebin" "$test_root/payload/bin" "$test_root/payload/share/vibeshine/web"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 \
   -subj /CN=MigrationFixture -keyout "$test_root/client.key" -out "$test_root/client.pem" 2>/dev/null
 cp /usr/bin/env "$test_root/payload/bin/vibeshine"
-touch "$test_root/payload/share/vibeshine/"{apps.json,web/index.html,web/v2/index.html}
+touch "$test_root/payload/share/vibeshine/"{apps.json,web/index.html}
 cat > "$test_root/fakebin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -eu

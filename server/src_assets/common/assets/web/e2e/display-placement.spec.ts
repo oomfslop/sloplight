@@ -33,7 +33,7 @@ async function openEditor(page: Page, placements: Layout['placements'] = { peer:
     }
     await route.fulfill({ json: body });
   });
-  await page.goto('/v2/devices');
+  await page.goto('/devices');
   await page.getByText('Arrange client displays', { exact: true }).click();
   const editor = page.locator('.devices-layout .topology-editor');
   await expect(editor.getByRole('button', { name: /Client · Tablet/ })).toBeVisible();

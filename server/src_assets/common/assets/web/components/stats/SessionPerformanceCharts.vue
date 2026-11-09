@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-import { apiGet } from '@/api/client';
+import { apiGet } from '@/services/client';
 import type { SessionDetail, SessionEvent, SessionSample } from '@/types/sessions';
 
 import MetricChart from './MetricChart.vue';

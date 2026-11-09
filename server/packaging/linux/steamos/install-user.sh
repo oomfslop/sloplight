@@ -119,7 +119,7 @@ trap 'exit 143' TERM HUP
 cp -a -- "$payload"/. "$stage"/
 [[ -f "$stage/bin/vibeshine" && -x "$stage/bin/vibeshine" && ! -L "$stage/bin/vibeshine" ]] || \
   die "copied payload failed validation"
-for asset in apps.json web/index.html web/v2/index.html; do
+for asset in apps.json web/index.html; do
   [[ -f "$stage/share/vibeshine/$asset" ]] || die "payload is missing share/vibeshine/$asset"
 done
 if ! "$stage/bin/vibeshine" --help > "$transaction/preflight.log" 2>&1; then

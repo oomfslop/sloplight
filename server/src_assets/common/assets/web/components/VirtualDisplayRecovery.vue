@@ -2,7 +2,7 @@
 import { ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-import { apiPost } from '@/api/client';
+import { apiPost } from '@/services/client';
 import { AppButton, ConfirmDialog, InlineAlert } from '@/components/ui';
 import {
   dismissDisplayRecoveryIntroduction,

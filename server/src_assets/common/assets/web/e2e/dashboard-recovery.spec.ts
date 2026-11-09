@@ -54,7 +54,7 @@ for (const platform of ['linux', 'windows']) {
     page,
   }) => {
     const calls = await host(page, platform);
-    await page.goto('/v2/');
+    await page.goto('/');
     await expect(
       page.getByText('Know how to recover your PC screen', { exact: true }),
     ).toBeVisible();
@@ -77,7 +77,7 @@ for (const platform of ['linux', 'windows']) {
 
 test('cancelling the recovery dialog never sends a termination request', async ({ page }) => {
   const calls = await host(page);
-  await page.goto('/v2/');
+  await page.goto('/');
   await page.getByRole('button', { name: 'Terminate virtual screen', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.getByRole('dialog')).not.toBeVisible();
@@ -86,7 +86,7 @@ test('cancelling the recovery dialog never sends a termination request', async (
 
 test('unsupported hosts do not advertise display termination', async ({ page }) => {
   await host(page, 'macos');
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Host performance', exact: true })).toBeVisible();
   await expect(
     page.getByRole('button', { name: 'Terminate virtual screen', exact: true }),
@@ -125,7 +125,7 @@ const responses = [
 for (const { name, result, message } of responses) {
   test(`dashboard reports ${name} separately from virtual-screen removal`, async ({ page }) => {
     const calls = await host(page, 'linux', result);
-    await page.goto('/v2/');
+    await page.goto('/');
     await confirmRecovery(page);
     await expect(page.getByRole('status')).toContainText(message);
     expect(calls).toHaveLength(1);
@@ -137,7 +137,7 @@ test('recovery is available even when dashboard metrics fail', async ({ page }) 
   await page.route('**/api/host/stats', (route) =>
     route.fulfill({ status: 503, json: { error: 'unavailable' } }),
   );
-  await page.goto('/v2/');
+  await page.goto('/');
   await confirmRecovery(page);
   await expect(page.getByRole('status')).toContainText(
     'saved physical display layout was restored',
@@ -148,7 +148,7 @@ test('recovery is available even when dashboard metrics fail', async ({ page }) 
 test('network failures leave recovery available for another attempt', async ({ page }) => {
   const calls = await host(page);
   await page.route('**/api/display/terminate_virtual', (route) => route.abort());
-  await page.goto('/v2/');
+  await page.goto('/');
   await confirmRecovery(page);
   await expect(page.getByRole('status')).toContainText('termination could not be confirmed');
   await page.unroute('**/api/display/terminate_virtual');
@@ -171,7 +171,7 @@ test('an in-flight recovery cannot be cancelled or submitted twice', async ({ pa
     await pending;
     await route.fulfill({ json: { status: true, physical_display_recovered: true } });
   });
-  await page.goto('/v2/');
+  await page.goto('/');
   await confirmRecovery(page);
   await expect(
     page.getByRole('dialog').getByRole('button', { name: 'Recovering displays…' }),

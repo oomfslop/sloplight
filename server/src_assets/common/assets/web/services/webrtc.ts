@@ -1,4 +1,4 @@
-import { ApiError, apiDelete, apiGet, apiPost } from '@/api/client';
+import { ApiError, apiDelete, apiGet, apiPost } from '@/services/client';
 import type { EncodingType, StreamConfig, WebRtcStatsSnapshot } from '@/types/webrtc';
 
 export interface WebRtcCodecCapability {

@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-import { ApiError, apiGet } from '@/api/client';
+import { ApiError, apiGet } from '@/services/client';
 import { AppButton, StatusBadge, UiIcon } from '@/components/ui';
 
 type IntegrationKind = 'rtss' | 'lossless' | 'playnite';

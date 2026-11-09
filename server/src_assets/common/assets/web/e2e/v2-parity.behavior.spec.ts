@@ -86,7 +86,7 @@ test('Linux maintenance renders Linux actions without Windows recovery or suppor
   page,
 }) => {
   await installHost(page, { platform: 'linux' });
-  await page.goto('/v2/maintenance');
+  await page.goto('/maintenance');
 
   await expect(page.getByRole('heading', { name: 'Maintenance' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Display settings' })).toBeVisible();
@@ -100,7 +100,7 @@ test('Settings renders and saves Linux HDR and MangoHUD choices through real con
   page,
 }) => {
   const patches = await installHost(page, { platform: 'linux' });
-  await page.goto('/v2/settings?category=display');
+  await page.goto('/settings?category=display');
 
   const reload = page.getByRole('button', { name: 'Reload' });
   await expect(reload).toBeEnabled();
@@ -113,7 +113,7 @@ test('Settings renders and saves Linux HDR and MangoHUD choices through real con
   await expect.poll(() => patches.length).toBe(1);
   expect(patches[0]).toMatchObject({ wayland_hdr_compatibility: true });
 
-  await page.goto('/v2/settings?category=pacing');
+  await page.goto('/settings?category=pacing');
   await page.locator('#setting-frame_limiter_provider').selectOption('mangohud');
   const limiterMethod = page.locator('#setting-mangohud_limiter_method');
   await expect(limiterMethod).toBeVisible();
@@ -131,7 +131,7 @@ test('Settings reports missing host metadata and unavailable Linux virtual displ
   page,
 }) => {
   await installHost(page, { platform: 'linux', metadataUnavailable: true });
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await expect(page.getByText('Some host details are unavailable', { exact: true })).toBeVisible();
 
   await page.close();
@@ -144,7 +144,7 @@ test('Settings reports missing host metadata and unavailable Linux virtual displ
       capture_status: { virtual_display_configured: false },
     },
   });
-  await displayPage.goto('/v2/settings?category=display');
+  await displayPage.goto('/settings?category=display');
   await expect(
     displayPage.getByText('Virtual displays are not ready on this host', { exact: true }),
   ).toBeVisible();
@@ -163,7 +163,7 @@ test('Settings retains save and restart actions after a backend requests restart
     await restartPending;
     await route.fulfill({ json: { status: true } });
   });
-  await page.goto('/v2/settings?category=audio');
+  await page.goto('/settings?category=audio');
   await page.locator('#setting-stream_audio').uncheck();
   await expect(page.getByRole('button', { name: 'Reload' })).toBeDisabled();
   await page.getByRole('button', { name: 'Save changes' }).click();
@@ -203,7 +203,7 @@ test('Linux settings enumerate physical displays and reset persisted display sta
     await route.fulfill({ json: { status: true } });
   });
 
-  await page.goto('/v2/settings?category=everyday');
+  await page.goto('/settings?category=everyday');
   const display = page.locator('#setting-output_name');
   await expect(display).toHaveJSProperty('tagName', 'SELECT');
   await display.focus();
@@ -211,7 +211,7 @@ test('Linux settings enumerate physical displays and reset persisted display sta
   await display.selectOption('DP-1');
   await expect(page.getByRole('button', { name: 'Save changes' })).toBeVisible();
 
-  await page.goto('/v2/settings?category=display');
+  await page.goto('/settings?category=display');
   await page.getByRole('button', { name: 'Clear display state' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Continue' }).click();
   await expect.poll(() => resetRequests).toBe(1);
@@ -245,7 +245,7 @@ test('device save retains its display edit and the latest server identity', asyn
     await route.fulfill({ json: { status: true } });
   });
 
-  await page.goto('/v2/devices');
+  await page.goto('/devices');
   await page.getByRole('button', { name: 'Edit device' }).click();
   await page.locator('#client-alpha-display-mode').fill('2560x1440x144');
   await page.getByRole('button', { name: 'Save device' }).click();
@@ -296,7 +296,7 @@ for (const viewport of [
       await route.fulfill({ json: { status: true, enabled_updated: true } });
     });
 
-    await page.goto('/v2/devices');
+    await page.goto('/devices');
     await page.getByRole('button', { name: 'Edit device' }).click();
     const access = page.locator('#client-alpha-enabled');
     await access.uncheck();

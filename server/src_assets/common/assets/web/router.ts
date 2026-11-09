@@ -15,7 +15,7 @@ const SettingsView = () => import('@/views/SettingsView.vue');
 const StatsView = () => import('@/views/StatsView.vue');
 
 const router = createRouter({
-  history: createWebHistory('/v2/'),
+  history: createWebHistory('/'),
   routes: [
     {
       path: '/',
@@ -32,6 +32,10 @@ const router = createRouter({
     {
       path: '/webrtc',
       redirect: '/stream',
+    },
+    {
+      path: '/v2/:rest(.*)*',
+      redirect: (to) => ({ path: `/${([] as string[]).concat(to.params.rest).join('/')}`, query: to.query, hash: to.hash }),
     },
     {
       path: '/library',

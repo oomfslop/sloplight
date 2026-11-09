@@ -230,7 +230,7 @@ test('Windows maintenance exposes every crash part and recovers a failed part', 
   page,
 }) => {
   const calls = await setupHost(page);
-  await page.goto('/v2/maintenance');
+  await page.goto('/maintenance');
   await expect(page.getByRole('button', { name: 'Download crash bundle' })).toBeVisible();
   await page.getByRole('button', { name: 'Download crash bundle' }).click();
   await expect(page.getByText('Crash bundle parts', { exact: true })).toBeVisible();
@@ -266,7 +266,7 @@ test('Windows Playnite launch is actionable and auto-sync purge is separately co
       { uuid: 'steam-1', name: 'Steam game', 'steam-id': 's1', 'steam-managed': 'auto' },
     ],
   });
-  await page.goto('/v2/integrations');
+  await page.goto('/integrations');
   await expect(page.getByRole('button', { name: 'Launch Playnite' })).toBeVisible();
   await page.getByRole('button', { name: 'Launch Playnite' }).click();
   await expect.poll(() => calls.launch).toBe(1);
@@ -299,7 +299,7 @@ test('Lossless picker browses host roots and UNC directories without saving unti
   page,
 }) => {
   const calls = await setupHost(page, { browse: true });
-  await page.goto('/v2/settings?category=pacing');
+  await page.goto('/settings?category=pacing');
   await expect(page.locator('#setting-lossless_scaling_path')).toBeVisible();
   await page.getByRole('button', { name: 'Browse host' }).click();
   const picker = page.getByRole('dialog');
@@ -359,7 +359,7 @@ test('Windows library provider purge keeps explicit Monitor profiles and other p
       { uuid: 'custom-app', name: 'Custom app', cmd: ['custom.exe'] },
     ],
   });
-  await page.goto('/v2/library');
+  await page.goto('/library');
   await expect(page.locator('.library-page')).toBeVisible();
   const purgeButton = page.getByRole('button', { name: 'Remove Playnite entries' });
   await expect(purgeButton).toBeVisible();
@@ -387,7 +387,7 @@ test('Windows library provider purge keeps explicit Monitor profiles and other p
 
 test('Linux integrations do not query or expose Playnite', async ({ page }) => {
   const calls = await setupHost(page, { platform: 'linux' });
-  await page.goto('/v2/integrations');
+  await page.goto('/integrations');
   await expect(page.locator('.integrations-page')).toBeVisible();
   await expect(page.getByText('Playnite', { exact: true })).toHaveCount(0);
   expect(calls.playniteStatus).toBe(0);
@@ -397,7 +397,7 @@ test('Linux virtual display termination requires confirmation and avoids Windows
   page,
 }) => {
   const calls = await setupHost(page, { platform: 'linux' });
-  await page.goto('/v2/maintenance');
+  await page.goto('/maintenance');
   await expect(
     page.getByRole('heading', { name: 'Virtual display recovery', exact: true }),
   ).toBeVisible();
@@ -433,7 +433,7 @@ for (const status of [false, undefined]) {
       platform: 'linux',
       termination: status === false ? { status, error: 'Connector removal failed' } : {},
     });
-    await page.goto('/v2/maintenance');
+    await page.goto('/maintenance');
     await page.getByRole('button', { name: 'Terminate virtual display', exact: true }).click();
     await page
       .getByRole('dialog')
@@ -466,7 +466,7 @@ test('Linux termination distinguishes successful removal from failed physical re
     platform: 'linux',
     termination: { status: true, topology_restored: false },
   });
-  await page.goto('/v2/maintenance');
+  await page.goto('/maintenance');
   await page.getByRole('button', { name: 'Terminate virtual display', exact: true }).click();
   await page
     .getByRole('dialog')
@@ -484,7 +484,7 @@ test('Playnite detection failure exposes a host directory picker and saves its s
   page,
 }) => {
   const calls = await setupHost(page, { playniteUndetected: true });
-  await page.goto('/v2/integrations');
+  await page.goto('/integrations');
   const policies = page.locator('#playnite-policies');
   await expect(policies).toHaveAttribute('open', '');
   await policies.getByRole('button', { name: 'Browse host' }).click();
@@ -510,7 +510,7 @@ test('disabled display maintenance exposes session recovery without activating t
       helper_engine: 'legacy',
     },
   });
-  await page.goto('/v2/maintenance');
+  await page.goto('/maintenance');
   await expect(
     page.getByText(
       'Session recovery: current snapshot present, previous snapshot absent. Restore task: disabled by the user. Helper engine: v1.',
@@ -540,7 +540,7 @@ test('existing snapshot maintenance stays visible and disabled when automation i
       helper_engine: 'v2',
     },
   });
-  await page.goto('/v2/maintenance');
+  await page.goto('/maintenance');
   await expect(page.getByRole('button', { name: 'Replace snapshot', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Delete snapshot', exact: true })).toBeDisabled();
   await expect(page.getByText(/Restore task: enabled. Helper engine: v2./)).toBeVisible();
@@ -554,7 +554,7 @@ test('available display maintenance preserves confirmation and normal capture', 
   const calls = await setupHost(page, {
     golden: { maintenance_available: true, restore_task_state: 'enabled', helper_engine: 'v2' },
   });
-  await page.goto('/v2/maintenance');
+  await page.goto('/maintenance');
   await page.getByRole('button', { name: 'Capture snapshot', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   expect(calls.goldenExports).toBe(0);
@@ -573,7 +573,7 @@ test('display settings explain disabled capture and reset without changing saved
     golden: { maintenance_available: false },
     config: { dd_configuration_option: 'disabled', virtual_display_mode: 'disabled' },
   });
-  await page.goto('/v2/settings?category=display');
+  await page.goto('/settings?category=display');
   await expect(page.getByRole('button', { name: 'Create snapshot', exact: true })).toBeDisabled();
   await expect(
     page.getByRole('button', { name: 'Clear display state', exact: true }),
@@ -598,7 +598,7 @@ for (const available of [false, true]) {
       },
     });
     calls.failGoldenStatus = true;
-    await page.goto('/v2/settings?category=display');
+    await page.goto('/settings?category=display');
     const retry = page.getByRole('button', { name: 'Retry status', exact: true });
     const reset = page.getByRole('button', { name: 'Clear display state', exact: true });
     const unavailableMessage = page.getByText(
@@ -643,7 +643,7 @@ test('failed maintenance refresh clears previously available recovery actions', 
   const calls = await setupHost(page, {
     golden: { maintenance_available: true, restore_task_state: 'enabled', helper_engine: 'v2' },
   });
-  await page.goto('/v2/maintenance');
+  await page.goto('/maintenance');
   await expect(page.getByRole('button', { name: 'Capture snapshot', exact: true })).toBeEnabled();
   calls.failGoldenStatus = true;
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
@@ -669,7 +669,7 @@ for (const initiallyAvailable of [false, true]) {
         virtual_display_mode: 'disabled',
       },
     });
-    await page.goto('/v2/settings?category=display');
+    await page.goto('/settings?category=display');
     await page.evaluate(() => {
       Object.assign(window, { recoveryPageInstance: 'same-document' });
     });
@@ -718,7 +718,7 @@ test('maintenance cleanup reports zero after latest row becomes marked', async (
   const calls = await setupHost(page, { markBeforeDelete: true, apps: [
     { uuid: 'a1234567-1234-4234-8234-123456789abc', name: 'Intervening profile', 'playnite-id': 'p1', 'playnite-managed': 'auto' },
   ] });
-  await page.goto('/v2/library');
+  await page.goto('/library');
   await page.getByRole('button', { name: 'Remove Playnite entries' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Remove Playnite entries' }).click();
   await expect.poll(() => calls.appDeletes.length).toBe(1);
@@ -731,7 +731,7 @@ test('deliberate Library row deletion keeps empty request body', async ({ page }
   const calls = await setupHost(page, { apps: [
     { uuid: 'a1234567-1234-4234-8234-123456789abc', name: 'Deliberate profile', 'remote-monitor-profile': true },
   ] });
-  await page.goto('/v2/library');
+  await page.goto('/library');
   await page.getByRole('button', { name: 'More actions for Deliberate profile' }).focus();
   await page.getByRole('button', { name: 'More actions for Deliberate profile' }).press('Enter');
   await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();

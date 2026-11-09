@@ -14,7 +14,7 @@ import {
 import WindowsDisplayStatus from '@/components/settings/WindowsDisplayStatus.vue';
 import { applyDummyPlugVsyncChange, dummyPlugVsyncState } from '@/utils/displayHealth';
 
-import { ApiError, apiGet, apiPatch, apiPost } from '@/api/client';
+import { ApiError, apiGet, apiPatch, apiPost } from '@/services/client';
 import DisplayModeOverrides from '@/components/settings/DisplayModeOverrides.vue';
 import DisplayRecoverySettings from '@/components/settings/DisplayRecoverySettings.vue';
 import GlobalPrepCommands from '@/components/settings/GlobalPrepCommands.vue';

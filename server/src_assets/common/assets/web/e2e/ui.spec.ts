@@ -71,7 +71,7 @@ test('Linux Everyday presents essentials and preserves unrelated values when sav
     nvenc_twopass: 'full_res',
     dd_manual_resolution: '2560x1440',
   });
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await expect(page.getByText('Display readiness')).toBeVisible();
   await expect(page.getByText('Configured for direct capture')).toBeVisible();
   await expect(page.locator('#setting-virtual_display_mode option').first()).toHaveAttribute(
@@ -102,7 +102,7 @@ test('Everyday restores impactful choices and shares drafts with detailed catego
     nvenc_twopass: 'full_res',
     dd_paused_virtual_display_timeout_secs: 1234,
   });
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await page.locator('#settings-group-everyday-everyday_encoding summary').click();
   await page.locator('#settings-group-everyday-everyday_recovery summary').click();
   await page.locator('#settings-group-everyday-everyday_compatibility summary').click();
@@ -147,7 +147,7 @@ test('Everyday encoder presets follow automatic GPU selection and explicit overr
   await host(page, 'windows', { capture: '' }, true, {
     gpus: [{ description: 'NVIDIA GPU', vendor_id: 0x10de, dedicated_video_memory: 8192 }],
   });
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await page.locator('#settings-group-everyday-everyday_encoding summary').click();
   await expect(page.locator('#setting-nvenc_preset')).toBeVisible();
   await expect(page.locator('#setting-qsv_preset')).toHaveCount(0);
@@ -164,7 +164,7 @@ test('Everyday integrates Linux pacing tools and Remote Monitor with the shared 
   page,
 }) => {
   const patches = await host(page);
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await expect(
     page.locator('#setting-frame_limiter_auto_virtual_framegen option[value="vrr"]'),
   ).toHaveCount(0);
@@ -174,7 +174,7 @@ test('Everyday integrates Linux pacing tools and Remote Monitor with the shared 
   const libraries = page.getByRole('navigation', { name: 'Game library integrations' });
   await expect(libraries.getByRole('link', { name: 'Steam' })).toHaveAttribute(
     'href',
-    '/v2/integrations#integration-steam',
+    '/integrations#integration-steam',
   );
   await expect(libraries.getByRole('link', { name: 'Lutris' })).toBeVisible();
   await expect(libraries.getByRole('link', { name: /Playnite/ })).toHaveCount(0);
@@ -209,7 +209,7 @@ test('Everyday integrates Windows RTSS and Lossless Scaling paths', async ({ pag
       },
     }),
   );
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await page.locator('#settings-group-everyday-everyday_integrations summary').click();
   await expect(page.locator('#setting-mangohud_preset')).toHaveCount(0);
   await expect(page.locator('#setting-rtss_install_path')).toBeVisible();
@@ -217,7 +217,7 @@ test('Everyday integrates Windows RTSS and Lossless Scaling paths', async ({ pag
   const playnite = page
     .getByRole('navigation', { name: 'Game library integrations' })
     .getByRole('link', { name: /Playnite/ });
-  await expect(playnite).toHaveAttribute('href', '/v2/integrations#integration-playnite');
+  await expect(playnite).toHaveAttribute('href', '/integrations#integration-playnite');
   await expect(page.locator('#setting-frame_limiter_provider option[value="proton"]')).toHaveCount(
     0,
   );
@@ -243,7 +243,7 @@ test('Windows identifies unsupported saved providers without silently rewriting 
   page,
 }) => {
   const patches = await host(page, 'windows', { frame_limiter_provider: 'proton' });
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await page.locator('#settings-group-everyday-everyday_integrations summary').click();
   await expect(page.locator('#setting-frame_limiter_provider')).toHaveValue('proton');
   await expect(page.locator('#setting-frame_limiter_provider option:checked')).toHaveText(
@@ -263,7 +263,7 @@ test('legacy saved FEC zero preserves unrelated saves and can be corrected expli
   page,
 }) => {
   const patches = await host(page, 'linux', { fec_percentage: 0, pyrowave: true });
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await page.locator('#setting-pyrowave').uncheck();
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect.poll(() => patches.length).toBe(1);
@@ -288,7 +288,7 @@ test('legacy saved FEC zero preserves unrelated saves and can be corrected expli
 
 test('standard FEC rejects zero while PyroWave critical FEC saves zero', async ({ page }) => {
   const patches = await host(page, 'linux', { pyrowave_critical_fec_percentage: 20 });
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await page.locator('#settings-group-everyday-everyday_encoding summary').click();
   await page.locator('#setting-fec_percentage').fill('0');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
@@ -313,7 +313,7 @@ test('settings deep links open advanced encoders and back navigation preserves d
   page,
 }) => {
   await host(page, 'linux', { encoder: 'vaapi' });
-  await page.goto('/v2/settings?category=video#setting-vaapi_strict_rc_buffer');
+  await page.goto('/settings?category=video#setting-vaapi_strict_rc_buffer');
   await expect(page.locator('#setting-vaapi_strict_rc_buffer')).toBeVisible();
   await page.locator('#setting-vaapi_strict_rc_buffer').check();
   await page.getByRole('button', { name: 'Everyday setup', exact: true }).click();
@@ -323,10 +323,10 @@ test('settings deep links open advanced encoders and back navigation preserves d
 
 test('Windows keeps automatic smoothness and platform-specific controls', async ({ page }) => {
   await host(page, 'windows');
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await expect(page.locator('#setting-frame_limiter_auto_virtual_framegen')).toBeVisible();
   await expect(page.getByText('Display readiness')).toHaveCount(0);
-  await page.goto('/v2/settings?category=display');
+  await page.goto('/settings?category=display');
   await expect(page.locator('#setting-dd_use_sunshine_virtual_display_driver')).toBeVisible();
 });
 
@@ -334,7 +334,7 @@ test('unavailable virtual screens explain repair and keep physical selection ava
   page,
 }) => {
   await host(page, 'linux', {}, false);
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await expect(page.getByText('Setup needs attention', { exact: true })).toBeVisible();
   await expect(
     page.getByRole('link', { name: 'Open Linux setup and troubleshooting' }),
@@ -349,7 +349,7 @@ test('HTTP save rejection retains the draft', async ({ page }) => {
     if (route.request().method() === 'PATCH') await route.fulfill({ json: { status: false } });
     else await route.fallback();
   });
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await page.locator('#setting-pyrowave').uncheck();
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(page.locator('#setting-pyrowave')).not.toBeChecked();
@@ -360,7 +360,7 @@ for (const width of [390, 768, 1100, 1440]) {
   test(`settings and save bar fit at ${width}px`, async ({ page }) => {
     await host(page);
     await page.setViewportSize({ width, height: 1000 });
-    await page.goto('/v2/settings');
+    await page.goto('/settings');
     await expect(page.locator('#setting-pyrowave')).toBeVisible();
     await page.locator('#setting-pyrowave').uncheck();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
@@ -385,7 +385,7 @@ test('bulk unpair requires a confirmation and calls the existing endpoint', asyn
     calls++;
     await route.fulfill({ json: { status: true } });
   });
-  await page.goto('/v2/devices');
+  await page.goto('/devices');
   await page.getByRole('button', { name: 'Unpair all devices' }).click();
   expect(calls).toBe(0);
   await page.getByRole('dialog').getByRole('button', { name: 'Unpair all devices' }).click();
@@ -394,7 +394,7 @@ test('bulk unpair requires a confirmation and calls the existing endpoint', asyn
 
 test('Linux maintenance offers logs and display setup', async ({ page }) => {
   await host(page);
-  await page.goto('/v2/maintenance');
+  await page.goto('/maintenance');
   await expect(page.getByRole('link', { name: 'Open and download logs' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Display settings' })).toBeVisible();
   await expect(page.getByText('Updates and release notes', { exact: true })).toBeVisible();
@@ -404,7 +404,7 @@ for (const theme of ['dark', 'light']) {
   test(`${theme} theme and keyboard switches remain usable`, async ({ page }) => {
     await host(page);
     await page.addInitScript((theme) => localStorage.setItem('vibeshine.theme', theme), theme);
-    await page.goto('/v2/settings');
+    await page.goto('/settings');
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
     await page.locator('#setting-pyrowave').focus();
     await page.keyboard.press('Space');
@@ -434,7 +434,7 @@ test('all canonical v2 pages render without client-side exceptions', async ({ pa
     'stream',
     'maintenance',
   ]) {
-    await page.goto(`/v2/${path}`);
+    await page.goto(`/${path}`);
     await expect(page.locator('main')).toBeVisible();
     await expect(page.locator('main h1')).toBeVisible();
   }
@@ -445,7 +445,7 @@ test('search reaches integration settings and Linux adapters accept a render-dev
   page,
 }) => {
   const patches = await host(page);
-  await page.goto('/v2/settings?category=display#setting-adapter_name');
+  await page.goto('/settings?category=display#setting-adapter_name');
   await page.locator('#setting-adapter_name').fill('/dev/dri/renderD129');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect.poll(() => patches.length).toBe(1);
@@ -453,13 +453,13 @@ test('search reaches integration settings and Linux adapters accept a render-dev
   await page.getByRole('searchbox', { name: 'Search settings' }).fill('lutris');
   await expect(page.locator('.settings-destinations a')).toHaveAttribute(
     'href',
-    '/v2/integrations#integration-lutris',
+    '/integrations#integration-lutris',
   );
 });
 
 test('Windows Playnite policies load and save inside v2', async ({ page }) => {
   const patches = await host(page, 'windows');
-  await page.goto('/v2/integrations#playnite-policies');
+  await page.goto('/integrations#playnite-policies');
   await expect(page.locator('#playnite_auto_sync')).toBeVisible();
   await page.locator('#playnite_auto_sync').uncheck();
   await page
@@ -473,7 +473,7 @@ test('Windows Playnite policies load and save inside v2', async ({ page }) => {
 test('mobile navigation traps focus and returns it to the menu button', async ({ page }) => {
   await host(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   const menu = page.getByRole('button', { name: 'Open navigation' });
   await menu.click();
   await expect(page.locator('#app-navigation')).toHaveAttribute('aria-modal', 'true');
@@ -490,7 +490,7 @@ test('failed configuration load keeps editing unavailable until retry succeeds',
     if (failed) await route.fulfill({ status: 503, json: { status: false } });
     else await route.fallback();
   });
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await expect(page.getByRole('alert')).toBeVisible();
   await expect(page.locator('#setting-pyrowave')).toHaveCount(0);
   failed = false;
@@ -514,7 +514,7 @@ test('edits made during a settings save remain unsaved', async ({ page }) => {
     await pending;
     await route.fulfill({ json: { status: true } });
   });
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await page.locator('#setting-pyrowave').uncheck();
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect.poll(() => started).toBe(true);
@@ -534,7 +534,7 @@ test('physical screen controls fit with long output names at intermediate widths
       'An unusually long display name with a persistent device identifier - ' + 'a'.repeat(100),
   });
   await page.setViewportSize({ width: 1100, height: 900 });
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await expect(page.locator('#setting-output_name')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const row = page.locator('#setting-output_name');
@@ -549,7 +549,7 @@ test('settings reflow at a 200% zoom-equivalent viewport with forced colors and 
   await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
   // Browser zoom halves the CSS viewport; CSS zoom alone does not update media queries.
   await page.setViewportSize({ width: 640, height: 450 });
-  await page.goto('/v2/settings');
+  await page.goto('/settings');
   await page.locator('#setting-pyrowave').focus();
   await page.keyboard.press('Space');
   await expect(page.locator('#setting-pyrowave')).not.toBeChecked();
@@ -584,7 +584,7 @@ test('MangoHud saves preserve later edits and report rejected requests', async (
     if (call === 1) await pending;
     await route.fulfill({ json: { status: call === 1 } });
   });
-  await page.goto('/v2/integrations#integration-mangohud');
+  await page.goto('/integrations#integration-mangohud');
   await page.locator('#mangohud-fps-limit').fill('90');
   const section = page.locator('section[aria-labelledby="mangohud-settings-heading"]');
   await section.getByRole('button', { name: 'Apply', exact: true }).click();
@@ -604,7 +604,7 @@ test('mobile navigation keeps hidden controls out of the tab order and releases 
 }) => {
   await host(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/v2/');
+  await page.goto('/');
   const menu = page.getByRole('button', { name: 'Open navigation' });
   const navigation = page.locator('#app-navigation');
   await menu.focus();
@@ -630,7 +630,7 @@ test('appearance controls persist the chosen theme and follow system appearance'
 }) => {
   await host(page);
   await page.emulateMedia({ colorScheme: 'dark' });
-  await page.goto('/v2/');
+  await page.goto('/');
   const appearance = page.getByRole('group', { name: 'Appearance' });
   await appearance.getByRole('button', { name: 'Light', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
@@ -650,11 +650,11 @@ test('overview leads with readiness and keeps display guidance available on dema
   page,
 }) => {
   await host(page);
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Ready to stream' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Pair a device', exact: true })).toHaveAttribute(
     'href',
-    '/v2/pair',
+    '/pair',
   );
   await expect(page.locator('.linux-capture')).not.toHaveAttribute('open', '');
   await page.locator('.linux-capture > summary').click();
@@ -665,11 +665,11 @@ test('overview leads with readiness and keeps display guidance available on dema
 
 test('overview shows repair guidance when display setup is unavailable', async ({ page }) => {
   await host(page, 'linux', {}, false);
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Needs attention', exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Review setup', exact: true })).toHaveAttribute(
     'href',
-    '/v2/settings?category=display',
+    '/settings?category=display',
   );
   await expect(
     page.getByRole('link', { name: 'Open Linux setup and troubleshooting' }),
@@ -684,7 +684,7 @@ test('unknown readiness and unavailable utilization do not render as successful 
   await page.route('**/api/host/stats', (route) =>
     route.fulfill({ json: { cpu_percent: -1, gpu_percent: null } }),
   );
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(page.locator('.readiness-panel')).toHaveAttribute('data-tone', 'neutral');
   await expect(page.locator('.metric-grid dd')).toHaveText([
     'Unavailable',
@@ -740,7 +740,7 @@ for (const available of [false, true]) {
           })
         : route.fulfill({ status: 404, json: { error: 'Configured cover unavailable' } }),
     );
-    await page.goto('/v2/library/11111111-2222-4333-8444-555555555555');
+    await page.goto('/library/11111111-2222-4333-8444-555555555555');
     await expect(page.locator('#app-image-path')).toHaveValue('C:/covers/custom.png');
     await expect(
       page.getByText(/Custom Moonlight covers need a readable PNG file no larger than 16 MiB/),
@@ -761,7 +761,7 @@ test('library placeholders preserve search, keyboard selection, and list prefere
 }) => {
   await host(page);
   await libraryWithMissingCovers(page);
-  await page.goto('/v2/library');
+  await page.goto('/library');
   await expect(page.locator('.library-item__artwork-fallback')).toHaveCount(3);
   await expect(
     page.locator('.library-item__source').filter({ hasText: 'Steam managed' }),
@@ -788,7 +788,7 @@ for (const width of [320, 390, 768, 1100, 1440]) {
     await libraryWithMissingCovers(page);
     await page.setViewportSize({ width, height: 900 });
     for (const path of ['', 'library', 'library/new', 'devices']) {
-      await page.goto(`/v2/${path}`);
+      await page.goto(`/${path}`);
       await expect(page.locator('main h1')).toBeVisible();
       await expect(page.locator('.vs-loading-skeleton')).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
@@ -814,7 +814,7 @@ test('a failed performance refresh retains the sample and visibly marks it as st
           json: { cpu_percent: 12, gpu_percent: 8, ram_percent: 24, vram_percent: 11 },
         }),
   );
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(page.locator('.metric-grid dd').first()).toHaveText('12%');
   unavailable = true;
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
@@ -834,7 +834,7 @@ for (const platform of ['linux', 'windows']) {
     page.on('request', (request) => {
       requests.push(new URL(request.url()).pathname);
     });
-    await page.goto('/v2/library/new');
+    await page.goto('/library/new');
     await page.locator('#app-name').fill('A new game');
     await expect(page.getByRole('button', { name: 'Browse games', exact: true })).toBeVisible();
     await expect.poll(() => requests.includes('/api/steam/games')).toBe(true);
@@ -907,7 +907,7 @@ for (const platform of ['windows', 'linux']) {
         },
       }),
     );
-    await page.goto('/v2/library/new');
+    await page.goto('/library/new');
     await page.locator('#app-name').fill('Portal');
     const result = page.getByRole('option', {
       name: platform === 'windows' ? 'Portal Playnite · Steam' : 'Portal Steam · Lutris',
@@ -955,7 +955,7 @@ test('game library setup supports multiple Windows libraries without enabling St
   await page.route('**/api/playnite/status', (route) =>
     route.fulfill({ json: { installed: true, active: true } }),
   );
-  await page.goto('/v2/library');
+  await page.goto('/library');
   await page.getByRole('button', { name: 'Library manager settings', exact: true }).click();
   const dialog = page.getByRole('dialog', {
     name: /Setup Game Library Integration|Library manager settings/,
@@ -1007,7 +1007,7 @@ test('saving a Steam selection waits for its prepared cover', async ({ page }) =
       json: route.request().method() === 'POST' ? { status: true } : { apps: [] },
     });
   });
-  await page.goto('/v2/library/new');
+  await page.goto('/library/new');
   await page.locator('#app-name').fill('Portal');
   await page.getByRole('option', { name: 'Portal Steam', exact: true }).click();
   await page.getByRole('button', { name: 'Save application', exact: true }).first().click();
@@ -1029,120 +1029,13 @@ test('encoder failures direct the overview to diagnostics', async ({ page }) => 
       },
     }),
   );
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Needs attention', exact: true })).toBeVisible();
   await expect(page.locator('.readiness-panel .button--primary')).toHaveAttribute(
     'href',
-    '/v2/logs',
+    '/logs',
   );
 });
-
-for (const platform of ['windows', 'linux']) {
-  test(`classic game library setup and search work on ${platform}`, async ({ page }) => {
-    const legacyUrl = process.env.VIBESHINE_LEGACY_TEST_URL;
-    test.skip(!legacyUrl, 'Set VIBESHINE_LEGACY_TEST_URL to a served classic UI build.');
-    const patches = await host(page, platform);
-    await page.route('**/api/playnite/status', (route) =>
-      route.fulfill({ json: { installed: true, active: true } }),
-    );
-    await page.route('**/api/playnite/games', (route) =>
-      route.fulfill({ json: [{ id: 'pn-portal', name: 'Portal', installed: true }] }),
-    );
-    await page.route('**/api/steam/games*', (route) =>
-      route.fulfill({
-        json: {
-          games: [
-            {
-              appid: 400,
-              name: 'Portal',
-              installed: true,
-              artwork_client_path: 'C:/covers/steam_400.png',
-            },
-          ],
-        },
-      }),
-    );
-    await page.route('**/api/lutris/games', (route) =>
-      route.fulfill({ json: { games: [{ id: 9, name: 'Portal', directory: '/games/portal' }] } }),
-    );
-    const saved: Record<string, unknown>[] = [];
-    await page.route('**/api/apps', (route) => {
-      if (route.request().method() === 'POST') saved.push(route.request().postDataJSON());
-      return route.fulfill({
-        json:
-          route.request().method() === 'POST'
-            ? { status: true }
-            : {
-                apps: saved.map((app) => ({
-                  ...app,
-                  uuid: '53544541-4d00-5000-8000-000000000190',
-                })),
-              },
-      });
-    });
-    await page.route('**/api/apps/*/cover*', (route) =>
-      route.fulfill({
-        contentType: 'image/png',
-        body: Buffer.from(
-          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQI12P4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==',
-          'base64',
-        ),
-      }),
-    );
-    await page.goto(legacyUrl + '/applications');
-    await page
-      .getByRole('button', { name: /Setup Game Library Integration|Library manager settings/ })
-      .first()
-      .click();
-    const setup = page.getByRole('dialog', {
-      name: /Setup Game Library Integration|Library manager settings/,
-    });
-    await expect(setup.getByRole('checkbox', { name: 'Steam', exact: true })).not.toBeChecked();
-    await setup.getByRole('checkbox', { name: 'Steam', exact: true }).check();
-    await setup.getByRole('button', { name: 'Next: Library settings' }).click();
-    await setup.getByRole('button', { name: 'Save settings', exact: true }).click();
-    await expect(setup.getByRole('status')).toHaveText('Game library settings saved.');
-    expect(patches.at(-1)).toMatchObject({
-      steam_auto_sync: true,
-      [platform === 'windows' ? 'playnite_auto_sync' : 'lutris_auto_sync']: true,
-    });
-    await setup.getByRole('button', { name: 'Done', exact: true }).click();
-    await page
-      .getByRole('button', { name: /Add Application/ })
-      .first()
-      .click();
-    const editor = page.locator('.n-card.n-modal');
-    const search = editor.locator('.n-select').first();
-    await search.click();
-    await page
-      .getByText(platform === 'windows' ? 'Portal — Playnite · Steam' : 'Portal — Steam · Lutris', {
-        exact: true,
-      })
-      .click();
-    await expect(editor.getByText('Launch with', { exact: true })).toBeVisible();
-    await editor.locator('.n-select').nth(1).click();
-    await page
-      .locator('.n-base-select-option')
-      .filter({ hasText: platform === 'windows' ? /^Steam$/ : /^Lutris$/ })
-      .click();
-    await editor.getByRole('button', { name: /Save/ }).click();
-    await expect.poll(() => saved.length).toBe(1);
-    expect(saved[0]).toMatchObject(
-      platform === 'windows'
-        ? {
-            'steam-id': '400',
-            cmd: 'cmd /c start "" steam://rungameid/400',
-            'image-path': 'C:/covers/steam_400.png',
-          }
-        : { 'lutris-id': '9', cmd: 'lutris lutris:rungameid/9' },
-    );
-    expect(saved[0]).not.toHaveProperty('playnite-id');
-    await expect(page.locator('.apps-row__badge')).toHaveText(
-      platform === 'windows' ? 'Steam' : 'Lutris',
-    );
-    await expect(page.locator('.apps-row__icon')).toHaveAttribute('src', /\/cover/);
-  });
-}
 
 test('initial library setup refreshes apps and persists editable settings', async ({ page }) => {
   await host(page, 'windows');
@@ -1161,7 +1054,7 @@ test('initial library setup refreshes apps and persists editable settings', asyn
       },
     }),
   );
-  await page.goto('/v2/library');
+  await page.goto('/library');
   await page.getByRole('button', { name: 'Setup Game Library Integration', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('checkbox', { name: 'Steam', exact: true }).check();
@@ -1196,7 +1089,7 @@ for (const platform of ['linux', 'windows'] as const) {
         headers: { 'Content-Disposition': 'attachment; filename="vibeshine_logs.zip"' },
       }),
     );
-    await page.goto('/v2/logs');
+    await page.goto('/logs');
     const download = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Download logs bundle' }).click();
     expect((await download).suggestedFilename()).toBe('vibeshine_logs.zip');
@@ -1225,7 +1118,7 @@ test('Linux shows an automatic update notice across pages and retries failed che
           },
     );
   });
-  await page.goto('/v2/');
+  await page.goto('/');
   const notice = page.locator('.update-notice');
   await expect(
     notice.getByText('Release information is unavailable. Try again later.'),
@@ -1247,7 +1140,7 @@ test('Linux stable install respects an explicit prerelease opt-out', async ({ pa
     await route.fulfill({ json: [{ tag_name: 'v2.0.0-beta.1', draft: false, prerelease: true, assets: [{ name: 'Vibeshine-x86_64.AppImage', state: 'uploaded', size: 100 }] }] });
   });
   const response = page.waitForResponse((response) => response.url().startsWith('https://api.github.com/repos/Nonary/vibeshine/releases?'));
-  await page.goto('/v2/');
+  await page.goto('/');
   await response;
   await expect(page.locator('.update-notice')).toHaveCount(0);
 });
@@ -1285,7 +1178,7 @@ test('Windows default nightly notification validates metadata and dismissal surv
       ],
     }),
   );
-  await page.goto('/v2/');
+  await page.goto('/');
   const notice = page.locator('.update-notice');
   await expect(notice.getByText(`Vibeshine ${tag} is available`)).toBeVisible();
   await notice.getByRole('button', { name: 'Dismiss this update' }).click();
@@ -1319,7 +1212,7 @@ test('Windows prerelease install opts out persistently and still receives a stab
       ],
     }),
   );
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(
     page.locator('.update-notice').getByText('Vibeshine 2.0.0 is available'),
   ).toBeVisible();

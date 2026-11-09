@@ -157,7 +157,7 @@ test('device filters search display metadata, sort deterministically, and keep d
   page,
 }) => {
   await installFixture(page, { platform: 'linux' });
-  await page.goto('/v2/devices');
+  await page.goto('/devices');
   await expect(page.getByRole('heading', { name: 'Devices', exact: true })).toBeVisible();
   await expect(page.getByText('Search devices', { exact: true })).toBeVisible();
   await expect(page.locator('#device-status option[value="all"]')).toHaveText('All devices');
@@ -224,7 +224,7 @@ test('Windows overview reports only an explicit missing ViGEm driver with versio
     platform: 'windows',
     vigem: { installed: false, version: '1.16.0' },
   });
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(page.getByText('Virtual Gamepad Driver (ViGEm) not installed')).toBeVisible();
   await expect(page.getByText(/Detected: 1\.16\.0/)).toBeVisible();
   await expect(page.getByRole('link', { name: 'Download ViGEmBus' })).toHaveAttribute(
@@ -250,7 +250,7 @@ test('Linux overview never probes or displays the Windows ViGEm diagnostic', asy
     platform: 'linux',
     vigem: { installed: false, version: '1.16.0' },
   });
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Ready to stream', exact: true })).toBeVisible();
   await expect(page.getByText('Virtual Gamepad Driver (ViGEm) not installed')).toHaveCount(0);
   expect(calls.vigem).toBe(0);
@@ -263,7 +263,7 @@ test('Windows overview hides the ViGEm warning when the Vibeshine driver covers 
     platform: 'windows',
     vigem: { installed: false, required: false },
   });
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Ready to stream', exact: true })).toBeVisible();
   await expect(page.getByText('Virtual Gamepad Driver (ViGEm) not installed')).toHaveCount(0);
   expect(calls.vigem).toBeGreaterThan(0);
@@ -273,7 +273,7 @@ test('ViGEm diagnostic failure remains silent and controller false strings disab
   page,
 }) => {
   const failed = await installFixture(page, { platform: 'windows', vigem: 'error' });
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Ready to stream', exact: true })).toBeVisible();
   await expect(page.getByText('Virtual Gamepad Driver (ViGEm) not installed')).toHaveCount(0);
   expect(failed.vigem).toBeGreaterThan(0);
@@ -282,19 +282,19 @@ test('ViGEm diagnostic failure remains silent and controller false strings disab
     platform: 'windows',
     vigem: 'status-false',
   });
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Ready to stream', exact: true })).toBeVisible();
   await expect(page.getByText('Virtual Gamepad Driver (ViGEm) not installed')).toHaveCount(0);
   expect(statusFalse.vigem).toBeGreaterThan(0);
 
   const malformed = await installFixture(page, { platform: 'windows', vigem: 'malformed' });
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Ready to stream', exact: true })).toBeVisible();
   await expect(page.getByText('Virtual Gamepad Driver (ViGEm) not installed')).toHaveCount(0);
   expect(malformed.vigem).toBeGreaterThan(0);
 
   const disabled = await installFixture(page, { platform: 'windows', controller: 'false' });
-  await page.goto('/v2/');
+  await page.goto('/');
   await expect(page.getByText('Virtual Gamepad Driver (ViGEm) not installed')).toHaveCount(0);
   expect(disabled.vigem).toBe(0);
 });
@@ -303,7 +303,7 @@ test('catalog opt-in is absent when the opened producer cannot report support', 
   page,
 }) => {
   await installFixture(page);
-  await page.goto('/v2/devices');
+  await page.goto('/devices');
   await page
     .locator('.device-row')
     .filter({ hasText: 'Bedroom' })
@@ -317,7 +317,7 @@ test('compatible producer exposes a per-client opt-in and saves it explicitly', 
   page,
 }) => {
   const calls = await installFixture(page, { catalogSupported: true });
-  await page.goto('/v2/devices');
+  await page.goto('/devices');
   await page
     .locator('.device-row')
     .filter({ hasText: 'Bedroom' })
@@ -340,7 +340,7 @@ test('compatible producer exposes a per-client opt-in and saves it explicitly', 
 
 test('saved opt-in survives unsupported producer state and can be disabled', async ({ page }) => {
   const calls = await installFixture(page, { catalogRequested: true });
-  await page.goto('/v2/devices');
+  await page.goto('/devices');
   await page
     .locator('.device-row')
     .filter({ hasText: 'Bedroom' })

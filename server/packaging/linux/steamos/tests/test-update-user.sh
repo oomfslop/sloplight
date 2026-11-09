@@ -7,9 +7,9 @@ bash -n "$script"
 [[ $(id -u) -ne 0 ]] || { printf 'SKIP: updater refuses root\n'; exit 0; }
 root=$(mktemp -d /tmp/vibeshine-update-tests.XXXXXXXX)
 trap 'rm -rf -- "$root"' EXIT
-mkdir -p "$root/fakebin" "$root/payload/bin" "$root/payload/share/vibeshine/web/v2"
+mkdir -p "$root/fakebin" "$root/payload/bin" "$root/payload/share/vibeshine/web"
 cp /usr/bin/env "$root/payload/bin/vibeshine"
-touch "$root/payload/share/vibeshine/"{apps.json,web/index.html,web/v2/index.html}
+touch "$root/payload/share/vibeshine/"{apps.json,web/index.html}
 cat > "$root/fakebin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -eu

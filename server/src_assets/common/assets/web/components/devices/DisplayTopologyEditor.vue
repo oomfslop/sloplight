@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, toRaw } from 'vue';
 
-import { apiGet, apiRequest, type ApiPayload } from '@/api/client';
+import { apiGet, apiRequest, type ApiPayload } from '@/services/client';
 import { AppButton, InlineAlert, StatusBadge } from '@/components/ui';
 import { setDisplayArrangement, type DisplayEdge as Edge, type DisplayPlacement as Placement, type DisplayAnchorKind as AnchorKind } from '@/utils/displayPlacement';
 

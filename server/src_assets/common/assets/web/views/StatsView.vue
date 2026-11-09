@@ -3,7 +3,7 @@ import { configBoolean } from '@/utils/settings';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-import { ApiError, apiDelete, apiGet, apiPost } from '@/api/client';
+import { ApiError, apiDelete, apiGet, apiPost } from '@/services/client';
 import {
   AppButton,
   ConfirmDialog,

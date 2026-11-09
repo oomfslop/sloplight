@@ -393,7 +393,7 @@ def main(argv=None):
         QDesktopServices.openUrl(QUrl(base_url + path))
 
     menu.addAction("Open Vibeshine", lambda: open_ui())
-    menu.addAction("Pair a client", lambda: open_ui("/v2/pair"))
+    menu.addAction("Pair a client", lambda: open_ui("/pair"))
     menu.addSeparator()
     close_action = menu.addAction("No application running")
     updates_action = menu.addAction("Check for Update")
@@ -494,7 +494,7 @@ def main(argv=None):
         form.addRow(instructions)
         open_tokens = QDialogButtonBox()
         tokens_button = open_tokens.addButton("Open API Tokens", QDialogButtonBox.ButtonRole.ActionRole)
-        tokens_button.clicked.connect(lambda: open_ui("/v2/api-tokens"))
+        tokens_button.clicked.connect(lambda: open_ui("/api-tokens"))
         form.addRow(open_tokens)
         token_edit = QLineEdit()
         token_edit.setEchoMode(QLineEdit.EchoMode.Password)

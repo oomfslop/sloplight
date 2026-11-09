@@ -192,7 +192,7 @@ test('host compute chart renders current readings separately from observed peaks
     hostGpuSamples: [82, 23],
     hostEncoderSamples: [73, 12],
   });
-  await page.goto('/v2/stats');
+  await page.goto('/stats');
 
   const summaries = page.locator('.host-compute-chart__footer span');
   const cpuSummary = summaries.nth(0);
@@ -215,7 +215,7 @@ test('history pagination, grouped details, full export, deletion, and chart zoom
 }, testInfo) => {
   const fixture = await installStatsFixture(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto('/v2/stats');
+  await page.goto('/stats');
 
   await expect(page.getByRole('heading', { name: 'Session History' })).toBeVisible();
   await expect(page.getByText('Host RAM / VRAM Usage', { exact: true })).toBeVisible();

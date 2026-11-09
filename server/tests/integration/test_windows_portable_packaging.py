@@ -82,10 +82,8 @@ int main(void) { return zlib1_fixture() + libwebrtc_fixture() + zero_filled_fixt
             "assets/apps.json": '{"apps": [{"name": "Desktop"}]}',
             "assets/desktop.png": "fixture image",
             "assets/steam.png": "fixture image",
-            "assets/web/index.html": '<script src="assets/legacy.js"></script>',
-            "assets/web/assets/legacy.js": "console.log('legacy');",
-            "assets/web/v2/index.html": '<script src="assets/v2.js"></script>',
-            "assets/web/v2/assets/v2.js": "console.log('v2');",
+            "assets/web/index.html": '<script src="assets/app.js"></script>',
+            "assets/web/assets/app.js": "console.log('app');",
             "assets/shaders/directx/cursor_vs.hlsl": "fixture shader",
             "plugins/playnite/SunshinePlaynite/extension.yaml": "Id: fixture",
             "plugins/playnite/SunshinePlaynite/VibeshinePlaynite.dll": "fixture managed plugin",
@@ -363,7 +361,7 @@ include(CPack)
         missing("tools/sunshine_wgc_capture.exe", "Required portable runtime file missing: tools/sunshine_wgc_capture.exe")
         missing("tools/vibeshine_dualsense_audio.dll", "Required portable runtime file missing: tools/vibeshine_dualsense_audio.dll")
         missing("plugins/playnite/SunshinePlaynite/VibeshinePlaynite.dll", "Required portable runtime file missing")
-        missing("assets/web/v2/assets/v2.js", "Portable Web UI bundle missing")
+        missing("assets/web/assets/app.js", "Portable Web UI bundle missing")
         crt = redist / "vcruntime140_1.dll"
         crt_backup = crt.read_bytes()
         crt.unlink()
@@ -444,7 +442,7 @@ include(CPack)
                 env={**os.environ, "SystemRoot": str(system_root)})
             run([*configure, f"-DSUNSHINE_PORTABLE_REDISTRIBUTABLE_DIRS={redist}"])
             print("PASS: a configured System32 search directory cannot supply redistributed CRTs")
-        path = payload / "assets/web/v2/index.html"
+        path = payload / "assets/web/index.html"
         backup = path.read_bytes()
         path.write_bytes(b"")
         run(package, success=False, contains="Required portable runtime file is empty")

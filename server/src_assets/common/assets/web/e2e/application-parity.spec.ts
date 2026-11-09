@@ -68,7 +68,7 @@ async function setupHost(page: Page, options: HostOptions = {}) {
 
 test('new application keeps v1 lifecycle defaults and saves launch controls', async ({ page }) => {
   const saves = await setupHost(page);
-  await page.goto('/v2/library/new');
+  await page.goto('/library/new');
   await expect(page.locator('#app-auto-detach')).toBeChecked();
   await expect(page.locator('#app-wait-all')).toBeChecked();
   await expect(page.locator('#app-exit-timeout')).toHaveValue('5');
@@ -90,7 +90,7 @@ test('existing application without lifecycle keys gets v1 defaults and saves cha
   const saves = await setupHost(page, {
     apps: [{ uuid: appUuid, name: 'Absent-key app', cmd: 'C:\\Games\\game.exe' }],
   });
-  await page.goto(`/v2/library/${appUuid}`);
+  await page.goto(`/library/${appUuid}`);
   await expect(page.locator('#app-auto-detach')).toBeChecked();
   await expect(page.locator('#app-wait-all')).toBeChecked();
   await expect(page.locator('#app-exit-timeout')).toHaveValue('5');
@@ -142,7 +142,7 @@ test('existing application preserves explicit false and zero, and saves both LS 
       },
     ],
   });
-  await page.goto(`/v2/library/${appUuid}`);
+  await page.goto(`/library/${appUuid}`);
   await expect(page.locator('#app-auto-detach')).not.toBeChecked();
   await expect(page.locator('#app-wait-all')).not.toBeChecked();
   await expect(page.locator('#app-exit-timeout')).toHaveValue('0');
@@ -191,7 +191,7 @@ test('Lossless Scaling preserves explicit zero numeric overrides', async ({ page
       },
     ],
   });
-  await page.goto(`/v2/library/${appUuid}`);
+  await page.goto(`/library/${appUuid}`);
   await page.locator('#app-lossless-flow-scale').fill('0');
   await page.locator('#app-lossless-target-fps').fill('0');
   await page.locator('#app-lossless-launch-delay').fill('0');
@@ -215,7 +215,7 @@ test('managed applications keep provider gating', async ({ page }) => {
       },
     ],
   });
-  await page.goto(`/v2/library/${appUuid}`);
+  await page.goto(`/library/${appUuid}`);
   await expect(page.locator('#app-auto-detach')).toHaveCount(0);
   await expect(page.locator('#app-wait-all')).toHaveCount(0);
   await expect(page.locator('#app-elevated')).toHaveCount(0);
@@ -228,7 +228,7 @@ test('Linux applications hide Windows-only controls', async ({ page }) => {
     platform: 'linux',
     apps: [{ uuid: appUuid, name: 'Linux app' }],
   });
-  await page.goto(`/v2/library/${appUuid}`);
+  await page.goto(`/library/${appUuid}`);
   await expect(page.locator('#app-auto-detach')).toBeVisible();
   await expect(page.locator('#app-elevated')).toHaveCount(0);
   await expect(page.locator('.lossless-editor')).toHaveCount(0);
@@ -245,7 +245,7 @@ test('Lossless Scaling controls remain usable at desktop and mobile widths', asy
       },
     ],
   });
-  await page.goto(`/v2/library/${appUuid}`);
+  await page.goto(`/library/${appUuid}`);
   await expect(page.getByRole('heading', { name: 'Lossless Scaling', exact: true })).toBeVisible();
   const losslessPanel = page.locator('.lossless-editor');
   const launchGroup = page.locator('.lossless-editor__group').last();

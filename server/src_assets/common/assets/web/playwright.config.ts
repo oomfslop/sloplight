@@ -1,7 +1,6 @@
 import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
-  testIgnore: ['application-display.spec.ts', 'application-rtx-hdr.spec.ts'],
   outputDir: process.env.VIBESHINE_TEST_OUTPUT || '/tmp/vibeshine-ui-results',
   fullyParallel: true,
   workers: 2,
@@ -13,7 +12,7 @@ export default defineConfig({
   },
   webServer: {
     command: 'npm run dev -- --strictPort',
-    url: 'http://127.0.0.1:5173/v2/',
+    url: 'http://127.0.0.1:5173/',
     reuseExistingServer: !process.env.CI,
   },
 });

@@ -273,7 +273,7 @@ for (const width of [1440, 390]) {
   }) => {
     const sessions = await installBrowserStreamFixtures(page);
     await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
-    await page.goto('/v2/stream');
+    await page.goto('/stream');
 
     await expect(page.getByRole('heading', { name: 'Stream settings' })).toBeVisible();
     await expect(page.locator('#browser-stream-pacing-slack')).toHaveValue('2');
@@ -611,7 +611,7 @@ test('browser stream auto fullscreen respects opt-out and retains collapsed stat
 }) => {
   await installBrowserStreamFixtures(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto('/v2/stream');
+  await page.goto('/stream');
 
   const autoFullscreen = page.getByRole('checkbox', { name: 'Auto Fullscreen' });
   await autoFullscreen.uncheck();
@@ -647,7 +647,7 @@ test('browser stream auto fullscreen respects opt-out and retains collapsed stat
 test('browser stream falls back when the browser rejects native fullscreen', async ({ page }) => {
   await installBrowserStreamFixtures(page, { rejectFullscreen: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto('/v2/stream');
+  await page.goto('/stream');
   await page.getByRole('button', { name: 'Start browser stream' }).click();
   await expect(page.getByText('Connected', { exact: true })).toBeVisible();
   await expect(page.locator('.stream-surface--pseudo-fullscreen')).toBeVisible();
@@ -667,7 +667,7 @@ test('browser stream requests fullscreen from the terminate confirmation gesture
     runningSession: true,
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto('/v2/stream');
+  await page.goto('/stream');
 
   const streamToggle = page.locator('[aria-controls="browser-stream-surface"]');
   await streamToggle.click();
@@ -704,7 +704,7 @@ test('browser stream requests fullscreen from the terminate confirmation gesture
 test('browser stream exits auto fullscreen when connection startup fails', async ({ page }) => {
   await installBrowserStreamFixtures(page, { failConnection: true, rejectFullscreen: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto('/v2/stream');
+  await page.goto('/stream');
   await page.getByRole('button', { name: 'Start browser stream' }).click();
 
   await expect(page.getByText(/WebRTC session identifier/)).toBeVisible();
@@ -755,7 +755,7 @@ async function pointerMessages(page: Page) {
 
 async function startTouchStream(page: Page) {
   await installBrowserStreamFixtures(page);
-  await page.goto('/v2/stream');
+  await page.goto('/stream');
   await page.getByRole('checkbox', { name: 'Auto Fullscreen' }).uncheck();
   await page.getByRole('button', { name: 'Start browser stream', exact: true }).click();
   await expect(page.getByText('Connected', { exact: true })).toBeVisible();
@@ -892,7 +892,7 @@ test.describe('v2 touch browser gestures', () => {
 
 test('v2 touch tap stays frozen and ignores secondary fingers', async ({ page }) => {
   await installBrowserStreamFixtures(page);
-  await page.goto('/v2/stream');
+  await page.goto('/stream');
   await page.getByRole('button', { name: 'Start browser stream', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Disconnect stream', exact: true })).toBeVisible();
   await touchStream(page, 'pointerdown');
@@ -921,7 +921,7 @@ test('v2 touch drag survives secondary capture loss and releases on cancellation
   page,
 }) => {
   await installBrowserStreamFixtures(page);
-  await page.goto('/v2/stream');
+  await page.goto('/stream');
   await page.getByRole('button', { name: 'Start browser stream', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Disconnect stream', exact: true })).toBeVisible();
   await expect(page.locator('.stream-surface')).toHaveCSS('touch-action', 'none');

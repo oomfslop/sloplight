@@ -46,7 +46,6 @@ def package(extra=(), omit=()):
     stream = io.BytesIO()
     names = deploy.FIXED | {
         f'usr/bin/vibeshine-{VERSION}', 'usr/share/vibeshine/web/index.html',
-        'usr/share/vibeshine/web/v2/index.html',
         'usr/src/vibeshine-drm-1.19.0/vibeshine_drm_version.h',
     }
     names.update('usr/src/vibeshine-drm-1.19.0/' + name for name in

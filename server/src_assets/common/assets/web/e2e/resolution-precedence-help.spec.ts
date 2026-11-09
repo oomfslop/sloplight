@@ -73,65 +73,11 @@ async function expectRefreshHelp(help: Locator) {
 }
 
 for (const locale of ['en', 'en_US', 'en_GB']) {
-  test(`legacy application explains manual display exceptions in ${locale}`, async ({
-    page,
-  }, testInfo) => {
-    const writes = await host(page, locale);
-    await page.goto('/applications');
-    await page.getByRole('button', { name: /Resolution help app/ }).click();
-    await expect(page.locator('#configure_display_resolution input')).toHaveValue('1920x1080');
-    await expect(page.locator('#configure_display_refresh_rate input')).toHaveValue('90');
-    await page.locator('#configure_display_resolution input').scrollIntoViewIfNeeded();
-    await page.screenshot({ path: testInfo.outputPath('manual-display-help.png') });
-    await expectResolutionHelp(
-      page.getByText(/^Uses the manual resolution instead of resolution remapping rules/),
-    );
-    await expectRefreshHelp(
-      page.getByText(/^Uses the manual refresh rate instead of refresh remapping rules/),
-    );
-    await expect(
-      page.getByText(
-        /The host will always be set to this resolution|forces the host to this refresh for all streams/,
-      ),
-    ).toHaveCount(0);
-    expect(writes).toEqual([]);
-  });
-
-  test(`legacy global settings explain manual display exceptions in ${locale}`, async ({
-    page,
-  }, testInfo) => {
-    const writes = await host(page, locale);
-    await page.goto('/settings?sec=av&jump=dd_manual_refresh_rate');
-    await expect(page.locator('#dd_manual_resolution input')).toHaveValue('1280x720');
-    await expect(page.locator('#dd_manual_refresh_rate input')).toHaveValue('75');
-    await page.locator('#dd_manual_refresh_rate input').scrollIntoViewIfNeeded();
-    await page.screenshot({ path: testInfo.outputPath('manual-display-help.png') });
-    await expectResolutionHelp(
-      page.getByText(/^Uses the manual resolution instead of resolution remapping rules/),
-    );
-    await expectRefreshHelp(
-      page.getByText(/^Uses the manual refresh rate instead of refresh remapping rules/),
-    );
-    const notice = page.getByText(
-      /^Manual values take priority over remapping for that value/,
-    );
-    await expect(notice).toContainText('Values set to Match the client keep their rules');
-    await expect(notice).toContainText(
-      'that override bypasses all remapping and takes priority over manual values',
-    );
-    await expect(
-      page.getByText(
-        /The host will always be set to this resolution|forces the host to this refresh for all streams/,
-      ),
-    ).toHaveCount(0);
-    expect(writes).toEqual([]);
-  });
-
   test(`current Settings explains manual display exceptions in ${locale}`, async ({
     page,
   }, testInfo) => {
     const writes = await host(page, locale);
-    await page.goto('/v2/settings?category=display');
+    await page.goto('/settings?category=display');
     await expect(page.locator('#setting-dd_manual_resolution')).toHaveValue('1280x720');
     await expect(page.locator('#setting-dd_manual_refresh_rate')).toHaveValue('75');
     await page

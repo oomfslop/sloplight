@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-import { apiGet, apiPost } from '@/api/client';
+import { apiGet, apiPost } from '@/services/client';
 import {
   AppButton,
   ConfirmDialog,

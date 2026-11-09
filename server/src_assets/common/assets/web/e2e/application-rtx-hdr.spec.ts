@@ -43,81 +43,50 @@ async function mockHost(page: Page, platform = 'linux', nvidia = true, trueHdrSu
   return { live, saved };
 }
 
-async function open(page: Page, ui: 'classic' | 'v2') {
-  if (ui === 'v2') await page.goto(`/v2/library/${uuid}`);
-  else {
-    await page.goto('http://127.0.0.1:5174/applications');
-    await page.getByRole('button', { name, exact: false }).click();
-  }
+async function open(page: Page) {
+  await page.goto(`/library/${uuid}`);
 }
 
-for (const ui of ['classic', 'v2'] as const) {
-  test(`${ui} exposes Linux NVIDIA RTX HDR, sends live tuning and persists it`, async ({
-    page,
-  }) => {
-    const { live, saved } = await mockHost(page);
-    await open(page, ui);
-    const section =
-      ui === 'v2'
-        ? page.locator('section[aria-labelledby="rtx-hdr-heading"]')
-        : page
-            .locator('section')
-            .filter({ has: page.getByRole('heading', { name: 'RTX HDR', exact: true }) });
-    await expect(section).toBeVisible();
-    const peak =
-      ui === 'v2'
-        ? section
-            .locator('article')
-            .filter({ has: page.locator('#app-rtx-hdr-rtxHdrPeakBrightness') })
-            .locator('input[type="number"]')
-        : section.locator('#rtx_hdr_peak_brightness input');
-    await peak.fill('1500');
-    await peak.blur();
-    await expect.poll(() => live.at(-1)?.['config-overrides']?.rtx_hdr_peak_brightness).toBe(1500);
-    await page
-      .getByRole('button', { name: ui === 'v2' ? 'Save application' : /Save$/, exact: true })
-      .last()
-      .click();
-    await expect.poll(() => saved.at(-1)?.['config-overrides']?.rtx_hdr_peak_brightness).toBe(1500);
-  });
+test('exposes Linux NVIDIA RTX HDR, sends live tuning and persists it', async ({ page }) => {
+  const { live, saved } = await mockHost(page);
+  await open(page);
+  const section = page.locator('section[aria-labelledby="rtx-hdr-heading"]');
+  await expect(section).toBeVisible();
+  const peak = section
+    .locator('article')
+    .filter({ has: page.locator('#app-rtx-hdr-rtxHdrPeakBrightness') })
+    .locator('input[type="number"]');
+  await peak.fill('1500');
+  await peak.blur();
+  await expect.poll(() => live.at(-1)?.['config-overrides']?.rtx_hdr_peak_brightness).toBe(1500);
+  await page.getByRole('button', { name: 'Save application', exact: true }).last().click();
+  await expect.poll(() => saved.at(-1)?.['config-overrides']?.rtx_hdr_peak_brightness).toBe(1500);
+});
 
-  for (const [platform, nvidia] of [
-    ['linux', false],
-    ['macos', true],
-  ] as const) {
-    test(`${ui} hides RTX HDR on ${platform} with NVIDIA=${nvidia}`, async ({ page }) => {
-      await mockHost(page, platform, nvidia);
-      await open(page, ui);
-      await expect(page.getByRole('heading', { name: /^RTX HDR/ })).toHaveCount(0);
-    });
-  }
-
-  test(`${ui} hides Linux RTX HDR controls when TrueHDR is unavailable`, async ({ page }) => {
-    await mockHost(page, 'linux', true, false);
-    await open(page, ui);
+for (const [platform, nvidia] of [
+  ['linux', false],
+  ['macos', true],
+] as const) {
+  test(`hides RTX HDR on ${platform} with NVIDIA=${nvidia}`, async ({ page }) => {
+    await mockHost(page, platform, nvidia);
+    await open(page);
     await expect(page.getByRole('heading', { name: /^RTX HDR/ })).toHaveCount(0);
-    if (ui === 'v2') {
-      await page.goto('/v2/settings?category=video');
-      await expect(page.locator('#settings-group-video-video_rtx_hdr')).toHaveCount(0);
-    } else {
-      await page.goto('http://127.0.0.1:5174/settings?sec=capture');
-      await expect(page.getByRole('heading', { name: 'RTX HDR (AI SDR → HDR)', exact: true })).toHaveCount(0);
-    }
-  });
-
-  test(`${ui} exposes Linux global RTX HDR tuning`, async ({ page }) => {
-    await mockHost(page);
-    if (ui === 'v2') {
-      await page.goto('/v2/settings?category=video');
-      const section = page.locator('#settings-group-video-video_rtx_hdr');
-      await expect(section).toBeVisible();
-      await section.locator('summary').click();
-      await expect(section.getByText('Peak Brightness (nits)', { exact: true })).toBeVisible();
-    } else {
-      await page.goto('http://127.0.0.1:5174/settings?sec=capture');
-      await expect(
-        page.getByRole('heading', { name: 'RTX HDR (AI SDR → HDR)', exact: true }),
-      ).toBeVisible();
-    }
   });
 }
+
+test('hides Linux RTX HDR controls when TrueHDR is unavailable', async ({ page }) => {
+  await mockHost(page, 'linux', true, false);
+  await open(page);
+  await expect(page.getByRole('heading', { name: /^RTX HDR/ })).toHaveCount(0);
+  await page.goto('/settings?category=video');
+  await expect(page.locator('#settings-group-video-video_rtx_hdr')).toHaveCount(0);
+});
+
+test('exposes Linux global RTX HDR tuning', async ({ page }) => {
+  await mockHost(page);
+  await page.goto('/settings?category=video');
+  const section = page.locator('#settings-group-video-video_rtx_hdr');
+  await expect(section).toBeVisible();
+  await section.locator('summary').click();
+  await expect(section.getByText('Peak Brightness (nits)', { exact: true })).toBeVisible();
+});

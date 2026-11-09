@@ -42,7 +42,7 @@ for (const saved of [undefined, 'enabled', 'disabled']) {
     page,
   }) => {
     const patches = await host(page, true, saved);
-    await page.goto('/v2/settings?q=system_tray');
+    await page.goto('/settings?q=system_tray');
     const tray = page.locator('#setting-system_tray');
     await expect(tray).toBeVisible();
     await expect(tray).toBeDisabled();
@@ -67,7 +67,7 @@ for (const saved of [undefined, 'enabled', 'disabled']) {
 for (const platform of ['linux', 'windows']) {
   test(`standalone ${platform} keeps its saved tray setting editable`, async ({ page }) => {
     await host(page, false, 'enabled', platform);
-    await page.goto('/v2/settings?q=system_tray');
+    await page.goto('/settings?q=system_tray');
     const tray = page.locator('#setting-system_tray');
     await expect(tray).toBeEnabled();
     await expect(tray).toBeChecked();
@@ -82,38 +82,9 @@ for (const platform of ['linux', 'windows']) {
 test('machine tray explanation fits a phone viewport', async ({ page }) => {
   await host(page, true, 'enabled');
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/v2/settings?q=system_tray');
+  await page.goto('/settings?q=system_tray');
   await expect(page.locator('#setting-system_tray')).toBeDisabled();
   await expect(page.getByText(/The Linux system service cannot display a tray icon/)).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: test.info().outputPath('tray-service-phone.png'), fullPage: true });
-});
-
-test.describe('classic tray policy', () => {
-  const legacyUrl = process.env.TRAY_LEGACY_TEST_URL;
-  test.skip(!legacyUrl, 'Set TRAY_LEGACY_TEST_URL to a built classic UI preview.');
-  for (const machineHost of [true, false]) {
-    test(`classic Linux tray respects machine-host policy ${machineHost}`, async ({ page }) => {
-      const patches = await host(page, machineHost, 'enabled');
-      await page.goto(`${legacyUrl}/settings`);
-      const tray = page.locator('#system_tray_cb');
-      await expect(tray).toBeVisible();
-      await expect(tray).toHaveAttribute('aria-checked', String(!machineHost));
-      if (machineHost) {
-        await expect(tray).toHaveClass(/n-checkbox--disabled/);
-        await tray.click({ force: true });
-        await expect(tray).toHaveAttribute('aria-checked', 'false');
-        await expect(
-          page.getByText(/The Linux system service cannot display a tray icon/),
-        ).toBeVisible();
-        await page.screenshot({
-          path: test.info().outputPath('tray-classic-service.png'),
-          fullPage: true,
-        });
-      } else {
-        await expect(tray).toBeEnabled();
-      }
-      expect(patches).toEqual([]);
-    });
-  }
 });

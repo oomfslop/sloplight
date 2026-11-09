@@ -3,7 +3,7 @@ import { useUnsavedChanges } from '@/composables/useUnsavedChanges';
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { apiGet, apiPatch } from '@/api/client';
+import { apiGet, apiPatch } from '@/services/client';
 import { AppButton, InlineAlert, SettingRow } from '@/components/ui';
 import { extendedDefaults, playnitePolicyFields } from '@/configs/extendedSettings';
 import { configBoolean } from '@/utils/settings';

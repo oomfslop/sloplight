@@ -30,7 +30,7 @@ test('a paused host opens the UI while display metadata is stalled and can retry
     }
   });
 
-  await page.goto('/v2/');
+  await page.goto('/');
   // The shell must open before the five-second status-request timeout.
   await expect(page.getByRole('heading', { name: 'Host performance', exact: true })).toBeVisible({
     timeout: 3000,

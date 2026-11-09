@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n';
 
 import LinuxCaptureStatus from '@/components/settings/LinuxCaptureStatus.vue';
 import VirtualDisplayRecovery from '@/components/VirtualDisplayRecovery.vue';
-import { ApiError, apiGet } from '@/api/client';
+import { ApiError, apiGet } from '@/services/client';
 import {
   AppButton,
   EmptyState,

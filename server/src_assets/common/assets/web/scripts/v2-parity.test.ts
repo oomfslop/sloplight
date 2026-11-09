@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { getConfigSelectOptions } from '../configs/configSelectOptions.ts';
-import { getConfigSelectOptions as getLegacyConfigSelectOptions } from '../../web-legacy/configs/configSelectOptions.ts';
 import {
   matchesPlatform,
   settingsFields,
@@ -26,13 +25,8 @@ import {
   serializeCommandRows,
 } from '../utils/v2Parity.ts';
 
-test('AMD speed default agrees across backend, settings UI and legacy fallbacks', () => {
-  for (const path of [
-    '../configs/settingsSchema.ts',
-    '../../web-legacy/stores/config.ts',
-  ]) {
-    assert.match(readFileSync(new URL(path, import.meta.url), 'utf8'), /amd_quality:\s*'speed'/);
-  }
+test('AMD speed default agrees across backend and settings UI', () => {
+  assert.match(readFileSync(new URL('../configs/settingsSchema.ts', import.meta.url), 'utf8'), /amd_quality:\s*'speed'/);
   const backend = readFileSync(new URL('../../../../../src/config.cpp', import.meta.url), 'utf8');
   for (const codec of ['h264', 'hevc', 'av1']) {
     assert.ok(backend.includes(`amd::quality_${codec}_e::speed,  // quality (${codec})`));
@@ -87,50 +81,46 @@ test('gamepad options follow the host platform', () => {
     ],
   );
   const context = { t: (key: string) => key, platform: 'linux' };
-  for (const getOptions of [getConfigSelectOptions, getLegacyConfigSelectOptions]) {
-    assert.deepEqual(
-      getOptions('gamepad', context).map((option) => option.value),
-      ['auto', 'xone', 'ds4', 'ds5', 'switch'],
-    );
-  }
+  assert.deepEqual(
+    getConfigSelectOptions('gamepad', context).map((option) => option.value),
+    ['auto', 'xone', 'ds4', 'ds5', 'switch'],
+  );
   assert.deepEqual(settingsFields.get('ds4_back_as_touchpad_click')?.platform, ['windows', 'linux']);
 });
 
-test('both production settings models offer the composite DualSense only on Windows and preserve saved values', () => {
-  for (const getOptions of [getConfigSelectOptions, getLegacyConfigSelectOptions]) {
-    const context = { t: (key: string) => key, platform: 'windows' };
-    const option = getOptions('gamepad', context).find(
-      (candidate) => candidate.value === 'usbip_ds5',
-    );
-    assert.equal(option?.label, 'usbip_ds5', 'an untranslated label retains a usable fallback');
+test('the settings model offers the composite DualSense only on Windows and preserves saved values', () => {
+  const context = { t: (key: string) => key, platform: 'windows' };
+  const option = getConfigSelectOptions('gamepad', context).find(
+    (candidate) => candidate.value === 'usbip_ds5',
+  );
+  assert.equal(option?.label, 'usbip_ds5', 'an untranslated label retains a usable fallback');
 
-    const translated = getOptions('gamepad', {
-      ...context,
-      t: (key: string) =>
-        key === 'config.gamepad_usbip_ds5' ? 'DualSense with waveform haptics' : key,
-    }).find((candidate) => candidate.value === 'usbip_ds5');
-    assert.equal(translated?.label, 'DualSense with waveform haptics');
+  const translated = getConfigSelectOptions('gamepad', {
+    ...context,
+    t: (key: string) =>
+      key === 'config.gamepad_usbip_ds5' ? 'DualSense with waveform haptics' : key,
+  }).find((candidate) => candidate.value === 'usbip_ds5');
+  assert.equal(translated?.label, 'DualSense with waveform haptics');
 
-    for (const platform of ['linux', 'macos']) {
-      assert.equal(
-        getOptions('gamepad', { ...context, platform }).some(
-          (candidate) => candidate.value === 'usbip_ds5',
-        ),
-        false,
-        `${platform} must not offer the Windows USB/IP driver`,
-      );
-    }
-    assert.deepEqual(
-      getOptions('gamepad', { ...context, platform: 'linux' }).map((candidate) => candidate.value),
-      ['auto', 'xone', 'ds4', 'ds5', 'switch'],
-    );
-    assert.ok(
-      getOptions('gamepad', { ...context, currentValue: 'future_controller' }).some(
-        (candidate) => candidate.value === 'future_controller',
+  for (const platform of ['linux', 'macos']) {
+    assert.equal(
+      getConfigSelectOptions('gamepad', { ...context, platform }).some(
+        (candidate) => candidate.value === 'usbip_ds5',
       ),
-      'loading a saved controller selection must not silently change it',
+      false,
+      `${platform} must not offer the Windows USB/IP driver`,
     );
   }
+  assert.deepEqual(
+    getConfigSelectOptions('gamepad', { ...context, platform: 'linux' }).map((candidate) => candidate.value),
+    ['auto', 'xone', 'ds4', 'ds5', 'switch'],
+  );
+  assert.ok(
+    getConfigSelectOptions('gamepad', { ...context, currentValue: 'future_controller' }).some(
+      (candidate) => candidate.value === 'future_controller',
+    ),
+    'loading a saved controller selection must not silently change it',
+  );
 });
 
 test('Linux keeps common virtual-display policy and hides Windows display internals', () => {
@@ -299,7 +289,7 @@ test('Linux virtual-display pacing uses Linux-specific copy', () => {
   }
 });
 
-test('Linux Proton and MangoHUD limiter choices stay aligned with legacy UI', () => {
+test('Linux Proton and MangoHUD limiter choices', () => {
   assert.equal(settingsDefaults.frame_limiter_provider, 'auto');
   assert.equal(settingsDefaults.mangohud_limiter_method, 'late');
 
@@ -323,16 +313,6 @@ test('Linux Proton and MangoHUD limiter choices stay aligned with legacy UI', ()
   assert.match(messages.ui.integrations.mangohud.providerAuto, /Proton.*MangoHUD/i);
   assert.match(messages.ui.integrations.mangohud.limiterMethodDescription, /latency/i);
   assert.match(messages.ui.integrations.mangohud.limiterMethodDescription, /frame generation/i);
-
-  const context = { t: (key: string) => key, platform: 'linux' };
-  assert.deepEqual(
-    getLegacyConfigSelectOptions('frame_limiter_provider', context).map((option) => option.value),
-    ['auto', 'mangohud-proton', 'proton', 'mangohud', 'none'],
-  );
-  assert.deepEqual(
-    getLegacyConfigSelectOptions('mangohud_limiter_method', context).map((option) => option.value),
-    ['early', 'late'],
-  );
 });
 
 test('Settings notices are translated for unavailable host metadata and displays', () => {

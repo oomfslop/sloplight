@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import GameLibrarySetup from '../../web-legacy/components/GameLibrarySetup.vue';
+import GameLibrarySetup from '@/components/GameLibrarySetup.vue';
 import { useUnsavedChanges } from '@/composables/useUnsavedChanges';
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 
 import PlaynitePolicySettings from '@/components/settings/PlaynitePolicySettings.vue';
-import { ApiError, apiGet, apiPatch, apiPost } from '@/api/client';
+import { ApiError, apiGet, apiPatch, apiPost } from '@/services/client';
 import {
   AppButton,
   ConfirmDialog,

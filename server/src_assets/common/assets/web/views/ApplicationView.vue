@@ -8,8 +8,8 @@ import { groupLibraryGames, providerLabels } from '@/utils/libraryGames';
 import {
   isRemoteMonitorApplication,
   preserveRemoteMonitorRouting,
-} from '../../web-legacy/utils/remoteMonitorPolicy';
-import { ApiError, apiGet, apiPost } from '@/api/client';
+} from '@/utils/remoteMonitorPolicy';
+import { ApiError, apiGet, apiPost } from '@/services/client';
 import AppEditCoverModal from '@/components/app-edit/AppEditCoverModal.vue';
 import type { CoverCandidate } from '@/components/app-edit/AppEditCoverModal.types';
 import {

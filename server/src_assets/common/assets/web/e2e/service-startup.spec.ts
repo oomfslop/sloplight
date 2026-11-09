@@ -72,135 +72,130 @@ async function host(page: Page, options: HostOptions = {}) {
   return calls;
 }
 
-for (const [interfaceName, path] of [
-  ['legacy', '/troubleshooting'],
-  ['v2', '/v2/maintenance'],
-]) {
-  test(`${interfaceName} changes automatic startup to manual and back without restart`, async ({
-    page,
-  }) => {
-    const calls = await host(page, { metadataDelayMs: 200 });
-    await page.goto(path);
-    const toggle = page.getByRole('checkbox', {
-      name: 'Start automatically with Windows',
+test(`changes automatic startup to manual and back without restart`, async ({
+  page,
+}) => {
+  const calls = await host(page, { metadataDelayMs: 200 });
+  await page.goto('/maintenance');
+  const toggle = page.getByRole('checkbox', {
+    name: 'Start automatically with Windows',
+    exact: true,
+  });
+  await expect(toggle).toBeChecked();
+  await expect(toggle).toBeEnabled();
+  expect(calls.mutations).toEqual([]);
+  await toggle.uncheck();
+  await expect(page.getByText('Service startup mode: Manual', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('Startup preference saved. The current service and stream keep running.', {
       exact: true,
-    });
-    await expect(toggle).toBeChecked();
-    await expect(toggle).toBeEnabled();
-    expect(calls.mutations).toEqual([]);
-    await toggle.uncheck();
-    await expect(page.getByText('Service startup mode: Manual', { exact: true })).toBeVisible();
-    await expect(
-      page.getByText('Startup preference saved. The current service and stream keep running.', {
-        exact: true,
-      }),
-    ).toBeVisible();
-    await toggle.check();
-    await expect(page.getByText('Service startup mode: Automatic', { exact: true })).toBeVisible();
-    expect(calls.mutations).toEqual([
-      { path: '/api/service/startup', body: { automatic: false } },
-      { path: '/api/service/startup', body: { automatic: true } },
-    ]);
-    await expect(
-      page.getByText(/This changes future startup only; the current stream keeps running/),
-    ).toBeVisible();
-  });
+    }),
+  ).toBeVisible();
+  await toggle.check();
+  await expect(page.getByText('Service startup mode: Automatic', { exact: true })).toBeVisible();
+  expect(calls.mutations).toEqual([
+    { path: '/api/service/startup', body: { automatic: false } },
+    { path: '/api/service/startup', body: { automatic: true } },
+  ]);
+  await expect(
+    page.getByText(/This changes future startup only; the current stream keeps running/),
+  ).toBeVisible();
+});
 
-  test(`${interfaceName} reads a manual preference without writing it`, async ({ page }) => {
-    const calls = await host(page, { automatic: false });
-    await page.goto(path);
-    await expect(page.getByText('Service startup mode: Manual', { exact: true })).toBeVisible();
-    await expect(
-      page.getByRole('checkbox', { name: 'Start automatically with Windows', exact: true }),
-    ).not.toBeChecked();
-    expect(calls.mutations).toEqual([]);
-  });
+test(`reads a manual preference without writing it`, async ({ page }) => {
+  const calls = await host(page, { automatic: false });
+  await page.goto('/maintenance');
+  await expect(page.getByText('Service startup mode: Manual', { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('checkbox', { name: 'Start automatically with Windows', exact: true }),
+  ).not.toBeChecked();
+  expect(calls.mutations).toEqual([]);
+});
 
-  test(`${interfaceName} shows actual mode with disabled control when access is denied`, async ({
-    page,
-  }) => {
-    const calls = await host(page, { denied: true });
-    await page.goto(path);
-    const toggle = page.getByRole('checkbox', {
-      name: 'Start automatically with Windows',
+test(`shows actual mode with disabled control when access is denied`, async ({
+  page,
+}) => {
+  const calls = await host(page, { denied: true });
+  await page.goto('/maintenance');
+  const toggle = page.getByRole('checkbox', {
+    name: 'Start automatically with Windows',
+    exact: true,
+  });
+  await expect(toggle).toBeChecked();
+  await expect(toggle).toBeDisabled();
+  await expect(
+    page.getByText('Administrator permissions are required to change Windows service startup.', {
       exact: true,
-    });
-    await expect(toggle).toBeChecked();
-    await expect(toggle).toBeDisabled();
-    await expect(
-      page.getByText('Administrator permissions are required to change Windows service startup.', {
-        exact: true,
-      }),
-    ).toBeVisible();
-    expect(calls.mutations).toEqual([]);
-  });
+    }),
+  ).toBeVisible();
+  expect(calls.mutations).toEqual([]);
+});
 
-  test(`${interfaceName} explains missing installed service`, async ({ page }) => {
-    const calls = await host(page, { missing: true });
-    await page.goto(path);
-    await expect(
-      page.getByRole('checkbox', { name: 'Start automatically with Windows', exact: true }),
-    ).toBeDisabled();
-    await expect(
-      page.getByText('The Windows service is not installed.', { exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByText('Service startup mode: Unavailable', { exact: true }),
-    ).toBeVisible();
-    expect(calls.mutations).toEqual([]);
-  });
+test(`explains missing installed service`, async ({ page }) => {
+  const calls = await host(page, { missing: true });
+  await page.goto('/maintenance');
+  await expect(
+    page.getByRole('checkbox', { name: 'Start automatically with Windows', exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText('The Windows service is not installed.', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Service startup mode: Unavailable', { exact: true }),
+  ).toBeVisible();
+  expect(calls.mutations).toEqual([]);
+});
 
-  test(`${interfaceName} restores actual state and shows rejected save`, async ({ page }) => {
-    const calls = await host(page, { failSave: true });
-    await page.goto(path);
-    const toggle = page.getByRole('checkbox', {
-      name: 'Start automatically with Windows',
+test(`restores actual state and shows rejected save`, async ({ page }) => {
+  const calls = await host(page, { failSave: true });
+  await page.goto('/maintenance');
+  const toggle = page.getByRole('checkbox', {
+    name: 'Start automatically with Windows',
+    exact: true,
+  });
+  await expect(toggle).toBeEnabled();
+  await toggle.uncheck();
+  await expect(
+    page.getByText('Windows rejected the startup change.', { exact: true }),
+  ).toBeVisible();
+  await expect(toggle).toBeChecked();
+  await expect(page.getByText('Service startup mode: Automatic', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('Startup preference saved. The current service and stream keep running.', {
       exact: true,
-    });
-    await expect(toggle).toBeEnabled();
-    await toggle.uncheck();
-    await expect(
-      page.getByText('Windows rejected the startup change.', { exact: true }),
-    ).toBeVisible();
-    await expect(toggle).toBeChecked();
-    await expect(page.getByText('Service startup mode: Automatic', { exact: true })).toBeVisible();
-    await expect(
-      page.getByText('Startup preference saved. The current service and stream keep running.', {
-        exact: true,
-      }),
-    ).toHaveCount(0);
-    expect(calls.mutations).toEqual([{ path: '/api/service/startup', body: { automatic: false } }]);
-    expect(calls.reads).toBeGreaterThan(1);
-  });
+    }),
+  ).toHaveCount(0);
+  expect(calls.mutations).toEqual([{ path: '/api/service/startup', body: { automatic: false } }]);
+  expect(calls.reads).toBeGreaterThan(1);
+});
 
-  test(`${interfaceName} cannot change startup when status refresh fails`, async ({ page }) => {
-    const calls = await host(page, { failRead: true });
-    await page.goto(path);
-    await expect(
-      page.getByRole('checkbox', { name: 'Start automatically with Windows', exact: true }),
-    ).toBeDisabled();
-    await expect(
-      page.getByText(
-        'Unable to read or save the service startup preference. Refresh and try again.',
-        { exact: true },
-      ),
-    ).toBeVisible();
-    expect(calls.mutations).toEqual([]);
-  });
+test(`cannot change startup when status refresh fails`, async ({ page }) => {
+  const calls = await host(page, { failRead: true });
+  await page.goto('/maintenance');
+  await expect(
+    page.getByRole('checkbox', { name: 'Start automatically with Windows', exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText(
+      'Unable to read or save the service startup preference. Refresh and try again.',
+      { exact: true },
+    ),
+  ).toBeVisible();
+  expect(calls.mutations).toEqual([]);
+});
 
-  test(`${interfaceName} does not query or expose Windows startup on Linux`, async ({ page }) => {
-    const calls = await host(page, { platform: 'linux' });
-    await page.goto(path);
-    await expect(
-      page.getByRole('main').getByRole('heading', {
-        name: interfaceName === 'v2' ? 'Maintenance' : 'Troubleshooting',
-        exact: true,
-      }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole('checkbox', { name: 'Start automatically with Windows', exact: true }),
-    ).toHaveCount(0);
-    expect(calls.reads).toBe(0);
-    expect(calls.mutations).toEqual([]);
-  });
-}
+test(`does not query or expose Windows startup on Linux`, async ({ page }) => {
+  const calls = await host(page, { platform: 'linux' });
+  await page.goto('/maintenance');
+  await expect(
+    page.getByRole('main').getByRole('heading', {
+      name: 'Maintenance',
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('checkbox', { name: 'Start automatically with Windows', exact: true }),
+  ).toHaveCount(0);
+  expect(calls.reads).toBe(0);
+  expect(calls.mutations).toEqual([]);
+});
