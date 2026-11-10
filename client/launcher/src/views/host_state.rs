@@ -155,7 +155,7 @@ pub fn render(root: &mut Root, theme: &Theme, host: &Host, content_w: f32, conte
             }
             HostState::Online if !host.is_supported_server_version => {
                 title = format!("Can't stream from {name}");
-                let sw = if host.app_version.is_empty() { host.software().label().to_string() } else { format!("{} {}", host.software().label(), host.app_version) };
+                let sw = host.software_label();
                 explanation.push(muted(theme, format!("Its {sw} isn't supported by this version of Sloplight.")));
             }
             HostState::Online if host.pair_state == PairState::NotPaired => {

@@ -4411,6 +4411,9 @@ namespace nvhttp {
 
     tree.put("root.appversion", VERSION);
     tree.put("root.GfeVersion", GFE_VERSION);
+    // appversion stays the emulated GFE version: Moonlight-based clients pick protocol features from it.
+    tree.put("root.ServerSoftware", PROJECT_NAME);
+    tree.put("root.ServerSoftwareVersion", PROJECT_VERSION);
     tree.put("root.Permission", std::to_string(apollo_permissions));
     tree.put("root.uniqueid", http::unique_id);
     tree.put("root.HttpsPort", net::map_port(PORT_HTTPS));

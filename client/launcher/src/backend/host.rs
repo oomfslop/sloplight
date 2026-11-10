@@ -179,6 +179,11 @@ pub struct Host {
     pub gfe_version: String,
     #[serde(skip)]
     pub app_version: String,
+    /// Real server name and version (Vibeshine); `app_version` is the emulated GFE version.
+    #[serde(skip)]
+    pub server_software: String,
+    #[serde(skip)]
+    pub server_software_version: String,
     #[serde(skip)]
     pub display_modes: Vec<DisplayMode>,
     #[serde(skip)]
@@ -317,6 +322,8 @@ impl Host {
         host.pair_state = if xml::get_string(info, "PairStatus").as_deref() == Some("1") { PairState::Paired } else { PairState::NotPaired };
         host.current_game_id = current_game(info);
         host.app_version = xml::get_string(info, "appversion").unwrap_or_default();
+        host.server_software = xml::get_string(info, "ServerSoftware").unwrap_or_default();
+        host.server_software_version = xml::get_string(info, "ServerSoftwareVersion").unwrap_or_default();
         host.gfe_version = xml::get_string(info, "GfeVersion").unwrap_or_default();
         host.gpu_model = xml::get_string(info, "gputype").unwrap_or_default();
         host.active_address = Some(http.address().clone());
@@ -338,6 +345,15 @@ impl Host {
         } else {
             Software::Sunshine
         }
+    }
+
+    pub fn software_label(&self) -> String {
+        let (name, version) = if self.server_software.is_empty() {
+            (self.software().label(), self.app_version.as_str())
+        } else {
+            (self.server_software.as_str(), self.server_software_version.as_str())
+        };
+        if version.is_empty() { name.to_string() } else { format!("{name} {version}") }
     }
 
     pub fn is_online(&self) -> bool {
@@ -420,6 +436,8 @@ impl Host {
         assign!(state);
         assign!(gfe_version);
         assign!(app_version);
+        assign!(server_software);
+        assign!(server_software_version);
         assign!(is_supported_server_version);
         assign!(is_nvidia_server_software);
         assign!(max_luma_pixels_hevc);

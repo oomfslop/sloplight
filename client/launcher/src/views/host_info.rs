@@ -54,7 +54,7 @@ pub fn render_popover(root: &mut Root, theme: &Theme, host: &Host, max_h: f32, c
     let streaming = root.stream.as_ref().map(|s| s.host_uuid == host.uuid).unwrap_or(false);
     let waking = root.waking.contains_key(&host.uuid);
     let (color, ring) = crate::views::main_view::host_state_color(theme, host, streaming, waking);
-    let software = if host.app_version.is_empty() { host.software().label().to_string() } else { format!("{} {}", host.software().label(), host.app_version) };
+    let software = host.software_label();
     let headline = format!("{} · {software}", host_state_sentence(host, streaming, waking));
 
     let copy = |label: &'static str, value: String| -> Option<CopyFn> {
