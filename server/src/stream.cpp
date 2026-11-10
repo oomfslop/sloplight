@@ -1939,8 +1939,7 @@ namespace stream {
           } else {
             if (game_session_requires_shutdown) {
               BOOST_LOG(info) << "Stopping game control session because the app terminated."sv;
-              send_termination(session);
-              session::stop(*session);
+              session::graceful_stop(*session);
               has_game_session_pending_or_draining = true;
               ++pos;
               continue;
