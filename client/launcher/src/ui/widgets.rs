@@ -310,12 +310,12 @@ impl gpui::Render for TooltipView {
             .border_1()
             .border_color(theme.border)
             .shadow(vec![BoxShadow { color: theme.shadow, offset: point(px(0.), px(2.)), blur_radius: px(8.), spread_radius: px(0.), inset: false }])
-            .max_w(px(280.))
             .font(font(&theme.ui_font, FontWeight::NORMAL))
             .text_size(type_scale::SM)
             .line_height(type_scale::LH_SM)
             .text_color(theme.text)
-            .child(self.text.clone())
+            // Tooltips are laid out at min-content size: text wraps only inside its own bounded box.
+            .child(div().max_w(px(264.)).child(self.text.clone()))
             .when_some(self.keys.clone(), |d, k| d.child(kbd(&theme, k)))
     }
 }
