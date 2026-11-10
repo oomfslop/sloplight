@@ -5,7 +5,6 @@ import { useRoute } from 'vue-router';
 
 import { UiIcon } from '@/components/ui';
 import { useSystemStore } from '@/stores/system';
-import UpdateNotice from './UpdateNotice.vue';
 
 const system = useSystemStore();
 const route = useRoute();
@@ -286,7 +285,6 @@ onBeforeUnmount(() => {
       class="main-content"
       tabindex="-1"
     >
-      <UpdateNotice />
       <slot />
     </main>
   </div>

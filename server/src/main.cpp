@@ -34,7 +34,6 @@
 #include "pyrowave_host.h"
 #include "rtsp.h"
 #include "system_tray.h"
-#include "update.h"
 #include "upnp.h"
 #include "version_compare.h"
 #include "video.h"
@@ -681,21 +680,6 @@ int main(int argc, char *argv[]) {
     system_tray::end_tray();
   });
 #endif
-  // Schedule periodic update checks if configured
-  if (config::sunshine.update_check_interval_seconds > 0) {
-    // Trigger an immediate update check on startup so users don't wait
-    // a full interval before the first detection occurs.
-    update::trigger_check(true);
-
-    auto schedule_periodic = std::make_shared<std::function<void()>>();
-    *schedule_periodic = [schedule_periodic]() {
-      update::periodic();
-      if (config::sunshine.update_check_interval_seconds > 0) {
-        task_pool.pushDelayed(*schedule_periodic, std::chrono::seconds(config::sunshine.update_check_interval_seconds));
-      }
-    };
-    task_pool.pushDelayed(*schedule_periodic, std::chrono::seconds(config::sunshine.update_check_interval_seconds));
-  }
 #endif
 
 #ifndef __linux__

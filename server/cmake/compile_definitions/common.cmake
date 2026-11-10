@@ -89,8 +89,6 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/logging_policy.h"
         "${CMAKE_SOURCE_DIR}/src/main.cpp"
         "${CMAKE_SOURCE_DIR}/src/main.h"
-        "${CMAKE_SOURCE_DIR}/src/update.cpp"
-        "${CMAKE_SOURCE_DIR}/src/update.h"
         "${CMAKE_SOURCE_DIR}/src/crypto.cpp"
         "${CMAKE_SOURCE_DIR}/src/crypto.h"
         "${CMAKE_SOURCE_DIR}/src/http_pairing_policy.cpp"

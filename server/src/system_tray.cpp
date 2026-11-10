@@ -51,7 +51,6 @@
   #include "process.h"
   #include "src/entry_handler.h"
   #include "system_tray_lifecycle.h"
-  #include "update.h"
 
 using namespace std::literals;
 
@@ -122,10 +121,6 @@ namespace system_tray {
         // todo - use boost/locale to translate menu strings
         {.text = "Open Vibeshine", .cb = tray_open_ui_cb},
         {.text = "-"},
-        {.text = "Check for Update", .cb = [](tray_menu *) {
-           BOOST_LOG(info) << "Manual update check requested from tray"sv;
-           update::trigger_check(true);
-         }},
         {.text = "Restart", .cb = tray_restart_cb},
         {.text = "Quit", .cb = tray_quit_cb},
         {.text = nullptr}
@@ -474,16 +469,6 @@ namespace system_tray {
           launch_ui("/");
         }
       );
-    });
-  }
-
-  void tray_notify(const char *title, const char *text, void (*cb)()) {
-    const auto notification_title = title ? std::string {title} : std::string {};
-    const auto notification_text = text ? std::string {text} : std::string {};
-
-    run_on_tray_thread([notification_title, notification_text, cb]() {
-      apply_tray_state(TRAY_ICON, PROJECT_NAME);
-      apply_tray_state(TRAY_ICON, PROJECT_NAME, notification_title, notification_text, TRAY_ICON, cb);
     });
   }
 

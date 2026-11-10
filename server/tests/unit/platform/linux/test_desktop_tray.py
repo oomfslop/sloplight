@@ -278,32 +278,6 @@ class TrayTests(unittest.TestCase):
                           subprocess.CompletedProcess([], 0, output, "")):
             self.assertEqual(tray.read_services(), {tray.HOST: "inactive", tray.CONTROLLER: "active"})
 
-    def test_latest_release_selection_excludes_drafts_and_separates_channels(self):
-        def release(tag, date, **fields):
-            return {"tag_name": tag, "published_at": date, **fields}
-        stable = release("v2.0.0", "2026-10-10T00:00:00Z")
-        nightly = release("v2.1.0-nightly.1", "2026-10-12T00:00:00Z", prerelease=True)
-        self.assertEqual(tray.select_releases([
-            release("draft", "2026-10-13T00:00:00Z", draft=True),
-            nightly, release("old", "2026-10-01T00:00:00Z"), stable, {"invalid": True},
-        ]), [stable, nightly])
-        self.assertEqual(tray.select_releases([]), [])
-        with self.assertRaises(tray.ApiError):
-            tray.select_releases({"message": "rate limited"})
-        self.assertEqual(tray.release_url("tag/with space"),
-                         "https://github.com/Nonary/Vibeshine/releases/tag/tag%2Fwith%20space")
-
-    def test_update_metadata_request_does_not_carry_local_credentials(self):
-        response = unittest.mock.MagicMock()
-        response.__enter__.return_value.read.return_value = b"[]"
-        version = subprocess.CompletedProcess([], 0, "Vibeshine version 2.0.0", "")
-        with patch.object(tray.urllib.request, "urlopen", return_value=response) as request:
-            with patch.object(tray.subprocess, "run", return_value=version):
-                self.assertEqual(tray.check_updates(), ("Vibeshine version 2.0.0", []))
-        headers = request.call_args.args[0].headers
-        self.assertNotIn("Authorization", headers)
-        self.assertEqual(request.call_args.args[0].full_url, tray.RELEASES_API)
-
     def test_stream_paused_ready_stopped_and_auth_failure_states(self):
         active = {tray.HOST: "active", tray.CONTROLLER: "active"}
         self.assertEqual(tray.presentation(active, {"activeSessions": 1, "appName": "Game"})[:2],

@@ -22,14 +22,10 @@ import subprocess
 import sys
 import secrets
 import threading
-import urllib.parse
-import urllib.request
 
 CONTROLLER = "vibeshine-session-controller.service"
 HOST = "vibeshine.service"
 SCOPES = {"/api/session/status": "GET", "/api/apps/close": "POST"}
-RELEASES_API = "https://api.github.com/repos/Nonary/Vibeshine/releases"
-RELEASES_PAGE = "https://github.com/Nonary/Vibeshine/releases"
 
 
 class CertificateChanged(Exception):
@@ -127,41 +123,6 @@ def run_service_action(action):
                             text=True, timeout=90)
     if result.returncode:
         raise ApiError(result.stderr.strip() or "Service operation failed")
-
-
-def select_releases(data):
-    if not isinstance(data, list):
-        raise ApiError("Invalid release metadata")
-    releases = [release for release in data if isinstance(release, dict)
-                and not release.get("draft")
-                and isinstance(release.get("tag_name"), str)
-                and isinstance(release.get("published_at"), str)]
-    selected = []
-    for prerelease in (False, True):
-        candidates = [release for release in releases
-                      if bool(release.get("prerelease")) == prerelease]
-        if candidates:
-            selected.append(max(candidates, key=lambda release: release["published_at"]))
-    return selected
-
-
-def check_updates():
-    request = urllib.request.Request(RELEASES_API, headers={
-        "Accept": "application/vnd.github+json", "User-Agent": "Vibeshine-Desktop-Tray",
-    })
-    # Public metadata uses the system CA store and carries no local API token.
-    with urllib.request.urlopen(request, timeout=10) as response:
-        payload = response.read(2 * 1024 * 1024 + 1)
-    if len(payload) > 2 * 1024 * 1024:
-        raise ApiError("Release metadata is too large")
-    releases = select_releases(json.loads(payload))
-    version = subprocess.run(["/usr/bin/vibeshine", "--version"],
-                             capture_output=True, text=True, timeout=5)
-    return version.stdout.strip()[:500] or "Installed version unknown", releases
-
-
-def release_url(tag):
-    return RELEASES_PAGE + "/tag/" + urllib.parse.quote(tag, safe="")
 
 
 def presentation(services, session=None, error=""):
@@ -396,7 +357,6 @@ def main(argv=None):
     menu.addAction("Pair a client", lambda: open_ui("/pair"))
     menu.addSeparator()
     close_action = menu.addAction("No application running")
-    updates_action = menu.addAction("Check for Update")
     start_action = menu.addAction("Start Vibeshine")
     restart_action = menu.addAction("Restart")
     stop_action = menu.addAction("Quit Vibeshine")
@@ -465,10 +425,6 @@ def main(argv=None):
     def connect_token():
         submit("certificate", lambda: certificate_fingerprint(args.port))
 
-    def request_update_check():
-        updates_action.setEnabled(False)
-        submit("updates", check_updates)
-
     def forget_token():
         epoch.advance()
         settings.pop("token", None)
@@ -516,8 +472,6 @@ def main(argv=None):
     def completed(kind, result, error):
         nonlocal last_state
         accepted, result = requests.finish(kind, result)
-        if kind == "updates":
-            updates_action.setEnabled(True)
         if not accepted:
             # finish() has retired this request. Admission defers the refresh
             # while a service action or an older poll still owns its slot; that
@@ -536,24 +490,6 @@ def main(argv=None):
             return
         if kind == "certificate":
             token_dialog(result)
-        elif kind == "updates":
-            version, releases = result
-            dialog = QMessageBox()
-            dialog.setWindowTitle("Vibeshine updates")
-            labels = ["Latest " + ("prerelease" if release.get("prerelease") else "stable")
-                      + ": " + release["tag_name"] for release in releases]
-            dialog.setText(version + "\n\n" + ("\n".join(labels) or "No published releases found"))
-            # Show the actual tags rather than claiming a nightly/stable ordering
-            # that may not match the host's installed release channel.
-            release_buttons = {}
-            for release in releases:
-                label = "Open " + ("prerelease" if release.get("prerelease") else "stable release")
-                button = dialog.addButton(label, QMessageBox.ButtonRole.ActionRole)
-                release_buttons[button] = release_url(release["tag_name"])
-            dialog.addButton(QMessageBox.StandardButton.Close)
-            dialog.exec()
-            if dialog.clickedButton() in release_buttons:
-                QDesktopServices.openUrl(QUrl(release_buttons[dialog.clickedButton()]))
         elif kind == "connect":
             fingerprint, token, _ = result
             settings.update(fingerprint=fingerprint, token=token)
@@ -593,7 +529,6 @@ def main(argv=None):
     connect_action.triggered.connect(connect_token)
     forget_action.triggered.connect(forget_token)
     refresh_action.triggered.connect(poll)
-    updates_action.triggered.connect(request_update_check)
     close_action.triggered.connect(close_application)
     start_action.triggered.connect(lambda: service_action("start"))
     restart_action.triggered.connect(lambda: service_action("restart"))

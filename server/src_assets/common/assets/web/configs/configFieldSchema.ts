@@ -70,7 +70,6 @@ const NUMBER_FIELD_OVERRIDES: Record<string, Partial<ConfigFieldDefinition>> = {
     precision: 0,
     placeholder: '300',
   },
-  update_check_interval: { min: 0, step: 60, placeholder: '86400' },
   port: { min: 1029, max: 65514, placeholder: '47989' },
   ping_timeout: { min: 0, step: 100, placeholder: '10000' },
   control_peer_timeout: { min: 0, max: 86399999, step: 1, placeholder: '0' },
@@ -99,7 +98,6 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 function inferDurationUnit(key: string): ConfigFieldDefinition['durationUnit'] {
-  if (key === 'update_check_interval') return 'seconds';
   if (key.endsWith('_seconds') || key.endsWith('_secs')) return 'seconds';
   return undefined;
 }

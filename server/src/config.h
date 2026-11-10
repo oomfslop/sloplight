@@ -468,13 +468,10 @@ namespace config {
     std::string bind_address;
 
     std::string log_file;
-    bool notify_pre_releases;
     bool system_tray;
     std::vector<prep_cmd_t> prep_cmds;
     std::chrono::seconds session_token_ttl;  ///< Session token time-to-live (seconds)
     std::chrono::seconds remember_me_refresh_token_ttl;  ///< Trusted device (remember-me) refresh TTL
-    // Interval in seconds between automatic update checks (0 disables periodic checks)
-    int update_check_interval_seconds {86400};
     bool session_history_enabled {true};  ///< Persist stream/session history to SQLite
     int session_history_ttl_days {0};  ///< Delete ended sessions older than this many days (0 disables age pruning)
     int session_history_db_size_limit_mb {0};  ///< Approximate live DB quota in MiB (0 disables size pruning)

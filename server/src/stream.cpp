@@ -71,7 +71,6 @@ extern "C" {
 #include "sync.h"
 #include "system_tray.h"
 #include "thread_safe.h"
-#include "update.h"
 #include "utility.h"
 #include "uuid.h"
 #include "video_send.h"
@@ -4030,7 +4029,6 @@ namespace stream {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
         if (first_rtsp_session) {
           system_tray::update_tray_playing(proc::proc.get_last_run_app_name());
-          update::on_stream_started();
   #if defined(_WIN32)
           // Notify only when neither virtual-gamepad backend is installed and usable.
           try {

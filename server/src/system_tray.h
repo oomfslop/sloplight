@@ -19,14 +19,6 @@ namespace system_tray {
   void tray_open_ui_cb([[maybe_unused]] struct tray_menu *item);
 
   /**
-   * @brief Generic notification helper (stacking). Title/text copied immediately; callback optional.
-   * @param title Notification title
-   * @param text Notification body
-   * @param cb Optional click callback (opens URLs, UI pages, etc.)
-   */
-  void tray_notify(const char *title, const char *text, void (*cb)() = nullptr);
-
-  /**
    * @brief Callback for restarting Sunshine from the system tray.
    * @param item The tray menu item.
    */

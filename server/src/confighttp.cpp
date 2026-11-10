@@ -44,7 +44,6 @@
 // local includes
 #include "config.h"
 #include "host_stream_control.h"
-#include "update.h"
 #include "confighttp.h"
 #include "crypto.h"
 #include "file_handler.h"
@@ -2711,18 +2710,6 @@ namespace confighttp {
    *
    * @api_examples{/api/meta| GET| null}
    */
-  void getNightlyUpdateMetadata(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) return;
-    const auto query = request->parse_query_string();
-    const auto tag = query.find("tag");
-    std::string metadata;
-    if (tag == query.end() || !update::download_nightly_metadata(tag->second, metadata)) {
-      bad_request(response, request, "Nightly metadata unavailable");
-      return;
-    }
-    send_response(response, nlohmann::json::parse(metadata));
-  }
-
   void getMetadata(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
       return;
@@ -5790,7 +5777,6 @@ namespace confighttp {
     // Use a separate worker so a stalled lookup also leaves display recovery
     // and the other blocking management APIs available.
     register_blocking_api_route("^/api/metadata$", "GET", getMetadata, &metadata_route_pool);
-    register_blocking_api_route("^/api/updates/nightly-metadata$", "GET", getNightlyUpdateMetadata);
     register_api_route("^/api/configLocale$", "GET", getLocale);
     register_api_route("^/api/restart$", "POST", restart);
 #ifdef _WIN32

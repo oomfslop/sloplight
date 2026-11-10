@@ -41,10 +41,6 @@ The menu provides:
 
 - **Open Vibeshine** and **Pair a client** open the local Web UI.
 - **Stop [application]** uses the authenticated API, with confirmation.
-- **Check for Update** fetches public GitHub release metadata, displays the
-  installed version and latest published stable/prerelease tags, and offers
-  their release pages. It does not install anything or claim a nightly/stable
-  version ordering. No API token is sent to GitHub.
 - **Start Vibeshine**, **Restart**, and **Quit Vibeshine** operate on the
   session controller through systemd's existing polkit authorization.
   Restart and Quit ask for confirmation because they end active streams and

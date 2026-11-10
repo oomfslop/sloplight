@@ -1078,19 +1078,7 @@
         "description": "Check the managed virtual screen, active desktop session, and encoder before troubleshooting a stream.",
         "logs": "Open and download logs",
         "display": "Display settings"
-      },
-      "releases": {
-        "title": "Updates and release notes",
-        "check": "Check for updates",
-        "available": "Latest release",
-        "unavailable": "Release information is unavailable. Try again later.",
-        "open": "Read release notes",
-        "empty": "No release notes are available.",
-        "loading": "Checking releases…"
       }
-    },
-    "updates": {
-      "available": "Vibeshine {version} is available"
     },
     "nav": {
       "api_tokens": "API tokens",
@@ -1217,7 +1205,6 @@
         "addApplication": "Add application",
         "manage": "Manage",
         "manageDevices": "Manage devices",
-        "checkUpdates": "Check for updates",
         "openLibrary": "Open library",
         "openLogs": "Open logs",
         "openStats": "Open statistics",

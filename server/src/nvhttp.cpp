@@ -99,7 +99,6 @@
 #include "rtsp_pending_policy.h"
 #include "stream.h"
 #include "system_tray.h"
-#include "update.h"
 #include "utility.h"
 #include "uuid.h"
 #include "video.h"
@@ -2272,17 +2271,6 @@ namespace nvhttp {
       }
 
       auto &vibe_root = ensure_root(vibeshine_tree);
-      {
-        std::lock_guard<std::mutex> lock(update::state.notification_mutex);
-        vibe_root.put("last_notified_version", update::state.last_notified_version);
-        pt::ptree notified_versions;
-        for (const auto &version : update::state.notified_versions) {
-          pt::ptree entry;
-          entry.put("", version);
-          notified_versions.push_back({"", entry});
-        }
-        vibe_root.put_child("notified_versions", notified_versions);
-      }
 
 #ifdef _WIN32
       const auto persisted_shared_guid=http::shared_virtual_display_guid_snapshot();
@@ -2475,8 +2463,6 @@ namespace nvhttp {
         // identity. An existing profile with both snapshots missing fails
         // closed below instead of being mistaken for first run.
         http::unique_id = uuid_util::uuid_t::generate().string();
-        update::state.last_notified_version.clear();
-        update::state.notified_versions.clear();
 #ifdef _WIN32
         http::set_shared_virtual_display_guid({});
 #endif
@@ -2532,36 +2518,21 @@ namespace nvhttp {
       BOOST_LOG(warning) << "Could not refresh Sunshine state recovery copy: "sv << e.what();
     }
 
+#ifdef _WIN32
+    std::string shared_virtual_display_guid;
     if (!vibeshine_path.empty()) {
       try {
         pt::ptree vibeshine_tree;
         if (statefile::load_json(vibeshine_path, vibeshine_tree) != statefile::json_load_result_e::loaded) {
-          throw std::runtime_error("notification state is unavailable");
+          throw std::runtime_error("state is unavailable");
         }
-        update::state.last_notified_version = vibeshine_tree.get("root.last_notified_version", "");
-        update::state.notified_versions.clear();
-        if (auto versions = vibeshine_tree.get_child_optional("root.notified_versions")) {
-          for (const auto &entry : *versions) update::state.notified_versions.push_back(entry.second.get_value<std::string>());
-        }
-        if (!update::state.last_notified_version.empty()) update::state.notified_versions.push_back(update::state.last_notified_version);
-#ifdef _WIN32
-        http::set_shared_virtual_display_guid(vibeshine_tree.get("root.shared_virtual_display_guid", ""));
-#endif
+        shared_virtual_display_guid = vibeshine_tree.get("root.shared_virtual_display_guid", "");
       } catch (const std::exception &e) {
-        BOOST_LOG(warning) << "Couldn't read "sv << vibeshine_path << " for notification state: "sv << e.what();
-        update::state.last_notified_version.clear();
-        update::state.notified_versions.clear();
-#ifdef _WIN32
-        http::set_shared_virtual_display_guid({});
-#endif
+        BOOST_LOG(warning) << "Couldn't read "sv << vibeshine_path << ": "sv << e.what();
       }
-    } else {
-      update::state.last_notified_version.clear();
-      update::state.notified_versions.clear();
-#ifdef _WIN32
-      http::set_shared_virtual_display_guid({});
-#endif
     }
+    http::set_shared_virtual_display_guid(shared_virtual_display_guid);
+#endif
 
     {
       std::lock_guard<std::mutex> lock(client_mutex);

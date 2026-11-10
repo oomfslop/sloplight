@@ -78,7 +78,6 @@ async function installHost(page: Page, options: HostFixture = {}) {
     }
     await route.fulfill({ json: body });
   });
-  await page.route('**/assets/changelog.json', (route) => route.fulfill({ json: { releases: [] } }));
   return patches;
 }
 

@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-import ReleaseNotes from '@/components/settings/ReleaseNotes.vue';
 import LinuxCaptureStatus from '@/components/settings/LinuxCaptureStatus.vue';
 import { ApiError, apiDelete, apiGet, apiPost } from '@/services/client';
 import {
@@ -819,8 +818,6 @@ onBeforeUnmount(() => {
           </div>
         </dl>
       </section>
-
-      <ReleaseNotes class="maintenance-section" />
 
       <section v-if="isWindows" class="maintenance-section" aria-labelledby="support-title">
         <div class="maintenance-section__heading">

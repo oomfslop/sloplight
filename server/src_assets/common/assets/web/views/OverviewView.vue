@@ -561,12 +561,6 @@ onBeforeUnmount(() => {
           rel="noopener noreferrer"
           >{{ t('ui.overview.actions.reportBug') }}<UiIcon name="external-link" :size="14"
         /></a>
-        <a
-          href="https://github.com/Nonary/vibeshine/releases/latest"
-          target="_blank"
-          rel="noopener noreferrer"
-          >{{ t('ui.overview.actions.checkUpdates') }}<UiIcon name="external-link" :size="14"
-        /></a>
       </nav>
     </footer>
   </div>

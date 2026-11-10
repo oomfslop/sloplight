@@ -1095,12 +1095,10 @@ namespace config {
     "ipv4",  // Address family
     {},  // Bind address
     (platf::appdata() / default_log_filename).string(),  // log file
-    true,  // notify_pre_releases
     true,  // system_tray
     {},  // prep commands
     std::chrono::hours {2},  // session_token_ttl default 2h
     std::chrono::hours {24 * 7},  // remember_me_refresh_token_ttl default 7d
-    86400,  // update_check_interval_seconds default 24h
     true,  // session_history_enabled
     0,  // session_history_ttl_days (disabled by default)
     0  // session_history_db_size_limit_mb (disabled by default)
@@ -2058,7 +2056,6 @@ namespace config {
     string_f(vars, "external_ip", nvhttp.external_ip);
     list_prep_cmd_f(vars, "global_prep_cmd", config::sunshine.prep_cmds);
 
-    int_f(vars, "update_check_interval", config::sunshine.update_check_interval_seconds);
     bool_f(vars, "session_history_enabled", config::sunshine.session_history_enabled);
 
     string_f(vars, "audio_sink", audio.sink);
@@ -2189,7 +2186,6 @@ namespace config {
     bool_f(vars, "high_resolution_scrolling", input.high_resolution_scrolling);
     bool_f(vars, "native_pen_touch", input.native_pen_touch);
 
-    bool_f(vars, "notify_pre_releases", sunshine.notify_pre_releases);
     bool_f(vars, "system_tray", sunshine.system_tray);
 
     int port = sunshine.port;

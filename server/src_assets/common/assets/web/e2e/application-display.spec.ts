@@ -46,9 +46,6 @@ async function setup(page: Page, app: Record<string, unknown>, host: Record<stri
     }
     await route.fulfill({ json: body });
   });
-  await page.route('**/assets/changelog.json', (route) =>
-    route.fulfill({ json: { releases: [] } }),
-  );
   return { saves, config };
 }
 

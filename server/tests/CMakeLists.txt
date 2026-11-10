@@ -421,21 +421,6 @@ sunshine_add_test_target(
 )
 
 sunshine_add_test_target(
-    NAME test_fast_update_release
-    CATEGORY fast
-    TEST_SOURCES unit/test_update_release_standalone.cpp
-    LINK_LIBRARIES nlohmann_json::nlohmann_json)
-
-# This standalone policy harness uses assert; retain its checks in Release.
-if(TARGET test_fast_update_release)
-    if(MSVC)
-        target_compile_options(test_fast_update_release PRIVATE /UNDEBUG)
-    else()
-        target_compile_options(test_fast_update_release PRIVATE -UNDEBUG)
-    endif()
-endif()
-
-sunshine_add_test_target(
     NAME test_fast_nvenc_api
     CATEGORY fast
     TEST_SOURCES
@@ -1018,11 +1003,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_recovery_status_liveness.py"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
         set_tests_properties(test_component_recovery_status_liveness PROPERTIES LABELS "component")
-        add_test(NAME test_component_update_notification_tray_interface
-            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
-                "${CMAKE_CURRENT_LIST_DIR}/unit/test_update_notification_tray_interface.py"
-                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
-        set_tests_properties(test_component_update_notification_tray_interface PROPERTIES LABELS "component")
         add_test(NAME test_component_system_tray_shutdown
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_system_tray_shutdown.py"
