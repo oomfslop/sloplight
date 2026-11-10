@@ -23,6 +23,9 @@ use super::wol;
 const TRIES_BEFORE_OFFLINING: usize = 2;
 const POLLS_PER_APPLIST_FETCH: u32 = 10;
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
+/// Right after launch (or wake) the route is often briefly unavailable, so
+/// "no route to host" counts as blocked LAN access only once it persists.
+const UNREACHABLE_POLLS_BEFORE_BLOCKED: u32 = 3;
 /// Error text reported when the user cancelled pairing.
 pub const CANCELLED: &str = "Pairing cancelled.";
 
@@ -280,6 +283,7 @@ impl HostManager {
 
     fn poll_loop(&self, host: Arc<RwLock<Host>>, signal: Arc<(Mutex<PollSignal>, Condvar)>) {
         let mut polls_since_applist = POLLS_PER_APPLIST_FETCH;
+        let mut unreachable_polls = 0;
         let should_stop = || signal.0.lock().unwrap().stop;
         loop {
             if should_stop() {
@@ -324,6 +328,8 @@ impl HostManager {
                     break 'outer;
                 }
             }
+            unreachable_polls = if !online && all_unreachable { unreachable_polls + 1 } else { 0 };
+            let unreachable = unreachable_polls >= UNREACHABLE_POLLS_BEFORE_BLOCKED;
             if !online {
                 let mut h = host.write().unwrap();
                 if h.state != HostState::Offline {
@@ -331,8 +337,8 @@ impl HostManager {
                     h.state = HostState::Offline;
                     changed = true;
                 }
-                if h.unreachable != all_unreachable {
-                    h.unreachable = all_unreachable;
+                if h.unreachable != unreachable {
+                    h.unreachable = unreachable;
                     changed = true;
                 }
             } else {
