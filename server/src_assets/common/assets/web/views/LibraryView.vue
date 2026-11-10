@@ -577,14 +577,14 @@ function libraryRequest(
       @configured="libraryConfigured = $event"
       @saved="load()"
     />
-    <PageHeader :title="t('ui.library.page.title')" :description="t('ui.library.page.description')">
+    <PageHeader :title="t('ui.library.page.title')">
       <template #actions>
         <AppButton
           icon="integrations"
           :label="libraryConfigured ? 'Library manager settings' : 'Setup Game Library Integration'"
           @click="librarySetupOpen = true"
         />
-        <RouterLink class="button button--secondary" to="/integrations"
+        <RouterLink class="button button--tertiary" to="/integrations"
           ><UiIcon name="integrations" />{{ t('ui.library.actions.sources') }}</RouterLink
         >
         <AppButton
@@ -669,11 +669,8 @@ function libraryRequest(
           @click="setView('list')"
         />
       </div>
-    </section>
-    <div class="library-collection-heading">
-      <h2>{{ t('ui.library.collection.label') }}</h2>
       <span class="library-result-count" role="status" aria-live="polite">{{ resultLabel }}</span>
-    </div>
+    </section>
 
     <div v-if="selectedUuids.size" class="library-selection" role="status">
       <StatusBadge tone="info">
@@ -780,18 +777,11 @@ function libraryRequest(
                 <UiIcon
                   v-if="isRemoteSessionApp(app)"
                   name="devices"
-                  :size="48"
+                  :size="32"
                   aria-hidden="true"
                 />
                 <span v-else class="library-item__monogram" aria-hidden="true">{{
                   appInitials(app)
-                }}</span>
-                <span>{{
-                  t(
-                    isRemoteSessionApp(app)
-                      ? 'ui.library.cover.desktop'
-                      : 'ui.library.cover.application',
-                  )
                 }}</span>
               </span>
               <span v-if="selectedUuids.has(appUuid(app))" class="library-item__selected-mark">
@@ -965,25 +955,12 @@ function libraryRequest(
 <style scoped>
 .library-page {
   display: grid;
-  gap: var(--vs-space-20);
+  gap: var(--vs-space-12);
 }
 
-.library-collection-heading {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--vs-space-8);
-  margin-top: var(--vs-space-8);
-}
-.library-collection-heading h2 {
-  font-size: var(--vs-type-size-control);
-  font-weight: var(--vs-type-weight-medium);
-}
 .library-page :deep(.vs-empty-state) {
   width: 100%;
   max-inline-size: none;
-  min-block-size: 22rem;
   border: 1px solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-card);
   background: var(--vs-color-bg-surface);
@@ -1008,15 +985,13 @@ function libraryRequest(
   inset-block-start: 0;
   flex-wrap: wrap;
   gap: var(--vs-space-8);
-  padding: var(--vs-space-12);
-  border: var(--vs-border-width) solid var(--vs-color-border-subtle);
-  border-radius: var(--vs-radius-card);
-  background: var(--vs-color-bg-surface);
+  padding-block: var(--vs-space-8);
+  background: var(--vs-color-bg-canvas);
 }
 
 .library-search {
   position: relative;
-  flex: 1 1 20rem;
+  flex: 0 1 22rem;
 }
 
 .library-search > svg {
@@ -1030,7 +1005,7 @@ function libraryRequest(
 }
 
 .library-search .vs-input {
-  padding-inline-start: var(--vs-space-40);
+  padding-inline-start: var(--vs-space-32);
 }
 
 .library-sort {
@@ -1045,8 +1020,8 @@ function libraryRequest(
 }
 
 .library-result-count {
-  min-inline-size: 7.5rem;
-  color: var(--vs-color-text-secondary);
+  margin-inline-start: auto;
+  color: var(--vs-color-text-muted);
   font-size: var(--vs-type-size-metadata);
   text-align: end;
 }
@@ -1065,7 +1040,7 @@ function libraryRequest(
 .library-collection--grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(var(--vs-game-card-min-width-desktop), 1fr));
-  gap: var(--vs-space-16);
+  gap: var(--vs-space-12);
 }
 
 .library-skeleton {
@@ -1146,25 +1121,20 @@ function libraryRequest(
   display: grid;
   place-content: center;
   place-items: center;
-  gap: var(--vs-space-8);
-  padding: var(--vs-space-16);
+  padding: var(--vs-space-12);
   color: var(--vs-color-text-muted);
-  background: color-mix(in srgb, var(--vs-color-accent-default) 5%, var(--vs-color-bg-surface));
+  background: var(--vs-color-bg-subtle);
   font-size: var(--vs-type-size-helper);
   text-align: center;
 }
 .library-item__monogram {
-  color: color-mix(in srgb, var(--vs-color-accent-default) 70%, var(--vs-color-text-muted));
-  font-size: 56px;
+  color: var(--vs-color-text-muted);
+  font-size: 28px;
   line-height: 1.2;
   font-weight: var(--vs-type-weight-medium);
-  letter-spacing: -0.06em;
 }
 .library-collection--list .library-item__monogram {
-  font-size: 24px;
-}
-.library-collection--list .library-item__artwork-fallback > span:last-child {
-  display: none;
+  font-size: 16px;
 }
 
 .library-item__selected-mark {
@@ -1185,33 +1155,31 @@ function libraryRequest(
   inset-block-end: var(--vs-space-8);
   inset-inline-start: var(--vs-space-8);
   display: grid;
-  inline-size: 2rem;
-  block-size: 2rem;
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
   place-items: center;
-  border: var(--vs-border-width) solid var(--vs-color-border-strong);
-  border-radius: var(--vs-radius-control);
-  background: color-mix(in srgb, var(--vs-color-bg-canvas) 82%, transparent);
-  box-shadow: var(--vs-shadow-raised);
+  border-radius: var(--vs-radius-subtle);
+  background: color-mix(in srgb, var(--vs-color-bg-canvas) 85%, transparent);
   color: var(--vs-color-text-primary);
-  backdrop-filter: blur(8px);
 }
 
 .library-item__provider-mark svg {
-  inline-size: 1.25rem;
-  block-size: 1.25rem;
+  inline-size: 0.875rem;
+  block-size: 0.875rem;
   fill: currentColor;
 }
 
 .library-item__copy {
   display: grid;
   min-inline-size: 0;
-  gap: var(--vs-space-4);
-  padding: var(--vs-space-12);
+  gap: var(--vs-space-2);
+  padding: var(--vs-space-8) var(--vs-space-8) var(--vs-space-8);
 }
 
 .library-item__title {
   overflow: hidden;
-  font-weight: var(--vs-type-weight-semibold);
+  font-size: var(--vs-type-size-control);
+  font-weight: var(--vs-type-weight-medium);
   line-height: var(--vs-type-line-height-control);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1281,16 +1249,19 @@ function libraryRequest(
 }
 
 .library-collection--list .library-item__open {
-  min-block-size: var(--vs-size-row-settings);
-  grid-template-columns: 4.5rem minmax(0, 1fr);
+  min-block-size: 0;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  padding-block: var(--vs-space-4);
   align-items: center;
   border: 0;
   border-radius: 0;
 }
 
 .library-collection--list .library-item__artwork {
-  inline-size: 4.5rem;
-  block-size: 6.75rem;
+  inline-size: 2.5rem;
+  block-size: 3.75rem;
+  margin-inline-start: var(--vs-space-8);
+  border-radius: var(--vs-radius-subtle);
 }
 
 .library-collection--list .library-item__copy {

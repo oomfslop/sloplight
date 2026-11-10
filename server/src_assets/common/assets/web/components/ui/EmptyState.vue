@@ -36,7 +36,7 @@ const hasDescription = computed(() => Boolean(props.description || slots.descrip
     :aria-live="announce === 'polite' ? 'polite' : undefined"
   >
     <div class="vs-empty-state__icon" aria-hidden="true">
-      <UiIcon :name="icon" :size="24" />
+      <UiIcon :name="icon" :size="20" />
     </div>
     <h2 :id="titleId" class="vs-empty-state__title">{{ title }}</h2>
     <div v-if="hasDescription" :id="descriptionId" class="vs-empty-state__description">

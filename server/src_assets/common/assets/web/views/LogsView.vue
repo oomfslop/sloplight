@@ -210,31 +210,6 @@ const sourceLabel = computed(() => {
   return option ? t(option.labelKey) : source.value;
 });
 
-const summary = computed(() => {
-  if (!allLines.value.length) {
-    return t('ui.logs.summary.empty', { source: sourceLabel.value });
-  }
-  if (counts.value.error) {
-    return `${t('ui.logs.summary.errors', { count: counts.value.error }, counts.value.error)} ${t(
-      'ui.logs.summary.warnings_also',
-      { count: counts.value.warning },
-      counts.value.warning,
-    )}`;
-  }
-  if (counts.value.warning) {
-    return t(
-      'ui.logs.summary.warnings_only',
-      { count: counts.value.warning },
-      counts.value.warning,
-    );
-  }
-  return t(
-    'ui.logs.summary.clear',
-    { count: allLines.value.length.toLocaleString(locale.value || undefined) },
-    allLines.value.length,
-  );
-});
-
 function detectSeverity(line: string): LogSeverity {
   const match = line.match(
     /(?:^|[\[\]\s:])(fatal|error|warning|warn|info|debug|trace)(?=[:\]\s])/i,
@@ -499,7 +474,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="vs-page vs-page--fluid logs-page">
-    <PageHeader :title="t('troubleshooting.logs')" :description="t('ui.logs.page.description')">
+    <PageHeader :title="t('troubleshooting.logs')">
       <template #meta>
         <StatusBadge
           :label="paused ? t('ui.logs.status.paused') : t('ui.logs.status.following')"
@@ -512,6 +487,23 @@ onBeforeUnmount(() => {
               time: formatRelativeTime(lastLoaded, locale, t('_common.unknown')),
             })
           }}
+        </span>
+        <span class="summary-badges" :aria-label="t('ui.logs.summary.counts_aria_label')">
+          <StatusBadge
+            :label="t('ui.logs.count.errors', { count: counts.error }, counts.error)"
+            :tone="counts.error ? 'danger' : 'neutral'"
+            compact
+          />
+          <StatusBadge
+            :label="t('ui.logs.count.warnings', { count: counts.warning }, counts.warning)"
+            :tone="counts.warning ? 'warning' : 'neutral'"
+            compact
+          />
+          <StatusBadge
+            :label="t('ui.logs.count.total_lines', { count: allLines.length }, allLines.length)"
+            tone="neutral"
+            compact
+          />
         </span>
       </template>
       <template #actions>
@@ -549,37 +541,11 @@ onBeforeUnmount(() => {
         {{ notice }}
       </InlineAlert>
 
-      <section class="log-summary vs-surface" aria-labelledby="log-summary-title">
-        <div>
-          <h2 id="log-summary-title">
-            {{ t('ui.logs.summary.title', { source: sourceLabel }) }}
-          </h2>
-          <p>{{ summary }}</p>
-        </div>
-        <div class="summary-badges" :aria-label="t('ui.logs.summary.counts_aria_label')">
-          <StatusBadge
-            :label="t('ui.logs.count.errors', { count: counts.error }, counts.error)"
-            :tone="counts.error ? 'danger' : 'neutral'"
-            compact
-          />
-          <StatusBadge
-            :label="t('ui.logs.count.warnings', { count: counts.warning }, counts.warning)"
-            :tone="counts.warning ? 'warning' : 'neutral'"
-            compact
-          />
-          <StatusBadge
-            :label="t('ui.logs.count.total_lines', { count: allLines.length }, allLines.length)"
-            tone="neutral"
-            compact
-          />
-        </div>
-      </section>
-
-      <section class="log-workspace vs-surface" aria-labelledby="log-viewer-title">
+      <section class="log-workspace vs-surface" :aria-label="t('ui.logs.viewer.title')">
         <div class="log-toolbar">
           <div class="log-filter-grid">
             <label class="vs-field" for="log-source">
-              <span class="vs-field__label">{{ t('troubleshooting.logs_source') }}</span>
+              <span class="vs-sr-only">{{ t('troubleshooting.logs_source') }}</span>
               <select id="log-source" v-model="source" class="vs-select">
                 <option v-for="option in logSources" :key="option.value" :value="option.value">
                   {{ t(option.labelKey) }}
@@ -588,7 +554,7 @@ onBeforeUnmount(() => {
             </label>
 
             <label class="vs-field" for="log-severity">
-              <span class="vs-field__label">{{ t('ui.logs.filters.severity') }}</span>
+              <span class="vs-sr-only">{{ t('ui.logs.filters.severity') }}</span>
               <select id="log-severity" v-model="severity" class="vs-select">
                 <option v-for="option in severityOptions" :key="option.value" :value="option.value">
                   {{ t(option.labelKey) }}
@@ -597,7 +563,7 @@ onBeforeUnmount(() => {
             </label>
 
             <label class="vs-field log-search" for="log-search">
-              <span class="vs-field__label">{{ t('ui.logs.filters.search_label') }}</span>
+              <span class="vs-sr-only">{{ t('ui.logs.filters.search_label') }}</span>
               <span class="search-control">
                 <UiIcon name="search" :size="16" aria-hidden="true" />
                 <input
@@ -667,8 +633,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="log-viewer-heading">
-          <h2 id="log-viewer-title">{{ t('ui.logs.viewer.title') }}</h2>
+        <div v-if="searchActive || omittedLines" class="log-viewer-heading">
           <p v-if="searchActive">
             {{
               t('ui.logs.viewer.search_context', {
@@ -678,10 +643,9 @@ onBeforeUnmount(() => {
               })
             }}
           </p>
-          <p v-else-if="omittedLines">
+          <p v-else>
             {{ t('ui.logs.viewer.truncated', { limit: displayedLineLimit }) }}
           </p>
-          <p v-else>{{ t('ui.logs.viewer.line_numbers_preserved') }}</p>
         </div>
 
         <div v-if="loading" class="log-loading" role="status" aria-live="polite">
@@ -797,7 +761,7 @@ onBeforeUnmount(() => {
 .logs-page,
 .logs-stack {
   display: grid;
-  gap: var(--vs-space-24);
+  gap: var(--vs-space-12);
 }
 
 .logs-page :deep(*) {
@@ -814,23 +778,8 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
-.log-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--vs-space-20);
-  padding: var(--vs-space-16) var(--vs-space-20);
-}
-
-.log-summary h2,
-.log-viewer-heading h2 {
-  font-size: var(--vs-type-size-section);
-  line-height: var(--vs-type-line-height-section);
-}
-
-.log-summary p {
-  margin-top: var(--vs-space-4);
-  color: var(--vs-color-text-secondary);
+.log-viewer-heading p {
+  margin: 0;
 }
 
 .summary-badges,
@@ -847,24 +796,23 @@ onBeforeUnmount(() => {
 }
 
 .log-toolbar {
-  display: grid;
-  gap: var(--vs-space-16);
-  padding: var(--vs-space-16) var(--vs-space-20);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--vs-space-8) var(--vs-space-16);
+  padding: var(--vs-space-8) var(--vs-space-12);
   border-bottom: 1px solid var(--vs-color-border-subtle);
 }
 
 .log-filter-grid {
   display: grid;
-  grid-template-columns: minmax(11rem, 0.55fr) minmax(10rem, 0.45fr) minmax(16rem, 1fr);
-  gap: var(--vs-space-12);
+  flex: 1 1 32rem;
+  grid-template-columns: minmax(8rem, 10rem) minmax(8rem, 10rem) minmax(12rem, 1fr);
+  gap: var(--vs-space-8);
 }
 
 .log-toolbar__actions {
   justify-content: flex-end;
-}
-
-.log-toolbar__actions .vs-checkbox {
-  margin-right: auto;
 }
 
 .search-control {
@@ -890,7 +838,7 @@ onBeforeUnmount(() => {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--vs-space-16);
-  padding: var(--vs-space-12) var(--vs-space-20);
+  padding: var(--vs-space-4) var(--vs-space-12);
   border-bottom: 1px solid var(--vs-color-border-subtle);
 }
 
@@ -914,7 +862,7 @@ onBeforeUnmount(() => {
 }
 
 .log-viewer {
-  height: clamp(24rem, 62vh, 52rem);
+  height: max(24rem, calc(100dvh - 12.5rem));
   overflow: auto;
   background: var(--vs-color-bg-canvas);
   color: var(--vs-color-text-secondary);
@@ -983,13 +931,13 @@ onBeforeUnmount(() => {
 
 .log-line {
   display: grid;
-  min-height: 24px;
-  grid-template-columns: 5.5rem 4.75rem minmax(max-content, 1fr);
+  min-height: 20px;
+  grid-template-columns: 4.5rem 4.25rem minmax(max-content, 1fr);
   align-items: baseline;
   border-left: 2px solid transparent;
   font-family: var(--vs-type-family-mono);
   font-size: var(--vs-type-size-metadata);
-  line-height: 24px;
+  line-height: 20px;
   white-space: pre;
 }
 
@@ -1048,7 +996,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 767px) {
-  .log-summary,
   .log-viewer-heading {
     align-items: stretch;
     flex-direction: column;

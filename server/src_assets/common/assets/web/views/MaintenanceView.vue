@@ -8,7 +8,6 @@ import { ApiError, apiDelete, apiGet, apiPost } from '@/services/client';
 import {
   AppButton,
   ConfirmDialog,
-  EmptyState,
   InlineAlert,
   LoadingSkeleton,
   PageHeader,
@@ -729,7 +728,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page page--narrow maintenance-page">
-    <PageHeader :title="t('ui.maintenance.title')" :description="t('ui.maintenance.description')">
+    <PageHeader :title="t('ui.maintenance.title')">
       <template #actions>
         <AppButton
           icon="refresh"
@@ -767,7 +766,7 @@ onBeforeUnmount(() => {
     </InlineAlert>
 
     <template v-if="loading">
-      <LoadingSkeleton v-for="index in 4" :key="index" variant="block" height="152px" />
+      <LoadingSkeleton v-for="index in 4" :key="index" variant="block" height="88px" />
     </template>
 
     <template v-else>
@@ -787,20 +786,14 @@ onBeforeUnmount(() => {
           }}</RouterLink>
         </div>
       </section>
-      <ReleaseNotes class="maintenance-section" :installed-version="metadata?.version" />
       <section class="maintenance-section" aria-labelledby="installed-version-title">
         <div class="maintenance-section__heading">
-          <div>
-            <h2 id="installed-version-title">{{ t('ui.maintenance.version.title') }}</h2>
-            <p>{{ t('ui.maintenance.version.description') }}</p>
-          </div>
+          <h2 id="installed-version-title">{{ t('ui.maintenance.version.title') }}</h2>
           <StatusBadge
-            :label="
-              metadata?.status === false
-                ? t('ui.maintenance.version.metadataIncomplete')
-                : t('changelog.installed')
-            "
-            :tone="metadata?.status === false ? 'warning' : 'info'"
+            v-if="metadata?.status === false"
+            :label="t('ui.maintenance.version.metadataIncomplete')"
+            tone="warning"
+            compact
           />
         </div>
         <dl class="metadata-grid">
@@ -826,6 +819,8 @@ onBeforeUnmount(() => {
           </div>
         </dl>
       </section>
+
+      <ReleaseNotes class="maintenance-section" />
 
       <section v-if="isWindows" class="maintenance-section" aria-labelledby="support-title">
         <div class="maintenance-section__heading">
@@ -1035,6 +1030,7 @@ onBeforeUnmount(() => {
           <StatusBadge
             :label="t('ui.maintenance.sessions.activeCount', { count: browserSessions.length })"
             tone="neutral"
+            compact
           />
         </div>
         <div v-if="browserSessions.length" class="vs-table-wrap">
@@ -1090,13 +1086,7 @@ onBeforeUnmount(() => {
             </tbody>
           </table>
         </div>
-        <EmptyState
-          v-else
-          compact
-          icon="user"
-          :title="t('ui.maintenance.sessions.emptyTitle')"
-          :description="t('ui.maintenance.sessions.emptyDescription')"
-        />
+        <p v-else class="maintenance-muted">{{ t('ui.maintenance.sessions.emptyTitle') }}</p>
       </section>
 
       <section class="maintenance-section" aria-labelledby="credentials-title">
@@ -1128,8 +1118,7 @@ onBeforeUnmount(() => {
               required
             />
           </label>
-          <div class="credentials-form__new-password">
-            <label class="vs-field">
+          <label class="vs-field">
               <span class="vs-field__label">{{ t('auth.new_password') }}</span>
               <input
                 v-model="credentials.newPassword"
@@ -1149,8 +1138,7 @@ onBeforeUnmount(() => {
                 required
               />
             </label>
-          </div>
-          <div class="maintenance-actions">
+          <div class="maintenance-actions credentials-form__actions">
             <AppButton
               type="submit"
               :label="t('navbar.password')"
@@ -1169,16 +1157,18 @@ onBeforeUnmount(() => {
             <p>{{ t('service_startup.description') }}</p>
           </div>
         </div>
-        <label class="vs-cluster">
-          <input
-            v-model="serviceStartupDraft"
-            type="checkbox"
-            :disabled="serviceStartupBusy || serviceStartup?.can_change !== true"
-            @change="saveServiceStartup"
-          />
-          <span>{{ t('service_startup.automatic') }}</span>
-        </label>
-        <p>
+        <div class="service-startup-row">
+          <label class="vs-switch">
+            <input
+              v-model="serviceStartupDraft"
+              type="checkbox"
+              :disabled="serviceStartupBusy || serviceStartup?.can_change !== true"
+              @change="saveServiceStartup"
+            />
+            <span class="vs-switch__track" aria-hidden="true" />
+            <span>{{ t('service_startup.automatic') }}</span>
+          </label>
+          <p class="maintenance-muted">
           {{ t('service_startup.mode') }}:
           {{
             t(
@@ -1188,8 +1178,9 @@ onBeforeUnmount(() => {
                   : serviceStartup?.start_type || 'unknown'),
             )
           }}
-        </p>
-        <p v-if="serviceStartup?.error">{{ serviceStartup.error }}</p>
+          </p>
+        </div>
+        <p v-if="serviceStartup?.error" class="maintenance-muted">{{ serviceStartup.error }}</p>
         <InlineAlert v-if="serviceStartupError" tone="danger" announce="assertive">{{
           serviceStartupError
         }}</InlineAlert>
@@ -1229,13 +1220,13 @@ onBeforeUnmount(() => {
 <style scoped>
 .maintenance-page {
   display: grid;
-  gap: var(--vs-space-24);
+  gap: var(--vs-space-12);
 }
 
 .maintenance-section {
   display: grid;
-  gap: var(--vs-space-20);
-  padding: var(--vs-space-20);
+  gap: var(--vs-space-12);
+  padding: var(--vs-space-16);
   border: var(--vs-border-width) solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-card);
   background: var(--vs-color-bg-surface);
@@ -1243,7 +1234,7 @@ onBeforeUnmount(() => {
 
 .maintenance-section__heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--vs-space-16);
 }
@@ -1266,15 +1257,13 @@ onBeforeUnmount(() => {
 .metadata-grid,
 .recovery-facts {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--vs-space-12) var(--vs-space-24);
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--vs-space-8) var(--vs-space-16);
 }
 
 .metadata-grid > div,
 .recovery-facts > div {
   min-width: 0;
-  padding-bottom: var(--vs-space-12);
-  border-bottom: var(--vs-border-width) solid var(--vs-color-border-subtle);
 }
 
 .metadata-grid dt,
@@ -1285,7 +1274,7 @@ onBeforeUnmount(() => {
 
 .metadata-grid dd,
 .recovery-facts dd {
-  margin: var(--vs-space-4) 0 0;
+  margin: var(--vs-space-2) 0 0;
   overflow-wrap: anywhere;
   font-size: var(--vs-type-size-control);
   font-weight: var(--vs-type-weight-medium);
@@ -1383,18 +1372,27 @@ onBeforeUnmount(() => {
   --vs-cluster-gap: var(--vs-space-8);
 }
 
-.credentials-form,
-.credentials-form__new-password {
-  display: grid;
-  gap: var(--vs-space-16);
-}
-
 .credentials-form {
-  max-width: 42rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--vs-space-12);
+  max-width: 36rem;
 }
 
-.credentials-form__new-password {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.credentials-form__actions {
+  grid-column: 1 / -1;
+}
+
+.service-startup-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--vs-space-8) var(--vs-space-16);
+}
+
+.service-startup-row .maintenance-muted {
+  margin: 0;
 }
 
 .maintenance-danger-text {
@@ -1405,12 +1403,12 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--vs-space-20);
-  padding: var(--vs-space-20);
-  border: var(--vs-border-emphasis-width) solid
-    color-mix(in srgb, var(--vs-color-status-danger) 58%, var(--vs-color-border-subtle));
+  gap: var(--vs-space-16);
+  padding: var(--vs-space-16);
+  border: var(--vs-border-width) solid
+    color-mix(in srgb, var(--vs-color-status-danger) 40%, var(--vs-color-border-subtle));
   border-radius: var(--vs-radius-card);
-  background: color-mix(in srgb, var(--vs-color-status-danger) 6%, var(--vs-color-bg-surface));
+  background: var(--vs-color-bg-surface);
 }
 
 @media (max-width: 47.999rem) {
@@ -1421,9 +1419,7 @@ onBeforeUnmount(() => {
     flex-direction: column;
   }
 
-  .metadata-grid,
-  .recovery-facts,
-  .credentials-form__new-password {
+  .credentials-form {
     grid-template-columns: minmax(0, 1fr);
   }
 

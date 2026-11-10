@@ -190,11 +190,8 @@ onBeforeUnmount(() => {
     >
       <div class="sidebar__header">
         <RouterLink class="brand" to="/" :aria-label="t('ui.shell.brand_overview')">
-          <img :src="`${baseUrl}images/logo-sunshine-45.png`" alt="" width="32" height="32" />
-          <span class="sidebar__label">
-            <span class="brand__name">Vibeshine</span>
-            <span class="brand__description">{{ t('ui.shell.host_console') }}</span>
-          </span>
+          <img :src="`${baseUrl}images/logo-sunshine-45.png`" alt="" width="24" height="24" />
+          <span class="sidebar__label brand__name">Vibeshine</span>
         </RouterLink>
         <button
           class="icon-button sidebar__close"
@@ -218,7 +215,7 @@ onBeforeUnmount(() => {
                 :aria-current="isCurrent(item.to) ? 'page' : undefined"
                 :title="t(item.labelKey)"
               >
-                <UiIcon :name="item.icon" :size="18" />
+                <UiIcon :name="item.icon" :size="16" />
                 <span class="sidebar__label">{{ t(item.labelKey) }}</span>
               </RouterLink>
             </li>
@@ -235,7 +232,7 @@ onBeforeUnmount(() => {
           :aria-busy="system.loadingHost"
           @click="system.refreshHost"
         >
-          <UiIcon :name="statusIcon" :size="18" />
+          <UiIcon :name="statusIcon" :size="16" />
           <span class="sidebar__label">
             <strong>{{ statusText }}</strong>
             <small>{{ system.metadata?.version || t('ui.shell.host_status') }}</small>
@@ -243,8 +240,7 @@ onBeforeUnmount(() => {
           <UiIcon name="refresh" :size="14" class="host-health__refresh sidebar__label" />
         </button>
 
-        <div class="theme-picker">
-          <span class="sidebar__label">{{ t('ui.shell.appearance') }}</span>
+        <div class="sidebar__utility">
           <div class="theme-picker__options" role="group" :aria-label="t('ui.shell.appearance')">
             <button
               v-for="theme in themes"
@@ -259,16 +255,14 @@ onBeforeUnmount(() => {
               <UiIcon :name="theme.icon" :size="16" />
             </button>
           </div>
-        </div>
-        <div class="sidebar__utility">
           <button
-            class="sidebar__logout"
+            class="icon-button"
             type="button"
+            :aria-label="t('navbar.logout')"
             :title="t('navbar.logout')"
             @click="system.logout"
           >
             <UiIcon name="logout" :size="16" />
-            <span class="sidebar__label">{{ t('navbar.logout') }}</span>
           </button>
           <button
             class="icon-button sidebar__collapse"

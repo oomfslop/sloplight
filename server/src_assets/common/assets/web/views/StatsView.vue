@@ -554,7 +554,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="vs-page vs-page--dashboard stats-page">
-    <PageHeader :title="t('stats.title')" :description="t('stats.subtitle')">
+    <PageHeader :title="t('stats.title')">
       <template #meta>
         <StatusBadge
           :label="statsEnabled ? t('stats.live') : t('stats.paused')"
@@ -625,14 +625,10 @@ onBeforeUnmount(() => {
               }}<span v-if="hostInfo?.gpu_model"> · {{ hostInfo.gpu_model }}</span>
             </p>
           </div>
-          <span v-if="hostStats"
-            >{{ temperature(hostStats.cpu_temp_c) }} CPU ·
-            {{ temperature(hostStats.gpu_temp_c) }} GPU</span
-          >
         </div>
 
         <div v-if="!ready" class="gauge-grid">
-          <LoadingSkeleton v-for="item in 4" :key="item" variant="block" height="12rem" />
+          <LoadingSkeleton v-for="item in 4" :key="item" variant="block" height="5rem" />
         </div>
         <div v-else-if="hostStats" class="gauge-grid">
           <MetricGauge
@@ -670,7 +666,6 @@ onBeforeUnmount(() => {
         <div class="stats-section__heading">
           <div>
             <h2 id="host-history-title">{{ t('stats.history_title') }}</h2>
-            <p>{{ t('sessions.tip_chart_host_compute') }}</p>
           </div>
           <span>{{
             t('ui.stats.sample_count', { count: hostHistory.length }, hostHistory.length)
@@ -713,7 +708,6 @@ onBeforeUnmount(() => {
         <div class="stats-section__heading">
           <div>
             <h2 id="stream-performance-title">{{ t('sessions.title') }}</h2>
-            <p>{{ t('sessions.active_unified') }}</p>
           </div>
           <span>{{ activeSessions.length }}</span>
         </div>
@@ -803,7 +797,6 @@ onBeforeUnmount(() => {
         <div class="stats-section__heading">
           <div>
             <h2 id="visual-history-title">{{ t('sessions.history_title') }}</h2>
-            <p>{{ t('ui.sessions.history.description') }}</p>
           </div>
           <span>{{ historyCountLabel }}</span>
         </div>
@@ -915,12 +908,12 @@ onBeforeUnmount(() => {
 
 .stats-page,
 .stats-stack {
-  gap: var(--vs-space-24);
+  gap: var(--vs-space-20);
 }
 
 .stats-section,
 .visual-session-list {
-  gap: var(--vs-space-12);
+  gap: var(--vs-space-8);
 }
 
 .stats-updated,
@@ -956,7 +949,7 @@ onBeforeUnmount(() => {
 .visual-session {
   display: grid;
   gap: var(--vs-space-12);
-  padding: var(--vs-space-20);
+  padding: var(--vs-space-16);
   overflow: hidden;
 }
 
@@ -1007,7 +1000,7 @@ onBeforeUnmount(() => {
 
 .history-card-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
   gap: var(--vs-space-12);
 }
 
@@ -1030,21 +1023,18 @@ onBeforeUnmount(() => {
   display: grid;
   min-width: 0;
   gap: var(--vs-space-4);
-  padding: var(--vs-space-16);
+  padding: var(--vs-space-12);
   border: 1px solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-card);
   background: var(--vs-color-bg-surface);
   color: var(--vs-color-text-secondary);
   text-align: left;
   cursor: pointer;
-  transition:
-    border-color var(--vs-motion-duration-control) var(--vs-motion-easing-standard),
-    transform var(--vs-motion-duration-control) var(--vs-motion-easing-standard);
+  transition: border-color var(--vs-motion-duration-control) var(--vs-motion-easing-standard);
 }
 
 .history-card:hover {
-  border-color: var(--vs-color-accent-default);
-  transform: translateY(-1px);
+  border-color: var(--vs-color-border-strong);
 }
 
 .history-card:focus-visible {
@@ -1057,7 +1047,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: var(--vs-space-8);
-  margin-bottom: var(--vs-space-8);
+  margin-bottom: var(--vs-space-4);
 }
 
 .history-card time,
@@ -1076,12 +1066,12 @@ onBeforeUnmount(() => {
 }
 
 .history-card__stream {
-  margin-top: var(--vs-space-8);
+  margin-top: var(--vs-space-4);
   font-variant-numeric: tabular-nums;
 }
 
 .history-card__action {
-  margin-top: var(--vs-space-8);
+  margin-top: var(--vs-space-4);
   color: var(--vs-color-accent-default);
   font-weight: var(--vs-type-weight-semibold);
 }
@@ -1089,10 +1079,6 @@ onBeforeUnmount(() => {
 @media (max-width: 1199px) {
   .gauge-grid,
   .host-chart-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .history-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1113,7 +1099,6 @@ onBeforeUnmount(() => {
 @media (max-width: 639px) {
   .gauge-grid,
   .host-chart-grid,
-  .history-card-grid,
   .history-loading {
     grid-template-columns: minmax(0, 1fr);
   }

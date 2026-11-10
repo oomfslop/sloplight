@@ -1,7 +1,7 @@
 .page {
   width: min(100%, var(--vs-content-width-general));
   margin: 0 auto;
-  padding: var(--vs-space-40) var(--vs-page-padding-desktop);
+  padding: var(--vs-space-20) var(--vs-page-padding-desktop);
 }
 
 .page--wide {
@@ -18,7 +18,7 @@
 
 .section-stack {
   display: grid;
-  gap: var(--vs-space-32);
+  gap: var(--vs-space-20);
 }
 
 .content-grid {
@@ -29,7 +29,7 @@
 
 .panel {
   min-width: 0;
-  padding: var(--vs-space-20);
+  padding: var(--vs-space-16);
   border: 1px solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-card);
   background: var(--vs-color-bg-surface);
@@ -49,13 +49,14 @@
 }
 
 .panel__heading h2 {
-  font-size: 18px;
-  line-height: 24px;
+  font-size: var(--vs-type-size-section);
+  line-height: var(--vs-type-line-height-section);
 }
 
 .panel__heading p {
-  margin-top: var(--vs-space-4);
-  color: var(--vs-color-text-secondary);
+  margin-top: var(--vs-space-2);
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-metadata);
 }
 
 .toolbar {
@@ -75,7 +76,7 @@
 
 @media (max-width: 1023px) {
   .page {
-    padding: var(--vs-space-24);
+    padding: var(--vs-space-20) var(--vs-page-padding-tablet);
   }
 
   .content-grid {

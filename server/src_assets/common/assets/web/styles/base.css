@@ -160,7 +160,7 @@ hr {
   inline-size: min(100%, var(--vs-content-width-general, 80rem));
   margin-inline: auto;
   padding: var(--vs-page-padding-desktop, var(--vs-space-32));
-  padding-block-start: var(--vs-space-40);
+  padding-block-start: var(--vs-space-20);
 }
 
 .vs-page--settings,
@@ -215,7 +215,7 @@ hr {
 
 .vs-field {
   display: grid;
-  gap: var(--vs-space-label-control);
+  gap: var(--vs-space-4);
 }
 
 .vs-field__label,
@@ -248,7 +248,8 @@ hr {
   min-inline-size: 0;
   min-block-size: var(--vs-field-height, var(--vs-size-control-md));
   padding-inline: var(--vs-space-12);
-  border: var(--vs-border-width, 1px) solid var(--vs-color-border-strong);
+  border: var(--vs-border-width, 1px) solid
+    color-mix(in srgb, var(--vs-color-border-strong) 55%, var(--vs-color-border-subtle));
   border-radius: var(--vs-radius-control);
   background: var(--vs-color-bg-canvas);
   color: var(--vs-color-text-primary);
@@ -403,7 +404,7 @@ hr {
 .vs-table th,
 .vs-table td {
   min-block-size: var(--vs-table-row-height, var(--vs-size-row-standard));
-  padding: var(--vs-space-12) var(--vs-space-16);
+  padding: var(--vs-space-8) var(--vs-space-12);
   border-block-end: var(--vs-border-width, 1px) solid var(--vs-color-border-subtle);
   text-align: start;
   vertical-align: middle;

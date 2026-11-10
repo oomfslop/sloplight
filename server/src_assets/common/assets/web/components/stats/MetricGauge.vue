@@ -26,17 +26,23 @@ const display = computed(() =>
 </script>
 
 <template>
-  <article
-    class="metric-gauge"
-    :style="{ '--gauge-color': color, '--gauge-value': `${bounded * 3.6}deg` }"
-  >
-    <div class="metric-gauge__ring" role="img" :aria-label="`${label}: ${display}`">
-      <div>
-        <strong>{{ display }}</strong
-        ><span>{{ label }}</span>
-      </div>
+  <article class="metric-gauge" :style="{ '--gauge-color': color }">
+    <div class="metric-gauge__head">
+      <span>{{ label }}</span>
+      <small v-if="detail">{{ detail }}</small>
     </div>
-    <p v-if="detail">{{ detail }}</p>
+    <strong>{{ display }}</strong>
+    <div
+      class="metric-gauge__bar"
+      role="meter"
+      :aria-label="label"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      :aria-valuenow="bounded"
+      :aria-valuetext="display"
+    >
+      <span :style="{ width: `${bounded}%` }" />
+    </div>
   </article>
 </template>
 
@@ -44,60 +50,47 @@ const display = computed(() =>
 .metric-gauge {
   display: grid;
   min-width: 0;
-  justify-items: center;
-  gap: var(--vs-space-8);
-  padding: var(--vs-space-16);
+  gap: var(--vs-space-4);
+  padding: var(--vs-space-12);
   border: 1px solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-card);
   background: var(--vs-color-bg-surface);
 }
 
-.metric-gauge__ring {
-  display: grid;
-  width: 8rem;
-  height: 8rem;
-  place-items: center;
-  border-radius: 50%;
-  background: conic-gradient(var(--gauge-color) var(--gauge-value), var(--vs-color-bg-subtle) 0);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gauge-color) 25%, transparent);
+.metric-gauge__head {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: var(--vs-space-8);
+  color: var(--vs-color-text-secondary);
+  font-size: var(--vs-type-size-metadata);
 }
 
-.metric-gauge__ring::before {
-  width: 6.3rem;
-  height: 6.3rem;
-  border: 1px solid var(--vs-color-border-subtle);
-  border-radius: 50%;
-  background: var(--vs-color-bg-surface);
-  content: '';
-  grid-area: 1 / 1;
-}
-
-.metric-gauge__ring > div {
-  display: grid;
-  max-width: 5.5rem;
-  gap: var(--vs-space-2);
-  grid-area: 1 / 1;
-  text-align: center;
-  z-index: 1;
+.metric-gauge__head small {
+  overflow: hidden;
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-helper);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .metric-gauge strong {
-  font-size: 1.55rem;
+  font-size: 1.375rem;
   font-variant-numeric: tabular-nums;
-  line-height: 1;
+  line-height: 1.75rem;
 }
 
-.metric-gauge span,
-.metric-gauge p {
-  color: var(--vs-color-text-muted);
-  font-size: var(--vs-type-size-helper);
-}
-
-.metric-gauge p {
-  min-height: 1rem;
+.metric-gauge__bar {
+  height: 4px;
   overflow: hidden;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  border-radius: var(--vs-radius-pill);
+  background: var(--vs-color-bg-subtle);
+}
+
+.metric-gauge__bar > span {
+  display: block;
+  height: 100%;
+  background: var(--gauge-color);
+  transition: width var(--vs-motion-duration-layout) var(--vs-motion-easing-standard);
 }
 </style>

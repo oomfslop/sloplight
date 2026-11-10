@@ -57,6 +57,7 @@ async function terminate(): Promise<void> {
       <template #actions>
         <AppButton
           variant="secondary"
+          size="compact"
           :label="t('index.display_recovery.dismiss')"
           @click="dismissIntroduction"
         />
@@ -69,7 +70,8 @@ async function terminate(): Promise<void> {
       </div>
       <AppButton
         icon="stop"
-        variant="danger"
+        variant="secondary"
+        size="compact"
         :label="t('index.display_recovery.action')"
         :busy="busy"
         :busy-label="t('index.display_recovery.working')"
@@ -100,8 +102,8 @@ async function terminate(): Promise<void> {
 <style scoped>
 .display-recovery {
   display: grid;
-  gap: var(--vs-space-16);
-  padding: var(--vs-space-24);
+  gap: var(--vs-space-12);
+  padding: var(--vs-space-12) var(--vs-space-16);
   background: var(--vs-color-bg-surface);
   border: 1px solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-card);
@@ -110,15 +112,20 @@ async function terminate(): Promise<void> {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--vs-space-24);
+  gap: var(--vs-space-16);
 }
 .display-recovery h2 {
-  margin: 0 0 var(--vs-space-8);
-  font-size: 1.125rem;
+  margin: 0;
+  font-size: var(--vs-type-size-control);
+  line-height: var(--vs-type-line-height-control);
 }
 .display-recovery p {
   margin: 0;
-  color: var(--vs-color-text-secondary);
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-metadata);
+}
+.display-recovery__action :deep(.vs-button--secondary) {
+  color: var(--vs-color-status-danger);
 }
 @media (max-width: 640px) {
   .display-recovery__action {

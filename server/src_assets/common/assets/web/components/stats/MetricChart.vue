@@ -202,7 +202,8 @@ function linePath(segment: Array<{ x: number; y: number }>): string {
 
 const axisLabels = computed(() => {
   const domain = timeDomain.value;
-  return [0, 0.5, 1].map((fraction) => {
+  const fractions = domain.end > domain.start ? [0, 1] : [0];
+  return fractions.map((fraction) => {
     const timestamp = domain.start + (domain.end - domain.start) * fraction;
     return { x: xFor(timestamp), label: formatTimestamp(timestamp) };
   });
@@ -220,8 +221,7 @@ function formatTimestamp(timestamp: number): string {
 function axisLabelStyle(axis: { x: number }, index: number): Record<string, string> {
   const left = `${(axis.x / chartWidth) * 100}%`;
   if (index === 0) return { left, textAlign: 'left' };
-  if (index === 2) return { left, transform: 'translateX(-100%)', textAlign: 'right' };
-  return { left, transform: 'translateX(-50%)', textAlign: 'center' };
+  return { left, transform: 'translateX(-100%)', textAlign: 'right' };
 }
 
 function eventLabelStyle(marker: { x: number }): Record<string, string> {

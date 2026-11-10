@@ -165,7 +165,6 @@
           "label": "Output identifier"
         },
         "uuid": {
-          "help": "Stable server identity. It cannot be changed here.",
           "label": "UUID"
         },
         "virtualScreen": {
@@ -236,9 +235,7 @@
         }
       },
       "page": {
-        "addDescription": "Add a streamable application.",
         "addTitle": "Add application",
-        "editDescription": "Edit how this application launches and streams.",
         "fallbackTitle": "Application"
       },
       "rtxHdr": {
@@ -326,45 +323,34 @@
         "remove": "Remove command {number}"
       },
       "saveBar": {
-        "addHint": "Save to add this application to the library.",
-        "current": "Application is up to date",
-        "editHint": "Changes take effect after saving.",
         "region": "Application save controls",
         "unsaved": "Unsaved application changes"
       },
       "sections": {
         "advanced": {
-          "description": "Application fields without a guided control are preserved here.",
           "title": "Advanced fields"
         },
         "commands": {
           "advancedDescription": "Optional preparation and background commands for this integrated game.",
           "advancedTitle": "Advanced launch controls",
-          "description": "Preparation commands run before launch and may be undone after the session.",
           "title": "Preparation and detached commands"
         },
         "display": {
-          "description": "Override host display policy only for this application.",
           "title": "Virtual display and layout"
         },
         "execution": {
-          "description": "Paths are interpreted by the host running Vibeshine.",
           "title": "Executable, output, and artwork"
         },
         "frameGeneration": {
-          "description": "Application-specific capture fixes and Lossless Scaling launch policy.",
           "title": "Frame generation and Lossless Scaling"
         },
         "identity": {
-          "description": "The name clients see and the stable identifier used for safe edits and deletion.",
           "title": "Identity"
         },
         "launch": {
-          "description": "Control process elevation, lifecycle, preparation, and exit handling.",
           "title": "Launch behavior"
         },
         "overrides": {
-          "description": "Structured host settings applied only while this application streams.",
           "title": "Configuration overrides"
         }
       },
@@ -491,7 +477,6 @@
         "updated": "{name} was updated."
       },
       "page": {
-        "description": "Pair your devices and control who can stream from this host.",
         "title": "Devices"
       },
       "status": {
@@ -547,7 +532,6 @@
         "vulkanRegisterDescription": "Vibeshine will repair the system registration for its bundled implicit Vulkan layer.",
         "vulkanRegisterTitle": "Register the Vulkan HDR layer?"
       },
-      "description": "Optional host components and their current operational state.",
       "details": {
         "bundledVersion": "Bundled {version}",
         "installedVersion": "Installed {version}"
@@ -797,9 +781,7 @@
         "alt": "{name} cover",
         "unavailable": "Cover unavailable",
         "unavailableLabel": "{name} cover unavailable",
-        "fallbackLabel": "{name} placeholder artwork",
-        "application": "Application",
-        "desktop": "Desktop"
+        "fallbackLabel": "{name} placeholder artwork"
       },
       "delete": {
         "busy": "Deleting",
@@ -823,7 +805,6 @@
       },
       "loading": "Loading applications",
       "page": {
-        "description": "Your games and applications, ready for your next stream.",
         "title": "Library"
       },
       "purgePlaynite": {
@@ -916,9 +897,7 @@
         "copied": "No visible lines copied. | {count} visible line copied. | {count} visible lines copied.",
         "downloaded": "No visible lines downloaded. | {count} visible line downloaded. | {count} visible lines downloaded."
       },
-      "page": {
-        "description": "Filter current host diagnostics, pause incoming updates, and export exactly what is visible."
-      },
+      "page": {},
       "severity": {
         "all": "All severities",
         "error": "Error",
@@ -933,17 +912,10 @@
         "paused": "Updates paused"
       },
       "summary": {
-        "clear": "No errors or warnings were detected in {count} line. | No errors or warnings were detected in {count} lines.",
-        "counts_aria_label": "Log severity counts",
-        "empty": "No lines are currently available from {source}.",
-        "errors": "{count} error line needs attention. | {count} error lines need attention.",
-        "title": "{source} summary",
-        "warnings_also": "No additional warnings were recorded. | {count} warning line was also recorded. | {count} warning lines were also recorded.",
-        "warnings_only": "No errors were detected. {count} warning line was recorded. | No errors were detected. {count} warning lines were recorded."
+        "counts_aria_label": "Log severity counts"
       },
       "viewer": {
         "aria_label": "Filtered log lines",
-        "line_numbers_preserved": "Line numbers refer to the loaded log window.",
         "match_line": "Match on line {line}",
         "search_aria_label": "Log search results with surrounding context",
         "search_context": "Match {current} of {total}, with {count} lines before and after",
@@ -993,7 +965,6 @@
         "title": "Change web credentials"
       },
       "dataUnavailable": "Some maintenance data is unavailable",
-      "description": "Version details, support artifacts, recovery state, and administrative access.",
       "errors": {
         "actionFailed": "The maintenance action failed.",
         "crashManifest": "The crash bundle manifest could not be loaded. No download was started.",
@@ -1050,7 +1021,6 @@
         "browser": "Browser",
         "current": "Current",
         "description": "Review browsers that can currently manage this host.",
-        "emptyDescription": "Sign in again if this session list was recently cleared.",
         "emptyTitle": "No trusted sessions found",
         "expires": "Expires",
         "lastSeen": "Last seen",
@@ -1096,7 +1066,6 @@
       "version": {
         "branch": "Branch",
         "commit": "Commit",
-        "description": "The exact build currently serving this interface.",
         "metadataIncomplete": "Metadata incomplete",
         "platform": "Platform",
         "releaseDate": "Release date",
@@ -1114,7 +1083,6 @@
         "title": "Updates and release notes",
         "check": "Check for updates",
         "available": "Latest release",
-        "current": "Installed version",
         "unavailable": "Release information is unavailable. Try again later.",
         "open": "Read release notes",
         "empty": "No release notes are available.",
@@ -1152,14 +1120,12 @@
       },
       "connecting_detail": "Negotiating a direct WebRTC stream with this host.",
       "controls": {
-        "description": "Focus the stream for mouse, keyboard, and wheel input. Connected gamepads forward while input is enabled and this window is focused and visible.",
         "input": "Forward browser input",
         "input_help": "Click the stream, then use its mouse, keyboard, and wheel controls.",
         "performance_overlay_help": "Show connection, decoder, and frame pacing details while streaming.",
         "title": "Browser controls"
       },
       "desktop": "Desktop",
-      "description": "Start and control a WebRTC stream directly in this browser.",
       "disconnect": "Disconnect stream",
       "collapse": "Minimize stream",
       "expand": "Expand stream",
@@ -1214,10 +1180,8 @@
       "refreshing": "Refreshing browser stream readiness",
       "settings": {
         "application": "Application",
-        "application_help": "Desktop starts the configured desktop entry. Select an application to launch it instead.",
         "bitrate": "Bitrate (Kbps; 0 = host default)",
         "codec": "Video codec",
-        "description": "Unavailable options stay disabled instead of silently falling back to another codec or SDR.",
         "fps": "Frame rate",
         "frame_age_help": "Frames older than {milliseconds} ms at {fps} FPS are discarded before playback.",
         "hdr": "Use HDR",
@@ -1231,7 +1195,6 @@
         "video": "Video",
         "width": "Width"
       },
-      "stage_description": "The stream opens here. Focus this surface to forward browser input.",
       "start": "Start browser stream",
       "status": {
         "connected": "Connected",
@@ -1273,7 +1236,6 @@
       "additionalDataUnavailable": "Additional data is unavailable",
       "attention": "Attention",
       "currentApplication": "The current application",
-      "description": "Your streaming host, at a glance.",
       "devices": {
         "allowed": {
           "one": "{count} device allowed to connect",
@@ -1296,7 +1258,6 @@
       },
       "hardwareUnavailable": "Host hardware details unavailable",
       "hostLoad": {
-        "description": "Current resource usage. Updates every 10 seconds.",
         "memoryInUse": "{used} of {total} memory in use",
         "title": "Host performance",
         "unavailableDescription": "Refresh to request a new host sample.",
@@ -1325,8 +1286,7 @@
         "ready": "Ready to stream",
         "readyDetail": "Connect with Moonlight or start a stream in your browser.",
         "remoteSessionActive": "A remote session is active.",
-        "streaming": "Streaming now",
-        "hostStatus": "Host status"
+        "streaming": "Streaming now"
       },
       "refreshing": "Refreshing",
       "remoteStream": "Remote stream",
@@ -1363,15 +1323,6 @@
           "title": "Application is still running"
         }
       },
-      "quickActions": {
-        "title": "Quick access",
-        "library": "Build your library",
-        "libraryDetail": "Choose the games and apps available to your devices.",
-        "devices": "Connect your devices",
-        "devicesDetail": "Pair a Moonlight client and manage access.",
-        "settings": "Fine-tune your stream",
-        "settingsDetail": "Set up your display, audio, and input."
-      },
       "hostDetails": "Host details",
       "processor": "Processor",
       "graphics": "Graphics",
@@ -1397,7 +1348,6 @@
         "submit": "Unable to pair this device."
       },
       "form": {
-        "description": "The device name will appear in session and device lists.",
         "name_helper": "Choose a name you will recognize later.",
         "name_placeholder": "Living room TV",
         "pin_helper": "Enter up to four digits.",
@@ -1410,11 +1360,8 @@
         "connected": "{name} can now connect to this host."
       },
       "page": {
-        "description": "Approve a Moonlight client with the PIN it displays. Pairing only authorizes this host; it does not start a stream.",
-        "local_approval": "Local approval",
         "title": "Pair a device"
       },
-      "privacy": "The PIN is sent only to this Vibeshine host over the current authenticated connection.",
       "steps": {
         "approve_description": "Short PINs are submitted as four digits, including leading zeroes.",
         "approve_title": "Approve it here",
@@ -1478,7 +1425,6 @@
       "history": {
         "actions": "Actions",
         "client_and_game": "Client and game",
-        "description": "Browse completed sessions retained by this host.",
         "empty_description": "Completed streams will appear here when session history is available.",
         "empty_title": "No session history",
         "next_page": "Next page",
@@ -1550,46 +1496,36 @@
       "all_settings": "All settings",
       "categories": {
         "audio": {
-          "description": "Host capture and virtual audio-device routing.",
           "label": "Audio"
         },
         "display": {
-          "description": "Virtual screens, physical display targeting, resolution, refresh rate, and HDR.",
           "label": "Displays"
         },
         "everyday": {
-          "description": "Set up Vibeshine's virtual screens, smoother game capture, Remote Monitor, and stream automation. Use the other categories for detailed tuning.",
           "label": "Everyday setup"
         },
         "files": {
-          "description": "Paths normally managed by the installer or service.",
           "label": "Files & certificates"
         },
         "host": {
-          "description": "Identity, local behavior, history retention, and live metrics.",
           "label": "Host & diagnostics"
         },
         "input": {
-          "description": "Keyboard, pointer, controller, pen, touch, and repeat behavior.",
           "label": "Input"
         },
         "network": {
-          "description": "Listening interfaces, remote access, ports, encryption, and trusted origins.",
           "label": "Network & security"
         },
         "pacing": {
-          "description": "Capture method, frame limiting, and pacing integrations.",
           "label": "Advanced capture and pacing"
         },
         "video": {
-          "description": "Encoder selection, codec capability, bitrate, and resilience.",
           "label": "Video & quality"
         }
       },
       "categories_label": "Settings categories",
       "game_libraries": "Game library integrations",
       "dependency_inactive": "Currently inactive because “{setting}” is off or uses another mode.",
-      "description": "Make this host work the way you stream.",
       "command_editor": {
         "empty": "No commands configured yet. Use Add to create one.",
         "remove": "Remove command {number}"
@@ -1790,7 +1726,6 @@
         "browse_failed": "The host folder could not be read.",
         "browse_folder": "Folder",
         "browse_host": "Browse host",
-        "browse_host_hint": "Choose LosslessScaling.exe from the host. Browser-local files are not used.",
         "browse_loading": "Reading host folder…",
         "browse_parent": "Parent folder",
         "browse_path": "Host folder",
@@ -1799,7 +1734,6 @@
         "browse_detected": "Browse detected paths",
         "checking": "Checking…",
         "checking_description": "Checking the host for a usable installation.",
-        "choose_detected": "Choose a detected installation",
         "detected_installations": "Detected installations",
         "explicit_path_hint": "This path is saved as an explicit installation override. Clear it to return to automatic detection.",
         "hide_detected": "Hide detected paths",
@@ -2282,7 +2216,6 @@
       "save_restart_hint": "A restart will be required.",
       "saving": "Saving...",
       "search": "Search settings",
-      "search_description": "Results from every category, with their section shown for context.",
       "search_results": "Search results",
       "selected_category": "Selected category",
       "summary": {
@@ -2320,7 +2253,6 @@
       },
       "windows_display": {
         "title": "Virtual-display driver status",
-        "description": "Reports the driver observed by the host after its most recent runtime check.",
         "error_title": "Display status unavailable",
         "error_body": "The host could not refresh virtual-display status. The last observation is still shown.",
         "drivers": {
@@ -2420,27 +2352,22 @@
         "wayland_hdr_compatibility": "Use compatibility handling for HDR games on the managed Wayland display."
       },
       "links": {
-        "displays": "All display settings →",
-        "pacing": "Capture and pacing settings →",
-        "pyrowave": "PyroWave codec settings →",
-        "integrations": "Manage integrations →",
-        "remote_monitor": "All Remote Monitor settings →",
-        "video": "All video settings →",
-        "recovery": "All display recovery settings →",
-        "automation": "Host automation settings →"
+        "displays": "All display settings",
+        "pacing": "Capture and pacing settings",
+        "pyrowave": "PyroWave codec settings",
+        "integrations": "Manage integrations",
+        "remote_monitor": "All Remote Monitor settings",
+        "video": "All video settings",
+        "recovery": "All display recovery settings",
+        "automation": "Host automation settings"
       },
       "game_library_links": "Game libraries",
       "legacy_fec_zero": "The saved zero is ignored by the host. Choose 1–255% to set standard FEC."
     },
     "api_tokens": {
       "active": {
-        "active": "Active",
         "created": "Created {date}",
-        "description": "Review the tokens currently authorized to call this host.",
-        "empty_description": "Create a token above when you need a scoped integration or automation.",
         "empty_title": "No active API tokens",
-        "eyebrow": "Access inventory",
-        "filtered_empty_description": "Try a different token hash or route.",
         "filtered_empty_title": "No matching tokens",
         "result_count": "Showing {shown} of {total} tokens",
         "search_label": "Find a token",
@@ -2448,14 +2375,12 @@
         "title": "Active tokens",
         "token_label": "Token {hash}"
       },
-      "active_count": "{count} active tokens",
       "actions": {
         "add_scope": "Add scope",
         "copied": "Copied",
         "copy": "Copy token",
         "generate": "Generate API token",
         "generating": "Generating",
-        "refresh_tokens": "Refresh tokens",
         "refreshing": "Refreshing",
         "remove_scope": "Remove scope",
         "remove_scope_named": "Remove {path} scope",
@@ -2473,30 +2398,17 @@
         "tokens_unavailable": "Active tokens could not be loaded"
       },
       "builder": {
-        "description": "Create a token that can do only what your integration needs.",
         "empty_description": "Choose a route and method above to add the first scope.",
-        "empty_title": "No scopes yet",
-        "eyebrow": "Create access",
         "generate_hint": "The full token is shown once. Store it somewhere secure before dismissing this dialog.",
-        "least_privilege": "Least privilege",
-        "methods_available": "{count} available",
-        "methods_description": "Select only the HTTP methods this integration needs.",
         "methods_label": "Allowed methods",
         "no_methods": "This route has no token-eligible methods.",
         "route_count": "{count} matching routes",
-        "route_description": "Find an API route, then choose its allowed methods.",
         "route_label": "API route",
         "route_placeholder": "Select a route",
-        "route_title": "Choose a route",
         "search_label": "Filter routes",
         "search_placeholder": "Search /api/...",
-        "summary_description": "Review exactly what this token will be allowed to do.",
-        "summary_methods": "allowed methods",
-        "summary_routes": "scoped routes",
-        "summary_title": "Review access",
         "title": "Build a scoped token"
       },
-      "description": "Generate narrow API credentials for scripts, integrations, and trusted tools.",
       "errors": {
         "create": "Unable to generate this token",
         "revoke": "Unable to revoke this token",
@@ -2519,7 +2431,6 @@
         "description": "Revoke token {hash}? Any integration using it will stop working immediately.",
         "title": "Revoke API token?"
       },
-      "scope_count": "{count} selected scopes",
       "title": "API tokens",
       "unknown_date": "Creation date unavailable"
     },
@@ -2540,8 +2451,7 @@
       "theme_light": "Light",
       "workspace": "Workspace",
       "monitor": "Monitor",
-      "manage": "Manage",
-      "host_console": "Host console"
+      "manage": "Manage"
     },
     "status": {
       "needs_attention": "Needs attention",

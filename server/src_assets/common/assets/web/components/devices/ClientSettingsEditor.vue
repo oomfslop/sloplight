@@ -881,19 +881,13 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
   display: grid;
   container-name: client-settings;
   container-type: inline-size;
-  gap: var(--vs-space-24);
-  padding: var(--vs-space-24);
-  border-top: 1px solid var(--vs-color-border-subtle);
-  background: var(--vs-color-bg-subtle);
+  gap: var(--vs-space-20);
+  padding: var(--vs-space-16);
 }
 
 .client-settings-section {
   display: grid;
-  gap: var(--vs-space-12);
-  padding: var(--vs-space-16);
-  border: var(--vs-border-width) solid var(--vs-color-border-subtle);
-  border-radius: var(--vs-radius-card);
-  background: var(--vs-color-bg-surface);
+  gap: var(--vs-space-8);
 }
 
 .client-settings-section__heading {
@@ -911,16 +905,16 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
 .client-settings-section__heading p,
 .client-settings-helper,
 .client-settings-editor__footer p {
-  margin-block-start: var(--vs-space-4);
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-metadata);
-  line-height: var(--vs-type-line-height-metadata);
+  margin-block-start: var(--vs-space-2);
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-helper);
+  line-height: var(--vs-type-line-height-helper);
 }
 
 .client-display-routing {
   display: grid;
-  gap: var(--vs-space-16);
-  padding: var(--vs-space-16);
+  gap: var(--vs-space-12);
+  padding: var(--vs-space-12);
   border: var(--vs-border-width) solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-card);
   background: var(--vs-color-bg-surface);
@@ -950,8 +944,8 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
   display: flex;
   align-items: center;
   gap: var(--vs-space-8);
-  min-block-size: 44px;
-  padding: var(--vs-space-12);
+  min-block-size: var(--vs-size-control-md);
+  padding: var(--vs-space-8) var(--vs-space-12);
   border: var(--vs-border-width) solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-control);
   cursor: pointer;
@@ -1030,10 +1024,17 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
   align-items: center;
   justify-content: space-between;
   gap: var(--vs-space-16);
-  padding: var(--vs-space-12);
-  border-top: var(--vs-border-width) solid var(--vs-color-border-subtle);
+  padding: var(--vs-space-8) var(--vs-space-12);
+  border: var(--vs-border-width) solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-control);
-  background: var(--vs-color-bg-subtle);
+  background: var(--vs-color-bg-raised);
+  box-shadow: var(--vs-shadow-overlay);
+}
+
+.client-settings-editor :deep(.topology-editor) {
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .client-settings-editor__actions {
@@ -1078,9 +1079,8 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .client-settings-section,
   .client-display-routing {
-    padding: var(--vs-space-12);
+    padding: var(--vs-space-8);
   }
 
   .client-settings-editor__actions > :deep(.vs-button) {
@@ -1090,7 +1090,6 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
 
 @media (max-width: 47.999rem) {
   .client-settings-editor {
-    gap: var(--vs-space-16);
     padding: var(--vs-space-12);
   }
 }

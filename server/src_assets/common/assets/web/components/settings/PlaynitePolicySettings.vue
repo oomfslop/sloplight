@@ -32,11 +32,33 @@ const lists = [
 const suggestions = ref<Record<string, Entry[]>>({});
 const dirty = computed(() => JSON.stringify(values.value) !== JSON.stringify(original.value));
 useUnsavedChanges(computed(() => loaded.value && dirty.value));
+const copyKeys: Record<string, [string, string]> = {
+  playnite_install_dir: ['ui.settings.integrations.playnite.directory_label', ''],
+  playnite_autosync_delete_after_days: ['playnite.delete_after_days', 'playnite.delete_after_days_desc'],
+  playnite_autosync_require_replacement: [
+    'playnite.cleanup_policy',
+    'playnite.summary_keep_until_replaced',
+  ],
+  playnite_autosync_remove_uninstalled: [
+    'playnite.remove_uninstalled',
+    'playnite.remove_uninstalled_desc',
+  ],
+  playnite_fullscreen_entry_enabled: ['playnite.fullscreen_entry', 'playnite.fullscreen_entry_desc'],
+};
+function translated(key: string): string | undefined {
+  return key && (te(key) || te(key, 'en')) ? t(key) : undefined;
+}
 function label(key: string): string {
-  const candidate = `playnite.${key.replace('playnite_', '')}`;
-  return te(candidate) || te(candidate, 'en')
-    ? t(candidate)
-    : key.replace('playnite_', '').replaceAll('_', ' ');
+  const name = key.replace('playnite_', '');
+  return (
+    translated(copyKeys[key]?.[0] ?? `playnite.${name}`) ?? name.replaceAll('_', ' ')
+  );
+}
+function description(key: string): string | undefined {
+  const name = key.replace('playnite_', '');
+  return copyKeys[key]
+    ? translated(copyKeys[key][1])
+    : (translated(`playnite.${name}_desc`) ?? translated(`playnite.${name}_help`));
 }
 function entries(key: string): Entry[] {
   return Array.isArray(values.value[key]) ? (values.value[key] as Entry[]) : [];
@@ -149,23 +171,20 @@ onMounted(() => {
         :title="t(loaded ? 'ui.settings.errors.save' : 'ui.settings.errors.load')"
       />
       <fieldset :disabled="loading || saving || !loaded" class="policy-fields">
-        <div class="vs-settings-group">
+        <div class="policy-rows">
           <SettingRow
             v-for="field in playnitePolicyFields"
             :key="field.key"
-            :label="
-              field.key === 'playnite_install_dir'
-                ? t('ui.settings.integrations.playnite.directory_label')
-                : label(field.key)
-            "
+            :label="label(field.key)"
+            :description="description(field.key)"
             :control-id="field.key"
+            :stacked="field.key === 'playnite_install_dir'"
           >
-            <input
-              v-if="field.kind === 'boolean'"
-              :id="field.key"
-              v-model="values[field.key]"
-              type="checkbox"
-            />
+            <label v-if="field.kind === 'boolean'" class="vs-switch">
+              <input :id="field.key" v-model="values[field.key]" type="checkbox" />
+              <span class="vs-switch__track" aria-hidden="true" />
+              <span class="vs-sr-only">{{ label(field.key) }}</span>
+            </label>
             <SettingsIntegrationPath
               v-else-if="field.key === 'playnite_install_dir'"
               kind="playnite"
@@ -176,7 +195,7 @@ onMounted(() => {
               v-else
               :id="field.key"
               v-model="values[field.key]"
-              class="vs-input"
+              class="vs-input policy-number"
               :type="field.kind === 'number' ? 'number' : 'text'"
               :min="field.min"
               :max="field.max"
@@ -185,7 +204,10 @@ onMounted(() => {
           </SettingRow>
         </div>
         <details v-for="key in lists" :key="key" class="policy-list">
-          <summary>{{ label(key) }} ({{ entries(key).length }})</summary>
+          <summary>
+            {{ label(key) }} <span class="policy-count">{{ entries(key).length }}</span>
+          </summary>
+          <p v-if="description(key)" class="policy-hint">{{ description(key) }}</p>
           <div v-for="(entry, index) in entries(key)" :key="index" class="policy-entry">
             <label :for="`${key}-${index}`">{{ entry.name || label(key) }}</label>
             <input
@@ -198,6 +220,7 @@ onMounted(() => {
             <AppButton
               :label="t('_common.remove')"
               variant="tertiary"
+              size="compact"
               @click="remove(key, index)"
             />
           </div>
@@ -206,24 +229,32 @@ onMounted(() => {
               {{ entry.name }}
             </option>
           </datalist>
-          <AppButton :label="t('_common.add')" variant="secondary" @click="add(key)" />
+          <AppButton
+            :label="t('_common.add')"
+            icon="plus"
+            variant="secondary"
+            size="compact"
+            @click="add(key)"
+          />
         </details>
       </fieldset>
       <div class="policy-actions">
         <AppButton
           :label="t('ui.settings.reload')"
           variant="tertiary"
+          size="compact"
           :disabled="dirty || saving"
           @click="load"
         />
         <AppButton
           :label="t('ui.settings.discard')"
           variant="secondary"
+          size="compact"
           :disabled="!dirty || saving"
           @click="values = JSON.parse(JSON.stringify(original))"
         />
         <button
-          class="button button--primary"
+          class="button button--primary button--compact"
           type="submit"
           :disabled="loading || saving || !loaded || !dirty"
         >
@@ -240,13 +271,44 @@ onMounted(() => {
   margin: 0;
   min-width: 0;
 }
+.policy-rows :deep(.vs-setting-row) {
+  min-block-size: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--vs-space-16);
+  padding: var(--vs-space-8) 0;
+}
+.policy-rows :deep(.vs-setting-row--stacked) {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--vs-space-8);
+}
+.policy-rows :deep(.vs-setting-row__control) {
+  min-inline-size: auto;
+}
+.policy-number {
+  width: 5rem;
+}
 .policy-list {
-  padding: var(--vs-space-16);
-  border-bottom: 1px solid var(--vs-color-border-subtle);
+  padding-block: var(--vs-space-4);
+}
+.policy-list[open] {
+  padding-block-end: var(--vs-space-8);
 }
 summary {
   cursor: pointer;
-  margin-bottom: var(--vs-space-12);
+  padding-block: var(--vs-space-4);
+  color: var(--vs-color-text-secondary);
+  font-size: var(--vs-type-size-metadata);
+  font-weight: var(--vs-type-weight-semibold);
+}
+.policy-count {
+  margin-inline-start: var(--vs-space-4);
+  color: var(--vs-color-text-muted);
+  font-weight: var(--vs-type-weight-regular);
+}
+.policy-hint {
+  margin: 0 0 var(--vs-space-8);
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-helper);
 }
 .policy-entry {
   display: flex;
@@ -255,6 +317,11 @@ summary {
   gap: var(--vs-space-8);
   margin-bottom: var(--vs-space-8);
 }
+.policy-entry label {
+  min-width: 8rem;
+  color: var(--vs-color-text-secondary);
+  font-size: var(--vs-type-size-metadata);
+}
 .policy-entry input {
   flex: 1;
   min-width: 12rem;
@@ -262,7 +329,8 @@ summary {
 .policy-actions {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: var(--vs-space-8);
-  padding: var(--vs-space-16);
+  padding-block: var(--vs-space-8) 0;
 }
 </style>

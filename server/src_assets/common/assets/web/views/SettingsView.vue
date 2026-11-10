@@ -342,12 +342,6 @@ const everydayLibraryDestinations = computed(() =>
     ),
 );
 
-const categoryDescription = computed(() =>
-  isSearching.value
-    ? t('ui.settings.search_description')
-    : t(`ui.settings.categories.${category.value.id}.description`),
-);
-
 const filteredGroups = computed(() => {
   const query = search.value.trim().toLocaleLowerCase(locale.value);
   const categories = query ? settingsCategories : [category.value];
@@ -976,7 +970,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
     :class="{ 'settings-page--dirty': isDirty }"
     @submit.prevent="save"
   >
-    <PageHeader :title="t('ui.settings.title')" :description="t('ui.settings.description')">
+    <PageHeader :title="t('ui.settings.title')">
       <template #actions>
         <button
           class="button button--secondary"
@@ -1097,7 +1091,6 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
             <h2>
               {{ isSearching ? t('ui.settings.search_results') : categoryLabel(category.id) }}
             </h2>
-            <p>{{ categoryDescription }}</p>
           </header>
 
           <nav
@@ -1105,9 +1098,9 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
             class="settings-destinations"
             :aria-label="t('ui.settings.more_options')"
           >
-            <RouterLink v-for="item in destinationResults" :key="item.to" :to="item.to"
-              >{{ t(item.labelKey) }} →</RouterLink
-            >
+            <RouterLink v-for="item in destinationResults" :key="item.to" :to="item.to">{{
+              t(item.labelKey)
+            }}</RouterLink>
           </nav>
           <LinuxCaptureStatus
             v-if="isLinuxHost && !isSearching && ['everyday', 'display'].includes(activeCategory)"
@@ -1141,6 +1134,9 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
                 <span v-if="isSearching">{{ categoryLabel(group.categoryId) }}</span>
                 <h3>{{ groupTitle(group.id) }}</h3>
                 <p v-if="groupDescription(group.id)">{{ groupDescription(group.id) }}</p>
+                <RouterLink v-if="group.link" class="settings-more" :to="group.link">{{
+                  t(group.linkLabelKey ?? 'ui.settings.more_options')
+                }}</RouterLink>
               </component>
               <InlineAlert
                 v-if="
@@ -1419,9 +1415,6 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
                   </SettingRow>
                 </div>
               </div>
-              <RouterLink v-if="group.link" class="settings-more" :to="group.link">{{
-                t(group.linkLabelKey ?? 'ui.settings.more_options')
-              }}</RouterLink>
             </component>
             <nav
               v-if="group.id === 'everyday_integrations'"
@@ -1433,7 +1426,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
                 v-for="destination in everydayLibraryDestinations"
                 :key="destination.to"
                 :to="destination.to"
-                >{{ t(destination.labelKey) }} →</RouterLink
+                >{{ t(destination.labelKey) }}</RouterLink
               >
             </nav>
           </section>
@@ -1551,13 +1544,13 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
 .settings-tools {
   align-items: center;
   gap: var(--vs-space-12);
-  margin: var(--vs-space-24) 0;
+  margin: var(--vs-space-12) 0 var(--vs-space-16);
 }
 
 .search-field {
   position: relative;
   display: block;
-  width: min(100%, 480px);
+  width: min(100%, 360px);
 }
 
 .search-field > svg {
@@ -1571,23 +1564,21 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
 }
 
 .search-field .vs-input {
-  padding-left: var(--vs-space-40);
+  padding-left: 34px;
 }
 
 .settings-layout {
   align-items: flex-start;
-  gap: var(--vs-space-24);
+  gap: var(--vs-space-20);
 }
 
 .settings-nav {
   position: sticky;
-  top: var(--vs-space-24);
+  top: var(--vs-space-16);
   display: grid;
-  width: 176px;
-  flex: 0 0 176px;
-  gap: var(--vs-space-4);
-  padding-right: var(--vs-space-16);
-  border-right: 1px solid var(--vs-color-border-subtle);
+  width: 168px;
+  flex: 0 0 168px;
+  gap: var(--vs-space-2);
 }
 
 .settings-category-picker {
@@ -1595,10 +1586,10 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
 }
 
 .settings-nav button {
-  min-height: 40px;
-  padding: var(--vs-space-8) var(--vs-space-12);
-  font-size: var(--vs-type-size-metadata);
-  line-height: 20px;
+  min-height: 30px;
+  padding: var(--vs-space-4) var(--vs-space-12);
+  font-size: var(--vs-type-size-control);
+  line-height: 18px;
   border: 0;
   border-radius: var(--vs-radius-control);
   color: var(--vs-color-text-secondary);
@@ -1611,8 +1602,8 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
   background: var(--vs-color-bg-subtle);
 }
 .settings-nav button.settings-nav__item--active {
-  color: var(--vs-color-accent-default);
-  background: color-mix(in srgb, var(--vs-color-accent-default) 10%, transparent);
+  color: var(--vs-color-text-primary);
+  background: var(--vs-color-bg-raised);
   font-weight: var(--vs-type-weight-medium);
 }
 
@@ -1623,60 +1614,60 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
 }
 
 .settings-category-heading {
-  margin-bottom: var(--vs-space-20);
+  margin-bottom: var(--vs-space-12);
 }
 
-.settings-category-heading > span,
 .settings-section__heading > span {
-  color: var(--vs-color-accent-default);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  grid-column: 1 / -1;
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-helper);
 }
 
 .settings-category-heading h2 {
-  margin: var(--vs-space-4) 0 0;
+  margin: 0;
   font-size: var(--vs-type-size-panel);
   line-height: var(--vs-type-line-height-panel);
 }
 
-.settings-category-heading p {
-  max-width: 680px;
-  margin: var(--vs-space-4) 0 0;
-  color: var(--vs-color-text-secondary);
-}
-
 .settings-section + .settings-section,
 .danger-zone {
-  margin-top: var(--vs-space-24);
+  margin-top: var(--vs-space-20);
 }
 
 .settings-section__heading {
-  margin-bottom: var(--vs-space-12);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-auto-flow: row dense;
+  align-items: baseline;
+  column-gap: var(--vs-space-16);
+  margin-bottom: var(--vs-space-8);
 }
 
 .settings-section__alert {
-  margin-bottom: var(--vs-space-12);
+  margin-bottom: var(--vs-space-8);
 }
 
 .settings-section__heading h2,
 .settings-section__heading h3,
 .danger-zone h2 {
   margin: 0;
-  font-size: 16px;
-  line-height: 24px;
+  font-size: var(--vs-type-size-section);
+  line-height: var(--vs-type-line-height-section);
 }
 
+.settings-section__heading h3,
 .settings-section__heading p,
 .danger-zone p {
-  margin: var(--vs-space-4) 0 0;
-  color: var(--vs-color-text-secondary);
+  grid-column: 1;
+  margin: var(--vs-space-2) 0 0;
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-metadata);
+  line-height: var(--vs-type-line-height-metadata);
 }
 
 .settings-disclosure > summary {
   position: relative;
-  padding: var(--vs-space-16) var(--vs-space-48) var(--vs-space-16) var(--vs-space-20);
+  padding: var(--vs-space-12) var(--vs-space-40) var(--vs-space-12) var(--vs-space-16);
   margin-bottom: 0;
   border: 1px solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-card);
@@ -1692,7 +1683,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
 .settings-disclosure > summary::after {
   position: absolute;
   top: 50%;
-  right: var(--vs-space-20);
+  right: var(--vs-space-16);
   width: 8px;
   height: 8px;
   border-right: 2px solid var(--vs-color-text-secondary);
@@ -1740,8 +1731,8 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
 .settings-physical-display__heading h4 {
   margin: 0;
   color: var(--vs-color-text-primary);
-  font-size: 16px;
-  line-height: 22px;
+  font-size: var(--vs-type-size-control);
+  line-height: var(--vs-type-line-height-control);
 }
 
 .settings-physical-display__heading p {
@@ -1784,7 +1775,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
   align-items: center;
   justify-content: space-between;
   gap: var(--vs-space-24);
-  padding: var(--vs-space-20);
+  padding: var(--vs-space-12) var(--vs-space-16);
   border: 1px solid var(--vs-color-status-danger);
   border-radius: var(--vs-radius-card);
   background: var(--vs-color-bg-surface);
@@ -1793,14 +1784,14 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
 .save-bar {
   position: fixed;
   z-index: 15;
-  bottom: var(--vs-space-24);
+  bottom: var(--vs-space-16);
   right: var(--vs-space-32);
   left: calc(var(--vs-navigation-width-expanded) + var(--vs-space-32));
   align-items: center;
   justify-content: space-between;
   gap: var(--vs-space-24);
   width: auto;
-  padding: var(--vs-space-12) var(--vs-space-16);
+  padding: var(--vs-space-8) var(--vs-space-8) var(--vs-space-8) var(--vs-space-16);
   margin-inline: 0;
   border: 1px solid var(--vs-color-border-strong);
   border-radius: var(--vs-radius-card);
@@ -1879,9 +1870,14 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
   }
 }
 .settings-more {
-  display: block;
-  margin: var(--vs-space-12) 0;
-  color: var(--vs-color-text-secondary);
+  grid-column: 2;
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-metadata);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.settings-more:hover {
+  color: var(--vs-color-accent-default);
 }
 .settings-content
   :deep(.vs-setting-row__control > :is(input:not([type='checkbox']), select, textarea)) {
@@ -1896,12 +1892,15 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
   flex-wrap: wrap;
   align-items: center;
   gap: var(--vs-space-16);
-  margin-top: var(--vs-space-12);
+  margin-top: var(--vs-space-8);
+  font-size: var(--vs-type-size-metadata);
 }
 
 .settings-destinations {
-  display: grid;
-  gap: var(--vs-space-12);
-  margin-block: var(--vs-space-24);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--vs-space-8) var(--vs-space-16);
+  margin-block: 0 var(--vs-space-16);
+  font-size: var(--vs-type-size-metadata);
 }
 </style>

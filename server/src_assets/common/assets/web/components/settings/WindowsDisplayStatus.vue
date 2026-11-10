@@ -110,11 +110,8 @@ function isState(value: WindowsDisplayDriverState): boolean {
     aria-labelledby="windows-display-status-title"
   >
     <div class="windows-display-status__heading">
-      <UiIcon name="devices" :size="20" />
-      <div>
-        <h3 id="windows-display-status-title">{{ t('ui.settings.windows_display.title') }}</h3>
-        <p>{{ t('ui.settings.windows_display.description') }}</p>
-      </div>
+      <UiIcon name="devices" :size="16" />
+      <h3 id="windows-display-status-title">{{ t('ui.settings.windows_display.title') }}</h3>
       <StatusBadge
         v-if="!loading && !error"
         :label="stateLabel"
@@ -123,7 +120,7 @@ function isState(value: WindowsDisplayDriverState): boolean {
       />
       <button
         type="button"
-        class="button button--secondary windows-display-status__refresh"
+        class="button button--tertiary button--compact windows-display-status__refresh"
         :disabled="loading || refreshing"
         :aria-busy="refreshing"
         @click="emit('refresh')"
@@ -152,10 +149,12 @@ function isState(value: WindowsDisplayDriverState): boolean {
       {{ error }}
     </InlineAlert>
     <div v-else class="windows-display-status__body">
-      <p class="windows-display-status__configured">
-        {{ t('ui.settings.windows_display.configured', { driver: driverName(selectedDriver) }) }}
+      <p class="windows-display-status__drivers">
+        <strong>{{ observedDriverText }}</strong>
+        <span>{{
+          t('ui.settings.windows_display.configured', { driver: driverName(selectedDriver) })
+        }}</span>
       </p>
-      <p class="windows-display-status__observed">{{ observedDriverText }}</p>
       <InlineAlert
         class="windows-display-status__alert"
         :tone="stateTone === 'neutral' ? 'info' : stateTone"
@@ -179,7 +178,7 @@ function isState(value: WindowsDisplayDriverState): boolean {
 
 <style scoped>
 .windows-display-status {
-  margin-bottom: var(--vs-space-24);
+  margin-bottom: var(--vs-space-20);
   border: 1px solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-card);
   background: var(--vs-color-bg-surface);
@@ -187,66 +186,45 @@ function isState(value: WindowsDisplayDriverState): boolean {
 
 .windows-display-status__heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   flex-wrap: wrap;
-  gap: var(--vs-space-12);
-  padding: var(--vs-space-16) var(--vs-space-20);
-}
-
-.windows-display-status__heading > div {
-  min-width: 12rem;
-  flex: 1;
+  gap: var(--vs-space-8);
+  padding: var(--vs-space-8) var(--vs-space-8) var(--vs-space-4) var(--vs-space-16);
 }
 
 .windows-display-status__heading h3 {
+  flex: 1;
   margin: 0;
   font-size: var(--vs-type-size-control);
 }
 
-.windows-display-status__heading p,
-.windows-display-status__body p {
-  margin: var(--vs-space-4) 0 0;
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-control);
-}
-
 .windows-display-status__body {
-  padding: 0 var(--vs-space-20) var(--vs-space-20);
+  display: grid;
+  gap: var(--vs-space-8);
+  padding: 0 var(--vs-space-16) var(--vs-space-12);
 }
 
-.windows-display-status__observed {
-  margin-bottom: var(--vs-space-12) !important;
-  color: var(--vs-color-text-primary) !important;
+.windows-display-status__body p {
+  margin: 0;
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-metadata);
+}
+
+.windows-display-status__drivers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--vs-space-4) var(--vs-space-12);
+}
+
+.windows-display-status__drivers strong {
+  color: var(--vs-color-text-primary);
   font-weight: var(--vs-type-weight-medium);
-}
-
-.windows-display-status__alert {
-  margin-top: var(--vs-space-12);
 }
 
 .windows-display-status__code {
   display: block;
-  margin-top: var(--vs-space-8);
+  margin-top: var(--vs-space-4);
   color: var(--vs-color-text-muted);
-  font-size: 12px;
-}
-
-.windows-display-status__mismatch,
-.windows-display-status__next-step {
-  margin-top: var(--vs-space-12) !important;
-}
-
-@media (max-width: 560px) {
-  .windows-display-status__heading {
-    padding: var(--vs-space-16);
-  }
-
-  .windows-display-status__body {
-    padding-inline: var(--vs-space-16);
-  }
-
-  .windows-display-status__heading .vs-status-badge {
-    flex-basis: 100%;
-  }
+  font-size: var(--vs-type-size-helper);
 }
 </style>

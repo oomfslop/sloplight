@@ -442,6 +442,13 @@ onBeforeUnmount(() => {
         :aria-describedby="`${inputId}-status`"
         @input="updatePath(($event.target as HTMLInputElement).value)"
       />
+      <AppButton
+        v-if="props.kind !== 'rtss'"
+        variant="secondary"
+        icon="library"
+        :label="t('ui.settings.integrations.browse_host')"
+        @click="openBrowse"
+      />
     </div>
 
     <p v-if="props.kind === 'rtss'" class="integration-path__hint">
@@ -454,45 +461,22 @@ onBeforeUnmount(() => {
       {{ t('ui.settings.integrations.explicit_path_hint') }}
     </p>
 
-    <div v-if="props.kind !== 'rtss'" class="integration-path__browse">
-      <div class="integration-path__browse-heading">
-        <strong v-if="candidates.length">{{
-          t('ui.settings.integrations.detected_installations')
-        }}</strong>
-        <AppButton
-          variant="tertiary"
-          size="compact"
-          icon="library"
-          :label="t('ui.settings.integrations.browse_host')"
-          @click="openBrowse"
-        />
-      </div>
-      <div v-if="candidates.length" class="integration-path__browse-body">
-        <label class="vs-sr-only" :for="`${inputId}-candidates`">
-          {{ t('ui.settings.integrations.choose_detected') }}
-        </label>
-        <select :id="`${inputId}-candidates`" v-model="candidateSelection" class="vs-select">
-          <option v-for="candidate in candidates" :key="candidate" :value="candidate">
-            {{ candidate }}
-          </option>
-        </select>
-        <AppButton
-          variant="secondary"
-          size="compact"
-          icon="check"
-          :label="t('ui.settings.integrations.use_selected')"
-          @click="useDetectedPath"
-        />
-      </div>
-      <p class="integration-path__browse-hint">
-        {{
-          t(
-            props.kind === 'playnite'
-              ? 'ui.settings.integrations.playnite.directory_hint'
-              : 'ui.settings.integrations.browse_host_hint',
-          )
-        }}
-      </p>
+    <div v-if="props.kind !== 'rtss' && candidates.length" class="integration-path__browse-body">
+      <label class="integration-path__hint" :for="`${inputId}-candidates`">
+        {{ t('ui.settings.integrations.detected_installations') }}
+      </label>
+      <select :id="`${inputId}-candidates`" v-model="candidateSelection" class="vs-select">
+        <option v-for="candidate in candidates" :key="candidate" :value="candidate">
+          {{ candidate }}
+        </option>
+      </select>
+      <AppButton
+        variant="secondary"
+        size="compact"
+        icon="check"
+        :label="t('ui.settings.integrations.use_selected')"
+        @click="useDetectedPath"
+      />
     </div>
 
     <dialog
@@ -663,7 +647,6 @@ onBeforeUnmount(() => {
 .integration-path__status,
 .integration-path__status-copy,
 .integration-path__actions,
-.integration-path__browse-heading,
 .integration-path__browse-body,
 .integration-path__dialog-heading,
 .integration-path__dialog-toolbar,
@@ -702,11 +685,14 @@ onBeforeUnmount(() => {
 }
 
 .integration-path__input-row {
+  display: flex;
   min-width: 0;
+  gap: var(--vs-space-8);
 }
 
 .integration-path__input-row .vs-input {
-  width: 100%;
+  min-width: 0;
+  flex: 1;
 }
 
 .integration-path__hint {
@@ -716,32 +702,9 @@ onBeforeUnmount(() => {
   line-height: 17px;
 }
 
-.integration-path__browse {
-  padding: var(--vs-space-8) var(--vs-space-12);
-  border: 1px solid var(--vs-color-border-subtle);
-  border-radius: var(--vs-radius-control);
-  background: var(--vs-color-bg-subtle);
-}
-
-.integration-path__browse-heading {
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--vs-space-12);
-  color: var(--vs-color-text-secondary);
-  font-size: 12px;
-}
-
-.integration-path__browse-hint {
-  margin: var(--vs-space-4) 0 0;
-  color: var(--vs-color-text-muted);
-  font-size: 12px;
-  line-height: 17px;
-}
-
 .integration-path__browse-body {
   align-items: center;
   gap: var(--vs-space-8);
-  margin-top: var(--vs-space-8);
 }
 
 .integration-path__browse-body .vs-select {

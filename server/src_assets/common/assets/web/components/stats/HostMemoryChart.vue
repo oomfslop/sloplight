@@ -299,7 +299,8 @@ function value(value: number | null | undefined): string {
   color: var(--vs-color-text-muted);
   font-size: var(--vs-type-size-helper);
   transform: translate(-50%, -50%);
-  white-space: nowrap;
+  width: 80%;
+  text-align: center;
 }
 .host-memory-chart__line {
   stroke-width: 2;

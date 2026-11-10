@@ -50,6 +50,9 @@ const loading = ref(true);
 const refreshing = ref(false);
 const fetchErrors = ref<string[]>([]);
 const lastUpdatedAt = ref<number | null>(null);
+const devices = ref<{ uuid: string; name: string; enabled: boolean; connected: boolean }[] | null>(
+  null,
+);
 let pollTimer: number | undefined;
 
 function errorMessage(cause: unknown, fallback: string): string {
@@ -125,10 +128,11 @@ async function refresh(silent = false): Promise<void> {
     apiGet<SessionStatus>('/api/session/status'),
     apiGet<HostStatsSnapshot>('/api/host/stats'),
     apiGet<HostInfo>('/api/host/info'),
+    apiGet<{ named_certs?: Record<string, unknown>[] }>('/api/clients/list'),
   ]);
 
   const nextErrors: string[] = [];
-  const [sessionResult, statsResult, infoResult] = results;
+  const [sessionResult, statsResult, infoResult, devicesResult] = results;
 
   if (sessionResult.status === 'fulfilled') {
     session.value = sessionResult.value;
@@ -148,6 +152,17 @@ async function refresh(silent = false): Promise<void> {
     hostInfo.value = infoResult.value;
   } else {
     nextErrors.push(errorMessage(infoResult.reason, t('ui.overview.errors.hostInfo')));
+  }
+
+  if (devicesResult.status === 'fulfilled') {
+    devices.value = (devicesResult.value.named_certs ?? []).map((device) => ({
+      uuid: String(device.uuid ?? ''),
+      name: String(device.name ?? ''),
+      enabled: device.enabled !== false,
+      connected: device.connected === true,
+    }));
+  } else {
+    nextErrors.push(errorMessage(devicesResult.reason, t('ui.overview.errors.pairedDevices')));
   }
 
   // The system store discovers metadata independently; a display-driver wait
@@ -285,11 +300,11 @@ const primaryAction = computed(() => {
     } as const;
   return { to: '/pair', label: t('ui.overview.actions.pairDevice'), icon: 'plus' } as const;
 });
-const quickActions = [
-  { key: 'library', to: '/library', icon: 'library' },
-  { key: 'devices', to: '/devices', icon: 'devices' },
-  { key: 'settings', to: '/settings', icon: 'settings' },
-] as const;
+const sortedDevices = computed(() =>
+  [...(devices.value ?? [])].sort(
+    (a, b) => Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name),
+  ),
+);
 const metrics = computed(() => [
   { label: t('host.cpu'), value: hostStats.value?.cpu_percent },
   { label: t('host.gpu'), value: hostStats.value?.gpu_percent },
@@ -328,7 +343,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page page--wide overview-page">
-    <PageHeader :title="t('ui.overview.title')" :description="t('ui.overview.description')">
+    <PageHeader :title="t('ui.overview.title')">
       <template #actions>
         <div class="overview-refresh">
           <span class="overview-updated">{{
@@ -346,10 +361,6 @@ onBeforeUnmount(() => {
       </template>
     </PageHeader>
     <div class="visually-hidden" aria-live="polite" aria-atomic="true">{{ readiness.label }}</div>
-    <VirtualDisplayRecovery
-      v-if="displayRecoverySupported(hostPlatform || system.metadata?.platform || '')"
-      @recovered="refresh(true)"
-    />
     <template v-if="loading">
       <LoadingSkeleton variant="block" height="184px" :label="t('ui.overview.loadingReadiness')" />
       <LoadingSkeleton variant="block" height="320px" :label="t('ui.overview.loadingReadiness')" />
@@ -362,12 +373,9 @@ onBeforeUnmount(() => {
       >
         <div class="readiness-panel__state">
           <span class="readiness-panel__icon" aria-hidden="true"
-            ><UiIcon :name="readinessIcon" :size="28"
+            ><UiIcon :name="readinessIcon" :size="18"
           /></span>
           <div class="readiness-panel__copy">
-            <span class="readiness-panel__eyebrow">{{
-              t('ui.overview.readiness.hostStatus')
-            }}</span>
             <h2 id="readiness-title">{{ readiness.label }}</h2>
             <p>{{ readiness.detail }}</p>
             <p v-if="isStreaming" class="readiness-panel__sessions">
@@ -383,7 +391,11 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="readiness-panel__actions">
-          <RouterLink class="button button--primary" :to="primaryAction.to">
+          <RouterLink
+            class="button"
+            :class="readiness.tone === 'warning' ? 'button--primary' : 'button--secondary'"
+            :to="primaryAction.to"
+          >
             <UiIcon :name="primaryAction.icon" />{{ primaryAction.label }}
           </RouterLink>
           <RouterLink v-if="!isStreaming" class="button button--secondary" to="/stream">
@@ -434,14 +446,8 @@ onBeforeUnmount(() => {
           <div class="overview-panel__heading">
             <div>
               <h2 id="host-metrics-title">{{ t('ui.overview.hostLoad.title') }}</h2>
-              <p :class="{ 'overview-stale': statsStale && hostStats }">
-                {{
-                  t(
-                    statsStale && hostStats
-                      ? 'ui.overview.hostLoad.staleDescription'
-                      : 'ui.overview.hostLoad.description',
-                  )
-                }}
+              <p v-if="statsStale && hostStats" class="overview-stale">
+                {{ t('ui.overview.hostLoad.staleDescription') }}
               </p>
             </div>
             <RouterLink class="overview-detail-link" to="/stats"
@@ -494,23 +500,39 @@ onBeforeUnmount(() => {
           </dl>
         </section>
 
-        <section class="overview-panel workspace-panel" aria-labelledby="workspace-title">
+        <section class="overview-panel" aria-labelledby="devices-title">
           <div class="overview-panel__heading">
-            <h2 id="workspace-title">{{ t('ui.overview.quickActions.title') }}</h2>
+            <h2 id="devices-title">{{ t('ui.overview.devices.title') }}</h2>
+            <RouterLink class="overview-detail-link" to="/devices"
+              >{{ t('ui.overview.actions.manageDevices') }}<UiIcon name="chevron-right"
+            /></RouterLink>
           </div>
-          <RouterLink
-            v-for="action in quickActions"
-            :key="action.key"
-            class="workspace-link"
-            :to="action.to"
+          <ul v-if="sortedDevices.length" class="device-list">
+            <li v-for="device in sortedDevices" :key="device.uuid">
+              <UiIcon name="devices" :size="16" />
+              <span class="device-list__name">{{ device.name || device.uuid }}</span>
+              <span
+                v-if="device.connected"
+                class="device-list__state device-list__state--streaming"
+                >{{ t('ui.devices.status.streaming') }}</span
+              >
+              <span v-else-if="!device.enabled" class="device-list__state device-list__state--blocked">{{
+                t('ui.devices.status.blocked')
+              }}</span>
+            </li>
+          </ul>
+          <EmptyState
+            v-else-if="devices"
+            compact
+            icon="devices"
+            :title="t('ui.overview.devices.emptyTitle')"
           >
-            <span class="workspace-link__icon"><UiIcon :name="action.icon" :size="20" /></span>
-            <span class="workspace-link__copy"
-              ><strong>{{ t(`ui.overview.quickActions.${action.key}`) }}</strong
-              ><span>{{ t(`ui.overview.quickActions.${action.key}Detail`) }}</span></span
-            >
-            <UiIcon name="chevron-right" :size="16" />
-          </RouterLink>
+            <template #actions>
+              <RouterLink class="button button--secondary button--compact" to="/pair">
+                <UiIcon name="plus" />{{ t('ui.overview.actions.pairDevice') }}
+              </RouterLink>
+            </template>
+          </EmptyState>
         </section>
       </div>
       <LinuxCaptureStatus
@@ -522,40 +544,44 @@ onBeforeUnmount(() => {
             : undefined
         "
       />
-      <footer class="overview-footer">
-        <span
-          >{{ t('ui.overview.installedVersion') }}
-          <strong>{{ system.metadata?.version || t('_common.unknown') }}</strong></span
-        >
-        <nav :aria-label="t('ui.overview.support')">
-          <a
-            href="https://github.com/Nonary/vibeshine/issues/new/choose"
-            target="_blank"
-            rel="noopener noreferrer"
-            >{{ t('ui.overview.actions.reportBug') }}<UiIcon name="external-link" :size="14"
-          /></a>
-          <a
-            href="https://github.com/Nonary/vibeshine/releases/latest"
-            target="_blank"
-            rel="noopener noreferrer"
-            >{{ t('ui.overview.actions.checkUpdates') }}<UiIcon name="external-link" :size="14"
-          /></a>
-        </nav>
-      </footer>
     </template>
+    <VirtualDisplayRecovery
+      v-if="displayRecoverySupported(hostPlatform || system.metadata?.platform || '')"
+      @recovered="refresh(true)"
+    />
+    <footer class="overview-footer">
+      <span
+        >{{ t('ui.overview.installedVersion') }}
+        <strong>{{ system.metadata?.version || t('_common.unknown') }}</strong></span
+      >
+      <nav :aria-label="t('ui.overview.support')">
+        <a
+          href="https://github.com/Nonary/vibeshine/issues/new/choose"
+          target="_blank"
+          rel="noopener noreferrer"
+          >{{ t('ui.overview.actions.reportBug') }}<UiIcon name="external-link" :size="14"
+        /></a>
+        <a
+          href="https://github.com/Nonary/vibeshine/releases/latest"
+          target="_blank"
+          rel="noopener noreferrer"
+          >{{ t('ui.overview.actions.checkUpdates') }}<UiIcon name="external-link" :size="14"
+        /></a>
+      </nav>
+    </footer>
   </div>
 </template>
 
 <style scoped>
 .overview-page {
   display: grid;
-  gap: var(--vs-space-24);
+  gap: var(--vs-space-16);
 }
 .overview-refresh {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--vs-space-16);
+  gap: var(--vs-space-12);
 }
 .overview-updated {
   color: var(--vs-color-text-muted);
@@ -571,11 +597,11 @@ onBeforeUnmount(() => {
 .readiness-panel {
   --readiness-color: var(--vs-color-status-success);
   display: flex;
-  min-height: 184px;
   align-items: center;
   justify-content: space-between;
-  gap: var(--vs-space-32);
-  padding: var(--vs-space-32);
+  gap: var(--vs-space-16);
+  padding: var(--vs-space-12) var(--vs-space-16);
+  border-left: 3px solid var(--readiness-color);
 }
 .readiness-panel[data-tone='info'] {
   --readiness-color: var(--vs-color-status-info);
@@ -590,74 +616,64 @@ onBeforeUnmount(() => {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: var(--vs-space-20);
+  gap: var(--vs-space-12);
 }
 .readiness-panel__copy {
+  display: flex;
   min-width: 0;
-}
-.readiness-panel__eyebrow {
-  color: var(--readiness-color);
-  font-size: var(--vs-type-size-metadata);
-  font-weight: var(--vs-type-weight-medium);
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--vs-space-4) var(--vs-space-12);
 }
 .readiness-panel__icon {
-  display: grid;
-  width: var(--vs-space-64);
-  height: var(--vs-space-64);
   flex: none;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--readiness-color) 22%, transparent);
-  border-radius: var(--vs-radius-dialog);
-  background: color-mix(in srgb, var(--readiness-color) 8%, transparent);
   color: var(--readiness-color);
 }
 .readiness-panel h2 {
-  margin: var(--vs-space-4) 0 var(--vs-space-8);
-  font-size: 28px;
-  line-height: 36px;
+  font-size: var(--vs-type-size-section);
+  line-height: var(--vs-type-line-height-section);
 }
 .readiness-panel p {
-  max-width: 32rem;
   color: var(--vs-color-text-secondary);
   font-size: var(--vs-type-size-control);
 }
 .readiness-panel__sessions {
-  margin-top: var(--vs-space-8);
+  color: var(--vs-color-text-muted);
 }
 .readiness-panel__actions {
   display: flex;
   flex: 0 0 auto;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: var(--vs-space-8);
 }
 .overview-notices {
   display: grid;
-  gap: var(--vs-space-12);
+  gap: var(--vs-space-8);
 }
 .overview-vigem-version {
   color: var(--vs-color-text-muted);
 }
 .overview-detail-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
-  gap: var(--vs-space-24);
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--vs-space-16);
 }
 .overview-panel {
-  padding: var(--vs-space-24);
+  padding: var(--vs-space-16);
 }
 .overview-panel__heading {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: baseline;
   justify-content: space-between;
-  gap: var(--vs-space-12);
+  gap: var(--vs-space-8);
 }
 .overview-panel h2 {
-  font-size: 16px;
-  line-height: 24px;
+  font-size: var(--vs-type-size-section);
+  line-height: var(--vs-type-line-height-section);
 }
 .overview-panel__heading p {
-  margin-top: var(--vs-space-4);
+  flex-basis: 100%;
   color: var(--vs-color-text-muted);
   font-size: var(--vs-type-size-metadata);
 }
@@ -667,37 +683,36 @@ onBeforeUnmount(() => {
 .overview-detail-link {
   display: inline-flex;
   align-items: center;
-  gap: var(--vs-space-4);
-  font-size: 12px;
+  gap: var(--vs-space-2);
+  font-size: var(--vs-type-size-metadata);
   text-decoration: none;
 }
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--vs-space-20);
-  margin-top: var(--vs-space-32);
+  gap: var(--vs-space-16);
+  margin-top: var(--vs-space-16);
 }
 .metric-grid > div {
   min-width: 0;
 }
 .metric-grid dt {
-  color: var(--vs-color-text-secondary);
+  color: var(--vs-color-text-muted);
   font-size: var(--vs-type-size-metadata);
 }
 .metric-grid dd {
-  margin: var(--vs-space-8) 0 var(--vs-space-16);
-  font-size: 28px;
-  line-height: 36px;
+  margin: var(--vs-space-2) 0 var(--vs-space-8);
+  font-size: 22px;
+  line-height: 28px;
   font-weight: var(--vs-type-weight-medium);
-  letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
 }
 .metric-grid .metric--unavailable dd {
-  font-size: var(--vs-type-size-helper);
-  letter-spacing: normal;
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-metadata);
 }
 .metric-track {
-  height: 4px;
+  height: 3px;
   overflow: hidden;
   border-radius: var(--vs-radius-pill);
   background: var(--vs-color-border-subtle);
@@ -712,15 +727,15 @@ onBeforeUnmount(() => {
   background: var(--vs-color-status-warning);
 }
 .metric-footnote {
-  margin-top: var(--vs-space-16);
+  margin-top: var(--vs-space-12);
   color: var(--vs-color-text-muted);
   font-size: var(--vs-type-size-helper);
 }
 .host-details {
   display: grid;
-  gap: var(--vs-space-12);
-  padding-top: var(--vs-space-20);
-  margin-top: var(--vs-space-24);
+  gap: var(--vs-space-4);
+  padding-top: var(--vs-space-12);
+  margin-top: var(--vs-space-16);
   border-top: 1px solid var(--vs-color-border-subtle);
   font-size: var(--vs-type-size-metadata);
 }
@@ -728,7 +743,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  gap: var(--vs-space-8) var(--vs-space-16);
+  gap: var(--vs-space-4) var(--vs-space-16);
 }
 .host-details dt {
   color: var(--vs-color-text-muted);
@@ -737,53 +752,39 @@ onBeforeUnmount(() => {
   color: var(--vs-color-text-secondary);
   overflow-wrap: anywhere;
 }
-.workspace-panel {
-  padding-bottom: var(--vs-space-12);
+.device-list {
+  display: grid;
+  margin: var(--vs-space-8) 0 0;
+  padding: 0;
+  list-style: none;
 }
-.workspace-panel .overview-panel__heading {
-  margin-bottom: var(--vs-space-12);
-}
-.workspace-link {
+.device-list li {
   display: flex;
+  min-height: 34px;
   align-items: center;
-  gap: var(--vs-space-16);
-  padding: var(--vs-space-16) 0;
+  gap: var(--vs-space-8);
   color: var(--vs-color-text-muted);
-  text-decoration: none;
+  font-size: var(--vs-type-size-control);
 }
-.workspace-link + .workspace-link {
+.device-list li + li {
   border-top: 1px solid var(--vs-color-border-subtle);
 }
-.workspace-link__icon {
-  display: grid;
-  flex: none;
-  width: 40px;
-  height: 40px;
-  place-items: center;
-  background: var(--vs-color-bg-subtle);
-  border-radius: var(--vs-radius-control);
-  color: var(--vs-color-text-secondary);
-}
-.workspace-link__copy {
+.device-list__name {
   min-width: 0;
   flex: 1;
-}
-.workspace-link strong {
-  display: block;
+  overflow: hidden;
   color: var(--vs-color-text-primary);
-  font-size: var(--vs-type-size-control);
-  font-weight: var(--vs-type-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.workspace-link__copy > span {
-  display: block;
-  margin-top: var(--vs-space-4);
-  font-size: var(--vs-type-size-metadata);
-  line-height: 20px;
+.device-list__state {
+  font-size: var(--vs-type-size-helper);
 }
-.workspace-link:hover strong,
-.workspace-link:hover > svg,
-.workspace-link:hover .workspace-link__icon {
-  color: var(--vs-color-accent-default);
+.device-list__state--streaming {
+  color: var(--vs-color-status-success);
+}
+.device-list__state--blocked {
+  color: var(--vs-color-status-danger);
 }
 .overview-page :deep(.linux-capture) {
   margin-bottom: 0;
@@ -798,63 +799,40 @@ onBeforeUnmount(() => {
   font-size: var(--vs-type-size-helper);
 }
 .overview-footer strong {
-  margin-left: var(--vs-space-8);
+  margin-left: var(--vs-space-4);
   font-weight: var(--vs-type-weight-medium);
   color: var(--vs-color-text-secondary);
 }
 .overview-footer nav {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--vs-space-24);
+  gap: var(--vs-space-16);
 }
 .overview-footer a {
   display: inline-flex;
   align-items: center;
-  gap: var(--vs-space-8);
+  gap: var(--vs-space-4);
   color: var(--vs-color-text-muted);
   text-decoration: none;
 }
 .overview-footer a:hover {
   color: var(--vs-color-accent-default);
 }
-@media (max-width: 1199px) {
+@media (max-width: 1023px) {
   .overview-detail-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 @media (max-width: 767px) {
   .readiness-panel {
-    padding: var(--vs-space-24);
     align-items: stretch;
     flex-direction: column;
-    gap: var(--vs-space-24);
-  }
-  .readiness-panel__state {
-    align-items: flex-start;
-  }
-  .readiness-panel__icon {
-    width: 44px;
-    height: 44px;
-  }
-  .readiness-panel h2 {
-    font-size: 24px;
-    line-height: 32px;
-  }
-  .overview-panel {
-    padding: var(--vs-space-20);
   }
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--vs-space-24);
-  }
-}
-@media (max-width: 359px) {
-  .readiness-panel__state {
-    flex-direction: column;
   }
 }
 @media (forced-colors: active) {
-  .readiness-panel__icon,
   .metric-track {
     border: 1px solid CanvasText;
   }

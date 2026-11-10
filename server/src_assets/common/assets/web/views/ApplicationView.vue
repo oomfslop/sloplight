@@ -3091,9 +3091,6 @@ onBeforeUnmount(() => {
   <div class="vs-page application-page">
     <PageHeader
       :title="pageTitle"
-      :description="
-        t(isNew ? 'ui.application.page.addDescription' : 'ui.application.page.editDescription')
-      "
     >
       <template #meta>
         <StatusBadge v-if="isDirty" tone="warning">
@@ -3180,10 +3177,9 @@ onBeforeUnmount(() => {
       <section class="editor-section" aria-labelledby="identity-heading">
         <div class="editor-section__heading">
           <h2 id="identity-heading">{{ t('ui.application.sections.identity.title') }}</h2>
-          <p>{{ t('ui.application.sections.identity.description') }}</p>
         </div>
         <div class="editor-group editor-grid">
-          <div class="vs-field editor-field editor-field--wide">
+          <div class="vs-field editor-field" :class="{ 'editor-field--wide': isNew }">
             <label class="vs-field__label" for="app-name">
               {{ t('ui.application.fields.name.label') }}
             </label>
@@ -3340,7 +3336,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <label v-if="!isNew" class="vs-field editor-field editor-field--wide" for="app-uuid">
+          <label v-if="!isNew" class="vs-field editor-field" for="app-uuid">
             <span class="vs-field__label">{{ t('ui.application.fields.uuid.label') }}</span>
             <input
               id="app-uuid"
@@ -3350,11 +3346,8 @@ onBeforeUnmount(() => {
               type="text"
               readonly
               :aria-invalid="Boolean(errors.uuid)"
-              :aria-describedby="errors.uuid ? 'app-uuid-error' : 'app-uuid-help'"
+              :aria-describedby="errors.uuid ? 'app-uuid-error' : undefined"
             />
-            <span id="app-uuid-help" class="vs-field__helper">
-              {{ t('ui.application.fields.uuid.help') }}
-            </span>
             <span v-if="errors.uuid" id="app-uuid-error" class="vs-field__error">{{
               errors.uuid
             }}</span>
@@ -3365,7 +3358,6 @@ onBeforeUnmount(() => {
       <section class="editor-section" aria-labelledby="execution-heading">
         <div class="editor-section__heading">
           <h2 id="execution-heading">{{ t('ui.application.sections.execution.title') }}</h2>
-          <p>{{ t('ui.application.sections.execution.description') }}</p>
         </div>
         <div
           class="editor-group editor-execution-layout"
@@ -3596,9 +3588,8 @@ onBeforeUnmount(() => {
           </h2>
           <p>{{ t('apps.framegen.kind_hint') }}</p>
         </div>
-        <div class="editor-group editor-grid">
-          <label class="vs-field editor-field editor-field--full" for="app-frame-mode">
-            <span class="vs-field__label">{{ t('ui.application.fields.frameMode.label') }}</span>
+        <div class="vs-settings-group framegen-group">
+          <SettingRow :label="t('ui.application.fields.frameMode.label')" control-id="app-frame-mode">
             <select id="app-frame-mode" v-model="form.frameGenerationMode" class="vs-select">
               <option
                 v-if="optionIsCustom(frameGenerationModes, form.frameGenerationMode)"
@@ -3614,7 +3605,7 @@ onBeforeUnmount(() => {
                 {{ option.label }}
               </option>
             </select>
-          </label>
+          </SettingRow>
 
           <SettingRow
             v-if="isWindowsHost"
@@ -3622,27 +3613,20 @@ onBeforeUnmount(() => {
             :description="t('apps.dualsense_haptics_desc')"
             control-id="app-dualsense-haptics"
           >
-            <label class="vs-checkbox">
+            <label class="vs-switch">
               <input id="app-dualsense-haptics" v-model="form.dualsenseHaptics" type="checkbox" />
-              <span>{{ t('apps.dualsense_haptics') }}</span>
+              <span class="vs-switch__track" aria-hidden="true" />
+              <span class="vs-sr-only">{{ t('apps.dualsense_haptics') }}</span>
             </label>
           </SettingRow>
-          <div v-if="isWindowsHost" class="lossless-editor editor-field--full">
-            <div class="lossless-editor__heading">
-              <div>
-                <h3>{{ t('ui.application.options.frameMode.lossless') }}</h3>
-                <p>{{ t('ui.integrations.lossless.shortDescription') }}</p>
-              </div>
-              <StatusBadge
-                v-if="
-                  form.losslessScalingEnabled || form.frameGenerationMode === 'lossless-scaling'
-                "
-                :label="t('apps.framegen.tag_lossless_active')"
-                tone="info"
-                compact
-              />
-            </div>
-
+          <section
+            v-if="isWindowsHost"
+            class="lossless-editor"
+            aria-labelledby="lossless-editor-heading"
+          >
+            <h3 id="lossless-editor-heading" class="vs-sr-only">
+              {{ t('ui.application.options.frameMode.lossless') }}
+            </h3>
             <SettingRow
               :label="t('ui.application.fields.losslessEnabled.label')"
               :description="t('ui.application.fields.losslessEnabled.description')"
@@ -3974,7 +3958,7 @@ onBeforeUnmount(() => {
                 </label>
               </section>
             </div>
-          </div>
+          </section>
 
           <div v-if="frameGenerationEnabled" class="framegen-health editor-field--full">
             <div class="framegen-health__heading">
@@ -4189,9 +4173,8 @@ onBeforeUnmount(() => {
       <section class="editor-section" aria-labelledby="display-heading">
         <div class="editor-section__heading">
           <h2 id="display-heading">{{ t('ui.application.sections.display.title') }}</h2>
-          <p>{{ t('ui.application.sections.display.description') }}</p>
         </div>
-        <div class="vs-settings-group">
+        <div class="vs-settings-group framegen-group">
           <SettingRow
             :label="t('config.prefer_10bit_sdr')"
             :description="t('config.app_prefer_10bit_sdr_desc')"
@@ -4388,7 +4371,10 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <details class="editor-section editor-section--disclosure" :open="!isProviderLinked">
+      <component
+        :is="isProviderLinked ? 'details' : 'section'"
+        class="editor-section editor-section--disclosure"
+      >
         <summary v-if="isProviderLinked" class="editor-section__summary">
           <span>{{ t('ui.application.sections.commands.advancedTitle') }}</span>
           <small>{{ t('ui.application.sections.commands.advancedDescription') }}</small>
@@ -4396,7 +4382,6 @@ onBeforeUnmount(() => {
         <div class="editor-section__heading editor-section__heading--actions">
           <div>
             <h2 id="commands-heading">{{ t('ui.application.sections.commands.title') }}</h2>
-            <p>{{ t('ui.application.sections.commands.description') }}</p>
           </div>
           <AppButton
             icon="plus"
@@ -4454,25 +4439,16 @@ onBeforeUnmount(() => {
           />
           <span class="vs-field__helper">{{ t('ui.application.fields.detached.help') }}</span>
         </label>
-      </details>
+      </component>
 
       <section class="editor-section" aria-labelledby="overrides-heading">
         <div class="editor-section__heading">
           <h2 id="overrides-heading">{{ t('apps.overrides.title') }}</h2>
-          <p>
-            {{
-              t('apps.overrides.adjustment_hint', { scope: t('apps.overrides.scope_application') })
-            }}
-          </p>
         </div>
         <div class="application-overrides" aria-labelledby="overrides-heading">
           <aside class="application-overrides__catalog" aria-labelledby="override-catalog-heading">
             <div class="application-overrides__pane-heading">
-              <span class="application-overrides__step" aria-hidden="true">1</span>
-              <div>
-                <h3 id="override-catalog-heading">{{ t('apps.overrides.browse_available') }}</h3>
-                <p>{{ t('apps.overrides.browse_available_hint') }}</p>
-              </div>
+              <h3 id="override-catalog-heading">{{ t('apps.overrides.browse_available') }}</h3>
             </div>
 
             <div class="application-overrides__catalog-tools">
@@ -4558,12 +4534,8 @@ onBeforeUnmount(() => {
           </aside>
 
           <div class="application-overrides__editor" aria-labelledby="override-editor-heading">
-            <div class="application-overrides__pane-heading application-overrides__editor-heading">
-              <span class="application-overrides__step" aria-hidden="true">2</span>
-              <div>
-                <h3 id="override-editor-heading">{{ t('apps.overrides.active_overrides') }}</h3>
-                <p>{{ t('apps.overrides.new_settings_hint') }}</p>
-              </div>
+            <div class="application-overrides__pane-heading">
+              <h3 id="override-editor-heading">{{ t('apps.overrides.active_overrides') }}</h3>
               <StatusBadge
                 tone="neutral"
                 compact
@@ -4669,9 +4641,6 @@ onBeforeUnmount(() => {
               </section>
             </div>
             <div v-else class="application-overrides__empty">
-              <span class="application-overrides__empty-icon" aria-hidden="true">
-                <UiIcon name="settings" :size="20" />
-              </span>
               <strong>{{ t('apps.overrides.empty_picker') }}</strong>
               <p>{{ t('apps.overrides.new_settings_hint') }}</p>
             </div>
@@ -4699,15 +4668,13 @@ onBeforeUnmount(() => {
         />
       </section>
 
-      <div class="editor-save-bar" role="region" :aria-label="t('ui.application.saveBar.region')">
-        <div>
-          <strong>
-            {{ t(isDirty ? 'ui.application.saveBar.unsaved' : 'ui.application.saveBar.current') }}
-          </strong>
-          <span>
-            {{ t(isNew ? 'ui.application.saveBar.addHint' : 'ui.application.saveBar.editHint') }}
-          </span>
-        </div>
+      <div
+        v-if="isDirty || isNew"
+        class="editor-save-bar"
+        role="region"
+        :aria-label="t('ui.application.saveBar.region')"
+      >
+        <strong>{{ t('ui.application.saveBar.unsaved') }}</strong>
         <div class="editor-save-bar__actions">
           <AppButton
             variant="secondary"
@@ -4778,17 +4745,17 @@ onBeforeUnmount(() => {
 }
 
 .application-page {
-  gap: var(--vs-space-20);
-  padding-block-end: calc(var(--vs-space-80) * 1.5);
+  gap: var(--vs-space-16);
+  padding-block-end: var(--vs-space-80);
 }
 
 .editor-form,
 .editor-loading {
-  gap: var(--vs-space-32);
+  gap: var(--vs-space-24);
 }
 
 .editor-section {
-  gap: var(--vs-space-12);
+  gap: var(--vs-space-8);
 }
 
 .editor-section--disclosure:not([open]) {
@@ -4801,7 +4768,7 @@ onBeforeUnmount(() => {
 }
 
 .editor-section__summary {
-  padding: var(--vs-space-16) var(--vs-space-20);
+  padding: var(--vs-space-12) var(--vs-space-16);
   border: var(--vs-border-width) solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-card);
   background: var(--vs-color-bg-surface);
@@ -4845,8 +4812,15 @@ onBeforeUnmount(() => {
 
 .app-display-routing {
   min-inline-size: 0;
-  padding: 0;
-  border: 0;
+  margin: 0;
+  padding: var(--vs-space-8) var(--vs-space-16) var(--vs-space-12);
+  border-inline: 0;
+  border-block-end: 0;
+}
+
+.app-display-routing legend {
+  float: left;
+  inline-size: 100%;
 }
 
 .app-display-routing legend {
@@ -4856,24 +4830,25 @@ onBeforeUnmount(() => {
 }
 
 .app-display-routing p {
-  margin-block-start: var(--vs-space-4);
-  color: var(--vs-color-text-secondary);
+  clear: both;
+  padding-block-start: var(--vs-space-2);
+  color: var(--vs-color-text-muted);
   font-size: var(--vs-type-size-helper);
 }
 
 .app-display-routing__choices {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--vs-space-12);
-  margin-block-start: var(--vs-space-12);
+  gap: var(--vs-space-8);
+  margin-block-start: var(--vs-space-8);
 }
 
 .app-display-routing__choice {
   display: flex;
   align-items: center;
   gap: var(--vs-space-8);
-  min-block-size: 3rem;
-  padding: var(--vs-space-12) var(--vs-space-16);
+  min-block-size: var(--vs-size-control-md);
+  padding: 0 var(--vs-space-12);
   border: var(--vs-border-width) solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-control);
   background: var(--vs-color-bg-raised);
@@ -4888,12 +4863,13 @@ onBeforeUnmount(() => {
 .app-display-control-stack {
   display: flex;
   flex-wrap: wrap;
+  inline-size: 100%;
   align-items: center;
   gap: var(--vs-space-8);
 }
 
 .app-display-control-stack > .vs-select {
-  flex: 1 1 16rem;
+  flex: 1 1 0;
   min-inline-size: 0;
 }
 
@@ -4934,7 +4910,7 @@ onBeforeUnmount(() => {
 }
 
 .editor-group {
-  padding: var(--vs-space-20);
+  padding: var(--vs-space-16);
   border: var(--vs-border-width) solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-card);
   background: var(--vs-color-bg-surface);
@@ -4943,7 +4919,7 @@ onBeforeUnmount(() => {
 .editor-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--vs-space-20);
+  gap: var(--vs-space-12) var(--vs-space-16);
 }
 
 .editor-name-control,
@@ -5048,8 +5024,8 @@ onBeforeUnmount(() => {
 
 .editor-execution-layout {
   display: grid;
-  grid-template-columns: minmax(10rem, 13rem) minmax(0, 1fr);
-  gap: var(--vs-space-24);
+  grid-template-columns: minmax(8rem, 10rem) minmax(0, 1fr);
+  gap: var(--vs-space-16);
 }
 
 .editor-execution-layout--simple {
@@ -5110,26 +5086,24 @@ onBeforeUnmount(() => {
 
 .framegen-health {
   display: grid;
-  gap: var(--vs-space-16);
-  padding: var(--vs-space-16);
-  border: var(--vs-border-width) solid var(--vs-color-border-subtle);
-  border-radius: var(--vs-radius-control);
-  background: var(--vs-color-bg-subtle);
+  gap: var(--vs-space-12);
+  padding: var(--vs-space-12) var(--vs-space-16);
+}
+
+.framegen-group > * + * {
+  border-block-start: var(--vs-border-width) solid var(--vs-color-border-subtle);
 }
 
 .lossless-editor {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--vs-space-16);
   min-inline-size: 0;
-  padding: var(--vs-space-16);
-  border: var(--vs-border-width) solid
-    color-mix(in srgb, var(--vs-color-accent-default) 30%, var(--vs-color-border-subtle));
-  border-radius: var(--vs-radius-control);
-  background: color-mix(in srgb, var(--vs-color-accent-default) 5%, var(--vs-color-bg-subtle));
 }
 
-.lossless-editor__heading,
+.lossless-editor > .lossless-editor__body {
+  padding: 0 var(--vs-space-16) var(--vs-space-16);
+}
+
 .lossless-editor__group-heading {
   display: flex;
   align-items: flex-start;
@@ -5137,14 +5111,12 @@ onBeforeUnmount(() => {
   gap: var(--vs-space-16);
 }
 
-.lossless-editor__heading h3,
 .lossless-editor__group-heading h4 {
   color: var(--vs-color-text-primary);
   font-size: var(--vs-type-size-control);
   font-weight: var(--vs-type-weight-semibold);
 }
 
-.lossless-editor__heading p,
 .lossless-editor__group-heading p {
   margin-block-start: var(--vs-space-4);
   color: var(--vs-color-text-secondary);
@@ -5536,7 +5508,7 @@ onBeforeUnmount(() => {
 }
 
 .editor-empty-row {
-  padding: var(--vs-space-24);
+  padding: var(--vs-space-12);
   border: var(--vs-border-width) dashed var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-card);
   color: var(--vs-color-text-secondary);
@@ -5563,16 +5535,12 @@ onBeforeUnmount(() => {
 }
 
 .application-overrides__pane-heading {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
+  display: flex;
+  min-block-size: 2.75rem;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--vs-space-12);
-  min-block-size: 5.5rem;
-  padding: var(--vs-space-16) var(--vs-space-20);
-}
-
-.application-overrides__editor-heading {
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: var(--vs-space-8) var(--vs-space-16);
 }
 
 .application-overrides__pane-heading h3 {
@@ -5581,30 +5549,11 @@ onBeforeUnmount(() => {
   line-height: var(--vs-type-line-height-control);
 }
 
-.application-overrides__pane-heading p {
-  margin-block-start: var(--vs-space-4);
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-metadata);
-  line-height: var(--vs-type-line-height-metadata);
-}
-
-.application-overrides__step {
-  display: inline-flex;
-  inline-size: 1.75rem;
-  block-size: 1.75rem;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: var(--vs-color-accent-default);
-  color: var(--vs-color-text-on-accent);
-  font-size: var(--vs-type-size-metadata);
-  font-weight: var(--vs-type-weight-semibold);
-}
 
 .application-overrides__catalog-tools {
   display: grid;
-  gap: var(--vs-space-8);
-  padding: 0 var(--vs-space-16) var(--vs-space-16);
+  gap: var(--vs-space-4);
+  padding: 0 var(--vs-space-12) var(--vs-space-8);
 }
 
 .application-overrides__search {
@@ -5632,25 +5581,23 @@ onBeforeUnmount(() => {
 }
 
 .application-overrides__catalog-list {
-  max-block-size: 42rem;
+  max-block-size: 28rem;
   overflow-y: auto;
   border-block-start: var(--vs-border-width) solid var(--vs-color-border-subtle);
 }
 
 .application-overrides__catalog-group h4,
 .application-overrides__active-group > h4 {
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-metadata);
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-helper);
   font-weight: var(--vs-type-weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .application-overrides__catalog-group h4 {
   position: sticky;
   z-index: 1;
   inset-block-start: 0;
-  padding: var(--vs-space-8) var(--vs-space-16);
+  padding: var(--vs-space-4) var(--vs-space-12);
   border-block-end: var(--vs-border-width) solid var(--vs-color-border-subtle);
   background: var(--vs-color-bg-raised);
 }
@@ -5665,7 +5612,7 @@ onBeforeUnmount(() => {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--vs-space-12);
-  padding: var(--vs-space-12) var(--vs-space-16);
+  padding: var(--vs-space-8) var(--vs-space-12);
   border: 0;
   border-block-end: var(--vs-border-width) solid var(--vs-color-border-subtle);
   background: transparent;
@@ -5691,7 +5638,7 @@ onBeforeUnmount(() => {
 .application-overrides__catalog-copy {
   display: grid;
   min-inline-size: 0;
-  gap: var(--vs-space-4);
+  gap: var(--vs-space-2);
 }
 
 .application-overrides__catalog-copy strong {
@@ -5702,13 +5649,12 @@ onBeforeUnmount(() => {
 }
 
 .application-overrides__catalog-copy > span {
-  display: -webkit-box;
   overflow: hidden;
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-metadata);
-  line-height: var(--vs-type-line-height-metadata);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-helper);
+  line-height: var(--vs-type-line-height-helper);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .application-overrides__catalog-action {
@@ -5749,7 +5695,7 @@ onBeforeUnmount(() => {
 }
 
 .application-overrides__active-group > h4 {
-  padding: var(--vs-space-8) var(--vs-space-20);
+  padding: var(--vs-space-4) var(--vs-space-16);
   border-block-end: var(--vs-border-width) solid var(--vs-color-border-subtle);
   background: var(--vs-color-bg-subtle);
 }
@@ -5789,27 +5735,18 @@ onBeforeUnmount(() => {
 .application-overrides__empty {
   display: grid;
   justify-items: center;
-  gap: var(--vs-space-8);
-  padding: var(--vs-space-32) var(--vs-space-20);
-  min-block-size: 18rem;
+  align-content: center;
+  gap: var(--vs-space-4);
+  padding: var(--vs-space-24) var(--vs-space-16);
+  min-block-size: 10rem;
   border-block-start: var(--vs-border-width) solid var(--vs-color-border-subtle);
   text-align: center;
 }
 
-.application-overrides__empty-icon {
-  display: inline-flex;
-  inline-size: 3rem;
-  block-size: 3rem;
-  align-items: center;
-  justify-content: center;
-  margin-block-end: var(--vs-space-4);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--vs-color-accent-default) 12%, transparent);
-  color: var(--vs-color-accent-default);
-}
-
 .application-overrides__empty strong {
   color: var(--vs-color-text-primary);
+  font-size: var(--vs-type-size-control);
+  font-weight: var(--vs-type-weight-medium);
 }
 
 .application-overrides__empty p {
@@ -5820,7 +5757,7 @@ onBeforeUnmount(() => {
 }
 
 .editor-danger {
-  padding: var(--vs-space-20);
+  padding: var(--vs-space-12) var(--vs-space-16);
   border: var(--vs-border-width) solid var(--vs-color-status-danger);
   border-radius: var(--vs-radius-card);
   background: var(--vs-color-bg-surface);
@@ -5837,22 +5774,14 @@ onBeforeUnmount(() => {
   inset-inline-end: var(--vs-space-32);
   inset-block-end: var(--vs-space-24);
   max-inline-size: var(--vs-content-width-general);
-  padding: var(--vs-space-12) var(--vs-space-16);
+  padding: var(--vs-space-8) var(--vs-space-8) var(--vs-space-8) var(--vs-space-16);
   border: var(--vs-border-width) solid var(--vs-color-border-strong);
   border-radius: var(--vs-radius-card);
   background: var(--vs-color-bg-raised);
   box-shadow: var(--vs-shadow-overlay);
+  font-size: var(--vs-type-size-control);
 }
 
-.editor-save-bar strong,
-.editor-save-bar span {
-  display: block;
-}
-
-.editor-save-bar span {
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-helper);
-}
 
 .editor-save-bar__actions {
   gap: var(--vs-space-8);
@@ -5910,7 +5839,6 @@ onBeforeUnmount(() => {
   .editor-cover-control,
   .framegen-health__heading,
   .rtx-hdr__calibration-heading,
-  .lossless-editor__heading,
   .lossless-editor__group-heading {
     align-items: stretch;
     flex-direction: column;
@@ -5943,15 +5871,6 @@ onBeforeUnmount(() => {
 
   .application-override__controls {
     justify-content: flex-start;
-  }
-
-  .application-overrides__editor-heading {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .application-overrides__editor-heading .vs-status-badge {
-    grid-column: 2;
-    justify-self: start;
   }
 
   .editor-save-bar {

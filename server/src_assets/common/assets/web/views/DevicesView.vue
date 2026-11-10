@@ -785,7 +785,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="vs-page devices-page">
-    <PageHeader :title="t('ui.devices.page.title')" :description="t('ui.devices.page.description')">
+    <PageHeader :title="t('ui.devices.page.title')">
       <template #meta>
         <StatusBadge
           :label="t('ui.devices.count.streaming', { count: deviceCounts.streaming })"
@@ -846,9 +846,9 @@ onBeforeUnmount(() => {
         {{ commonSettingsError }}
       </InlineAlert>
 
-      <section class="devices-toolbar vs-surface" :aria-label="t('ui.devices.filters.aria_label')">
+      <section class="devices-toolbar" :aria-label="t('ui.devices.filters.aria_label')">
         <label class="vs-field device-search" for="device-search">
-          <span class="vs-field__label">{{ t('ui.devices.filters.search_label') }}</span>
+          <span class="vs-sr-only">{{ t('ui.devices.filters.search_label') }}</span>
           <span class="search-control">
             <UiIcon name="search" :size="16" aria-hidden="true" />
             <input
@@ -862,7 +862,7 @@ onBeforeUnmount(() => {
           </span>
         </label>
         <label class="vs-field device-filter" for="device-status">
-          <span class="vs-field__label">{{ t('clients.status_label') }}</span>
+          <span class="vs-sr-only">{{ t('clients.status_label') }}</span>
           <select id="device-status" v-model="statusFilter" class="vs-input">
             <option value="all">{{ t('ui.devices.filters.status_all') }}</option>
             <option value="connected">{{ t('clients.status_connected') }}</option>
@@ -870,7 +870,7 @@ onBeforeUnmount(() => {
           </select>
         </label>
         <label class="vs-field device-filter" for="device-sort">
-          <span class="vs-field__label">{{ t('clients.sort_label') }}</span>
+          <span class="vs-sr-only">{{ t('clients.sort_label') }}</span>
           <select id="device-sort" v-model="sortMode" class="vs-input">
             <option value="recent">{{ t('clients.sort_recent') }}</option>
             <option value="name">{{ t('clients.sort_name') }}</option>
@@ -922,13 +922,11 @@ onBeforeUnmount(() => {
         compact
       />
 
-      <ul v-else class="device-list" :aria-label="t('ui.devices.list.aria_label')">
+      <ul v-else class="device-list vs-surface" :aria-label="t('ui.devices.list.aria_label')">
         <li v-for="device in filteredDevices" :key="device.uuid">
-          <article class="device-row vs-surface" :aria-labelledby="`device-name-${device.uuid}`">
+          <article class="device-row" :aria-labelledby="`device-name-${device.uuid}`">
             <div class="device-row__summary">
-              <div class="device-row__icon" aria-hidden="true">
-                <UiIcon name="devices" :size="20" />
-              </div>
+              <UiIcon class="device-row__icon" name="devices" :size="18" aria-hidden="true" />
               <div class="device-row__identity">
                 <div class="device-row__title-line">
                   <h2 :id="`device-name-${device.uuid}`">{{ deviceDisplayName(device) }}</h2>
@@ -944,15 +942,27 @@ onBeforeUnmount(() => {
                     compact
                   />
                 </div>
-                <p>{{ lastSeen(device) }}</p>
-                <code>{{ device.uuid }}</code>
+                <p>
+                  {{ lastSeen(device) }} · <code>{{ device.uuid }}</code>
+                </p>
               </div>
               <div class="device-row__actions">
+                <button
+                  type="button"
+                  class="vs-button vs-button--secondary vs-button--compact"
+                  :aria-expanded="editorIsOpen(device.uuid)"
+                  :aria-controls="`device-editor-panel-${device.uuid}`"
+                  @click="toggleEditor(device.uuid)"
+                >
+                  <UiIcon name="edit" :size="14" aria-hidden="true" />
+                  <span>{{ t('ui.devices.editor.title') }}</span>
+                </button>
                 <AppButton
+                  v-if="device.connected"
                   :label="t('clients.disconnect')"
                   icon="stop"
                   size="compact"
-                  :disabled="!device.connected || busyUuid === device.uuid"
+                  :disabled="busyUuid === device.uuid"
                   :aria-label="
                     t('ui.devices.action.disconnect_named', { name: deviceDisplayName(device) })
                   "
@@ -972,21 +982,11 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <section class="device-editor">
-              <button
-                type="button"
-                class="device-editor__toggle"
-                :aria-expanded="editorIsOpen(device.uuid)"
-                :aria-controls="`device-editor-panel-${device.uuid}`"
-                @click="toggleEditor(device.uuid)"
-              >
-                <UiIcon name="edit" :size="16" aria-hidden="true" />
-                <span>{{ t('ui.devices.editor.title') }}</span>
-              </button>
-              <div
-                v-if="editorIsOpen(device.uuid) && drafts[device.uuid]"
-                :id="`device-editor-panel-${device.uuid}`"
-              >
+            <section
+              v-if="editorIsOpen(device.uuid) && drafts[device.uuid]"
+              class="device-editor"
+            >
+              <div :id="`device-editor-panel-${device.uuid}`">
                 <ClientSettingsEditor
                   v-model="drafts[device.uuid]"
                   :common-settings="commonSettings"
@@ -1075,8 +1075,8 @@ onBeforeUnmount(() => {
 .devices-layout > summary {
   display: flex;
   align-items: center;
-  gap: var(--vs-space-16);
-  padding: var(--vs-space-20);
+  gap: var(--vs-space-12);
+  padding: var(--vs-space-12) var(--vs-space-16);
   list-style: none;
   cursor: pointer;
   color: var(--vs-color-text-muted);
@@ -1093,14 +1093,12 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 .devices-layout strong {
-  display: block;
   color: var(--vs-color-text-primary);
   font-size: var(--vs-type-size-control);
   font-weight: var(--vs-type-weight-medium);
 }
 .devices-layout > summary > span > span {
-  display: block;
-  margin-top: var(--vs-space-4);
+  margin-left: var(--vs-space-8);
   font-size: var(--vs-type-size-metadata);
 }
 .devices-layout[open] .devices-layout__chevron {
@@ -1112,46 +1110,45 @@ onBeforeUnmount(() => {
   border-radius: 0 0 var(--vs-radius-card) var(--vs-radius-card);
 }
 
-.devices-page,
+.devices-page {
+  display: grid;
+  gap: var(--vs-space-16);
+}
+
 .devices-stack {
   display: grid;
-  gap: var(--vs-space-24);
+  gap: var(--vs-space-8);
 }
 
 .devices-toolbar {
   display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: var(--vs-space-16);
-  padding: var(--vs-space-16);
+  align-items: center;
+  gap: var(--vs-space-8);
 }
 
 .device-search {
-  min-width: min(18rem, 100%);
-  flex: 1 1 24rem;
+  flex: 0 1 22rem;
 }
 
 .device-filter {
-  flex: 0 1 13rem;
+  flex: 0 1 11rem;
 }
 
 .device-filter-clear {
   display: inline-flex;
   min-height: var(--vs-size-control-md);
   align-items: center;
-  justify-content: center;
   gap: var(--vs-space-4);
   padding: 0 var(--vs-space-8);
   border: 0;
   background: transparent;
   color: var(--vs-color-accent-default);
   font: inherit;
-  font-size: var(--vs-type-size-control);
+  font-size: var(--vs-type-size-metadata);
   cursor: pointer;
 }
 
 .device-filter-clear:hover {
-  color: var(--vs-color-accent-default);
   text-decoration: underline;
 }
 
@@ -1170,49 +1167,42 @@ onBeforeUnmount(() => {
 }
 
 .search-control .vs-input {
-  padding-left: var(--vs-space-40);
+  padding-left: var(--vs-space-32);
 }
 
 .result-count {
-  flex: none;
-  padding-bottom: var(--vs-space-8);
-  color: var(--vs-color-text-secondary);
+  margin-left: auto;
+  color: var(--vs-color-text-muted);
   font-size: var(--vs-type-size-metadata);
   font-variant-numeric: tabular-nums;
 }
 
-.device-loading,
-.device-list {
+.device-loading {
   display: grid;
-  gap: var(--vs-space-12);
+  gap: var(--vs-space-8);
 }
 
 .device-list {
+  display: grid;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.device-row {
-  overflow: clip;
+.device-list > li + li {
+  border-top: 1px solid var(--vs-color-border-subtle);
 }
 
 .device-row__summary {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--vs-space-16);
-  min-height: 88px;
-  padding: var(--vs-space-16) var(--vs-space-20);
+  gap: var(--vs-space-12);
+  padding: var(--vs-space-8) var(--vs-space-12) var(--vs-space-8) var(--vs-space-16);
 }
 
 .device-row__icon {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  place-items: center;
-  border-radius: var(--vs-radius-control);
-  background: var(--vs-color-bg-subtle);
-  color: var(--vs-color-text-secondary);
+  color: var(--vs-color-text-muted);
 }
 
 .device-row__identity {
@@ -1227,88 +1217,56 @@ onBeforeUnmount(() => {
   gap: var(--vs-space-8);
 }
 
+.device-row__actions {
+  gap: var(--vs-space-4);
+}
+
 .device-row h2 {
   overflow: hidden;
-  font-size: var(--vs-type-size-section);
-  line-height: var(--vs-type-line-height-section);
+  font-size: var(--vs-type-size-control);
+  line-height: var(--vs-type-line-height-control);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.device-row p,
-.device-row code {
-  display: block;
-  margin-top: var(--vs-space-2);
+.device-row p {
   overflow: hidden;
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-metadata);
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-helper);
+  line-height: var(--vs-type-line-height-helper);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .device-row code {
-  color: var(--vs-color-text-muted);
+  font-size: inherit;
 }
 
 .device-editor {
   border-top: 1px solid var(--vs-color-border-subtle);
-}
-
-.device-editor__toggle {
-  display: flex;
-  width: 100%;
-  min-height: 44px;
-  align-items: center;
-  gap: var(--vs-space-8);
-  padding: 0 var(--vs-space-20);
-  border: 0;
-  background: transparent;
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-control);
-  font-weight: var(--vs-type-weight-medium);
-  text-align: start;
-  cursor: pointer;
-}
-
-.device-editor__toggle:hover,
-.device-editor__toggle[aria-expanded='true'] {
-  color: var(--vs-color-text-primary);
-  background: var(--vs-color-bg-subtle);
+  background: var(--vs-color-bg-canvas);
 }
 
 @media (max-width: 767px) {
-  .devices-toolbar,
-  .device-row__summary {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    align-items: stretch;
+  .devices-toolbar {
+    flex-wrap: wrap;
   }
 
   .device-search,
-  .device-filter,
-  .device-filter-clear {
-    width: 100%;
+  .device-filter {
+    flex: 1 1 100%;
   }
 
-  .result-count {
-    padding: 0;
+  .device-row__summary {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .device-row__icon {
     display: none;
   }
-
-  .device-row__actions {
-    padding-top: var(--vs-space-8);
-  }
-
-  .device-row__actions > :deep(.vs-button) {
-    flex: 1 1 10rem;
-  }
 }
 
 @media (forced-colors: active) {
-  .device-row__icon,
   .device-editor {
     border: 1px solid CanvasText;
   }

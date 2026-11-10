@@ -8,7 +8,6 @@ import {
   type ChangelogEntry,
   type GitHubReleaseLike,
 } from '@/utils/changelog';
-const props = defineProps<{ installedVersion?: string }>();
 const { t } = useI18n();
 const releases = ref<ChangelogEntry[]>([]);
 const loading = ref(false);
@@ -49,13 +48,10 @@ onMounted(() => void load());
         :busy="loading"
         :busy-label="t('ui.maintenance.releases.loading')"
         variant="secondary"
+        size="compact"
         @click="load(true)"
       />
     </div>
-    <p>
-      {{ t('ui.maintenance.releases.current') }}:
-      {{ props.installedVersion || t('_common.unknown') }}
-    </p>
     <InlineAlert v-if="failed" tone="warning" :title="t('ui.maintenance.releases.unavailable')" />
     <p v-else-if="!loading && !releases.length">{{ t('ui.maintenance.releases.empty') }}</p>
     <details v-for="release in releases.slice(0, 10)" :key="release.tag">
@@ -80,16 +76,23 @@ onMounted(() => void load());
   justify-content: space-between;
 }
 h2 {
-  font-size: 18px;
+  font-size: var(--vs-type-size-section);
+  line-height: var(--vs-type-line-height-section);
   margin: 0;
 }
+p {
+  margin: 0;
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-metadata);
+}
 details {
-  padding-block: var(--vs-space-16);
+  padding-block: var(--vs-space-8);
   border-top: 1px solid var(--vs-color-border-subtle);
 }
 summary {
   cursor: pointer;
-  font-weight: 600;
+  font-size: var(--vs-type-size-control);
+  font-weight: var(--vs-type-weight-medium);
 }
 .release-notes__body {
   white-space: pre-wrap;

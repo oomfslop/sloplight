@@ -6,11 +6,9 @@ import { ApiError, apiDelete, apiGet, apiPost } from '@/services/client';
 import {
   AppButton,
   ConfirmDialog,
-  EmptyState,
   InlineAlert,
   LoadingSkeleton,
   PageHeader,
-  StatusBadge,
   UiIcon,
 } from '@/components/ui';
 
@@ -89,9 +87,6 @@ const selectedRoute = computed(() => routeCatalog.value.find((route) => route.pa
 const availableMethods = computed(() => selectedRoute.value?.methods ?? []);
 const canAddScope = computed(
   () => Boolean(draft.path) && draft.methods.length > 0 && availableMethods.value.length > 0,
-);
-const methodCount = computed(() =>
-  scopes.value.reduce((total, scope) => total + scope.methods.length, 0),
 );
 
 const filteredTokens = computed(() => {
@@ -394,20 +389,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="vs-page api-tokens-page">
-    <PageHeader :title="t('ui.api_tokens.title')" :description="t('ui.api_tokens.description')">
-      <template #meta>
-        <StatusBadge
-          :label="t('ui.api_tokens.active_count', { count: tokens.length })"
-          tone="info"
-          compact
-        />
-        <StatusBadge
-          v-if="scopes.length"
-          :label="t('ui.api_tokens.scope_count', { count: scopes.length })"
-          tone="success"
-          compact
-        />
-      </template>
+    <PageHeader :title="t('ui.api_tokens.title')">
       <template #actions>
         <AppButton
           :label="t('_common.refresh')"
@@ -442,186 +424,105 @@ onBeforeUnmount(() => {
       </InlineAlert>
 
       <section class="api-token-panel vs-surface" aria-labelledby="api-token-builder-title">
-        <header class="api-token-panel__heading">
-          <div>
-            <div class="api-token-panel__eyebrow">
-              <UiIcon name="key" :size="18" aria-hidden="true" />
-              <span>{{ t('ui.api_tokens.builder.eyebrow') }}</span>
-            </div>
-            <h2 id="api-token-builder-title">{{ t('ui.api_tokens.builder.title') }}</h2>
-            <p>{{ t('ui.api_tokens.builder.description') }}</p>
-          </div>
-          <StatusBadge :label="t('ui.api_tokens.builder.least_privilege')" tone="success" />
-        </header>
+        <h2 id="api-token-builder-title" class="api-token-panel__title">
+          {{ t('ui.api_tokens.builder.title') }}
+        </h2>
 
-        <div class="api-token-builder-grid">
-          <div class="api-token-builder__controls">
-            <div class="api-token-step-heading">
-              <span class="api-token-step">1</span>
-              <div>
-                <h3>{{ t('ui.api_tokens.builder.route_title') }}</h3>
-                <p>{{ t('ui.api_tokens.builder.route_description') }}</p>
-              </div>
-            </div>
+        <InlineAlert
+          v-if="routeCatalogError"
+          tone="danger"
+          :title="t('ui.api_tokens.alert.routes_unavailable')"
+          :dismiss-label="t('_common.dismiss')"
+          @dismiss="routeCatalogError = ''"
+        >
+          {{ routeCatalogError }}
+        </InlineAlert>
+        <InlineAlert
+          v-else-if="!routeCatalogLoading && !routeCatalog.length"
+          tone="warning"
+          :title="t('ui.api_tokens.alert.no_routes_title')"
+        >
+          {{ t('ui.api_tokens.alert.no_routes_description') }}
+        </InlineAlert>
 
-            <InlineAlert
-              v-if="routeCatalogError"
-              tone="danger"
-              :title="t('ui.api_tokens.alert.routes_unavailable')"
-              :dismiss-label="t('_common.dismiss')"
-              @dismiss="routeCatalogError = ''"
-            >
-              {{ routeCatalogError }}
-            </InlineAlert>
-            <InlineAlert
-              v-else-if="!routeCatalogLoading && !routeCatalog.length"
-              tone="warning"
-              :title="t('ui.api_tokens.alert.no_routes_title')"
-            >
-              {{ t('ui.api_tokens.alert.no_routes_description') }}
-            </InlineAlert>
-
-            <label class="vs-field" for="api-token-route-search">
-              <span class="vs-field__label">{{ t('ui.api_tokens.builder.search_label') }}</span>
-              <span class="api-token-search-control">
-                <UiIcon name="search" :size="16" aria-hidden="true" />
-                <input
-                  id="api-token-route-search"
-                  v-model="routeSearch"
-                  class="vs-input"
-                  type="search"
-                  autocomplete="off"
-                  :placeholder="t('ui.api_tokens.builder.search_placeholder')"
-                  :disabled="routeCatalogLoading || !routeCatalog.length"
-                />
-              </span>
-            </label>
-
-            <label class="vs-field" for="api-token-route">
-              <span class="vs-field__label">{{ t('ui.api_tokens.builder.route_label') }}</span>
-              <select
-                id="api-token-route"
-                v-model="draft.path"
-                class="vs-select api-token-route-select"
-                :disabled="routeCatalogLoading || !filteredRoutes.length"
-                @change="selectRoute"
-              >
-                <option value="">{{ t('ui.api_tokens.builder.route_placeholder') }}</option>
-                <option v-for="route in filteredRoutes" :key="route.path" :value="route.path">
-                  {{ route.path }}
-                </option>
-              </select>
-              <span class="vs-field__helper">
+        <div class="api-token-route-row">
+          <label class="vs-field" for="api-token-route-search">
+            <span class="vs-field__label">{{ t('ui.api_tokens.builder.search_label') }}</span>
+            <span class="api-token-search-control">
+              <UiIcon name="search" :size="14" aria-hidden="true" />
+              <input
+                id="api-token-route-search"
+                v-model="routeSearch"
+                class="vs-input"
+                type="search"
+                autocomplete="off"
+                :placeholder="t('ui.api_tokens.builder.search_placeholder')"
+                :disabled="routeCatalogLoading || !routeCatalog.length"
+              />
+            </span>
+          </label>
+          <label class="vs-field" for="api-token-route">
+            <span class="vs-field__label">
+              {{ t('ui.api_tokens.builder.route_label') }}
+              <span class="api-token-muted">
                 {{ t('ui.api_tokens.builder.route_count', { count: filteredRoutes.length }) }}
               </span>
-            </label>
-
-            <div v-if="selectedRoute" class="api-token-methods" aria-labelledby="api-methods-title">
-              <div class="api-token-methods__heading">
-                <div>
-                  <h3 id="api-methods-title" class="vs-field__label">
-                    {{ t('ui.api_tokens.builder.methods_label') }}
-                  </h3>
-                  <p class="vs-field__helper">
-                    {{ t('ui.api_tokens.builder.methods_description') }}
-                  </p>
-                </div>
-                <StatusBadge
-                  :label="
-                    t('ui.api_tokens.builder.methods_available', { count: availableMethods.length })
-                  "
-                  tone="neutral"
-                  compact
-                />
-              </div>
-              <div class="api-token-methods__list">
-                <label
-                  v-for="method in availableMethods"
-                  :key="method"
-                  class="vs-checkbox api-token-method"
-                >
-                  <input v-model="draft.methods" type="checkbox" :value="method" />
-                  <span class="api-token-method__code">{{ method }}</span>
-                </label>
-              </div>
-              <p v-if="!availableMethods.length" class="api-token-empty-hint">
-                {{ t('ui.api_tokens.builder.no_methods') }}
-              </p>
-              <AppButton
-                :label="t('ui.api_tokens.actions.add_scope')"
-                icon="plus"
-                :disabled="!canAddScope"
-                @click="addScope"
-              />
-            </div>
-          </div>
-
-          <aside class="api-token-summary" aria-labelledby="api-token-summary-title">
-            <div class="api-token-step-heading">
-              <span class="api-token-step">2</span>
-              <div>
-                <h3 id="api-token-summary-title">{{ t('ui.api_tokens.builder.summary_title') }}</h3>
-                <p>{{ t('ui.api_tokens.builder.summary_description') }}</p>
-              </div>
-            </div>
-
-            <div class="api-token-summary__stats">
-              <div>
-                <strong>{{ scopes.length }}</strong>
-                <span>{{ t('ui.api_tokens.builder.summary_routes') }}</span>
-              </div>
-              <div>
-                <strong>{{ methodCount }}</strong>
-                <span>{{ t('ui.api_tokens.builder.summary_methods') }}</span>
-              </div>
-            </div>
-
-            <div v-if="scopes.length" class="api-token-scope-list" aria-live="polite">
-              <article v-for="scope in scopes" :key="scope.path" class="api-token-scope">
-                <div class="api-token-scope__header">
-                  <code class="api-token-scope__path">{{ scope.path }}</code>
-                  <AppButton
-                    :label="t('ui.api_tokens.actions.remove_scope')"
-                    icon="trash"
-                    variant="tertiary"
-                    size="compact"
-                    icon-only
-                    :aria-label="
-                      t('ui.api_tokens.actions.remove_scope_named', { path: scope.path })
-                    "
-                    @click="removeScope(scope.path)"
-                  />
-                </div>
-                <div class="api-token-chips">
-                  <span v-for="method in scope.methods" :key="method" class="api-token-chip">
-                    {{ method }}
-                  </span>
-                </div>
-              </article>
-            </div>
-            <EmptyState
-              v-else
-              :title="t('ui.api_tokens.builder.empty_title')"
-              :description="t('ui.api_tokens.builder.empty_description')"
-              icon="key"
-              compact
-            />
-
-            <div class="api-token-summary__action">
-              <AppButton
-                :label="t('ui.api_tokens.actions.generate')"
-                icon="key"
-                variant="primary"
-                block
-                :disabled="!scopes.length"
-                :busy="creating"
-                :busy-label="t('ui.api_tokens.actions.generating')"
-                @click="createToken"
-              />
-              <p class="api-token-hint">{{ t('ui.api_tokens.builder.generate_hint') }}</p>
-            </div>
-          </aside>
+            </span>
+            <select
+              id="api-token-route"
+              v-model="draft.path"
+              class="vs-select api-token-route-select"
+              :disabled="routeCatalogLoading || !filteredRoutes.length"
+              @change="selectRoute"
+            >
+              <option value="">{{ t('ui.api_tokens.builder.route_placeholder') }}</option>
+              <option v-for="route in filteredRoutes" :key="route.path" :value="route.path">
+                {{ route.path }}
+              </option>
+            </select>
+          </label>
         </div>
+
+        <div v-if="selectedRoute" class="api-token-methods" role="group" aria-labelledby="api-methods-title">
+          <span id="api-methods-title" class="vs-field__label">
+            {{ t('ui.api_tokens.builder.methods_label') }}
+          </span>
+          <label v-for="method in availableMethods" :key="method" class="vs-checkbox api-token-method">
+            <input v-model="draft.methods" type="checkbox" :value="method" />
+            <span class="api-token-method__code">{{ method }}</span>
+          </label>
+          <span v-if="!availableMethods.length" class="api-token-muted">
+            {{ t('ui.api_tokens.builder.no_methods') }}
+          </span>
+          <AppButton
+            :label="t('ui.api_tokens.actions.add_scope')"
+            icon="plus"
+            size="compact"
+            :disabled="!canAddScope"
+            @click="addScope"
+          />
+        </div>
+
+        <ul v-if="scopes.length" class="api-token-rows" aria-live="polite">
+          <li v-for="scope in scopes" :key="scope.path">
+            <code>{{ scope.path }}</code>
+            <span class="api-token-chips">
+              <span v-for="method in scope.methods" :key="method" class="api-token-chip">
+                {{ method }}
+              </span>
+            </span>
+            <AppButton
+              :label="t('ui.api_tokens.actions.remove_scope')"
+              icon="x"
+              variant="tertiary"
+              size="compact"
+              icon-only
+              :aria-label="t('ui.api_tokens.actions.remove_scope_named', { path: scope.path })"
+              @click="removeScope(scope.path)"
+            />
+          </li>
+        </ul>
+        <p v-else class="api-token-muted">{{ t('ui.api_tokens.builder.empty_description') }}</p>
 
         <InlineAlert
           v-if="createError"
@@ -632,44 +533,27 @@ onBeforeUnmount(() => {
         >
           {{ createError }}
         </InlineAlert>
+
+        <div class="api-token-generate">
+          <AppButton
+            :label="t('ui.api_tokens.actions.generate')"
+            icon="key"
+            variant="primary"
+            :disabled="!scopes.length"
+            :busy="creating"
+            :busy-label="t('ui.api_tokens.actions.generating')"
+            @click="createToken"
+          />
+          <span class="api-token-muted">{{ t('ui.api_tokens.builder.generate_hint') }}</span>
+        </div>
       </section>
 
       <section class="api-token-panel vs-surface" aria-labelledby="active-tokens-title">
-        <header class="api-token-panel__heading api-token-panel__heading--compact">
-          <div>
-            <div class="api-token-panel__eyebrow">
-              <UiIcon name="sessions" :size="18" aria-hidden="true" />
-              <span>{{ t('ui.api_tokens.active.eyebrow') }}</span>
-            </div>
-            <h2 id="active-tokens-title">{{ t('ui.api_tokens.active.title') }}</h2>
-            <p>{{ t('ui.api_tokens.active.description') }}</p>
-          </div>
-          <AppButton
-            :label="t('ui.api_tokens.actions.refresh_tokens')"
-            icon="refresh"
-            size="compact"
-            :busy="tokensLoading"
-            :busy-label="t('ui.api_tokens.actions.refreshing')"
-            @click="loadTokens"
-          />
-        </header>
-
-        <div class="api-token-toolbar">
-          <label class="vs-field api-token-toolbar__search" for="api-token-search">
-            <span class="vs-field__label">{{ t('ui.api_tokens.active.search_label') }}</span>
-            <span class="api-token-search-control">
-              <UiIcon name="search" :size="16" aria-hidden="true" />
-              <input
-                id="api-token-search"
-                v-model="tokenSearch"
-                class="vs-input"
-                type="search"
-                autocomplete="off"
-                :placeholder="t('ui.api_tokens.active.search_placeholder')"
-              />
-            </span>
-          </label>
-          <span class="api-token-result-count" aria-live="polite">
+        <header class="api-token-panel__heading">
+          <h2 id="active-tokens-title" class="api-token-panel__title">
+            {{ t('ui.api_tokens.active.title') }}
+          </h2>
+          <span class="api-token-muted" aria-live="polite">
             {{
               t('ui.api_tokens.active.result_count', {
                 shown: filteredTokens.length,
@@ -677,7 +561,19 @@ onBeforeUnmount(() => {
               })
             }}
           </span>
-        </div>
+          <span class="api-token-search-control api-token-panel__search">
+            <UiIcon name="search" :size="14" aria-hidden="true" />
+            <input
+              id="api-token-search"
+              v-model="tokenSearch"
+              class="vs-input"
+              type="search"
+              autocomplete="off"
+              :aria-label="t('ui.api_tokens.active.search_label')"
+              :placeholder="t('ui.api_tokens.active.search_placeholder')"
+            />
+          </span>
+        </header>
 
         <InlineAlert
           v-if="tokensError"
@@ -690,64 +586,44 @@ onBeforeUnmount(() => {
         </InlineAlert>
 
         <div v-if="tokensLoading" class="api-token-loading" :aria-label="t('_common.loading')">
-          <LoadingSkeleton v-for="item in 2" :key="item" variant="block" height="9rem" />
+          <LoadingSkeleton v-for="item in 2" :key="item" height="2rem" />
         </div>
-        <EmptyState
-          v-else-if="!tokens.length"
-          :title="t('ui.api_tokens.active.empty_title')"
-          :description="t('ui.api_tokens.active.empty_description')"
-          icon="key"
-          compact
-        />
-        <EmptyState
-          v-else-if="!filteredTokens.length"
-          :title="t('ui.api_tokens.active.filtered_empty_title')"
-          :description="t('ui.api_tokens.active.filtered_empty_description')"
-          icon="search"
-          compact
-        />
-        <div v-else class="api-token-records">
-          <article v-for="token in filteredTokens" :key="token.hash" class="api-token-record">
-            <div class="api-token-record__header">
-              <div class="api-token-record__identity">
-                <div class="api-token-record__title-line">
-                  <UiIcon name="key" :size="18" aria-hidden="true" />
-                  <h3>
-                    {{ t('ui.api_tokens.active.token_label', { hash: shortHash(token.hash) }) }}
-                  </h3>
-                  <StatusBadge :label="t('ui.api_tokens.active.active')" tone="success" compact />
-                </div>
-                <p>
-                  {{
-                    t('ui.api_tokens.active.created', { date: formatCreatedAt(token.created_at) })
-                  }}
-                  <span v-if="token.username"> · {{ token.username }}</span>
-                </p>
-              </div>
-              <AppButton
-                :label="t('ui.api_tokens.actions.revoke')"
-                icon="trash"
-                variant="tertiary"
-                size="compact"
-                :busy="revokingHash === token.hash"
-                :aria-label="
-                  t('ui.api_tokens.actions.revoke_named', { hash: shortHash(token.hash) })
-                "
-                @click="requestRevoke(token)"
-              />
+        <p v-else-if="!tokens.length" class="api-token-muted">
+          {{ t('ui.api_tokens.active.empty_title') }}
+        </p>
+        <p v-else-if="!filteredTokens.length" class="api-token-muted">
+          {{ t('ui.api_tokens.active.filtered_empty_title') }}
+        </p>
+        <ul v-else class="api-token-rows api-token-rows--tokens">
+          <li v-for="token in filteredTokens" :key="token.hash">
+            <div class="api-token-record__identity">
+              <code>{{ shortHash(token.hash) }}</code>
+              <span class="api-token-muted">
+                {{ t('ui.api_tokens.active.created', { date: formatCreatedAt(token.created_at) }) }}
+                <template v-if="token.username"> · {{ token.username }}</template>
+              </span>
             </div>
             <div class="api-token-record__scopes">
               <div v-for="scope in token.scopes" :key="scope.path" class="api-token-record__scope">
                 <code>{{ scope.path }}</code>
-                <div class="api-token-chips">
+                <span class="api-token-chips">
                   <span v-for="method in scope.methods" :key="method" class="api-token-chip">
                     {{ method }}
                   </span>
-                </div>
+                </span>
               </div>
             </div>
-          </article>
-        </div>
+            <AppButton
+              :label="t('ui.api_tokens.actions.revoke')"
+              icon="trash"
+              variant="tertiary"
+              size="compact"
+              :busy="revokingHash === token.hash"
+              :aria-label="t('ui.api_tokens.actions.revoke_named', { hash: shortHash(token.hash) })"
+              @click="requestRevoke(token)"
+            />
+          </li>
+        </ul>
       </section>
     </div>
 
@@ -813,102 +689,43 @@ onBeforeUnmount(() => {
 
 .api-tokens-stack {
   display: grid;
-  gap: var(--vs-space-24);
+  gap: var(--vs-space-16);
+  margin-block-start: var(--vs-space-16);
 }
 
 .api-token-panel {
-  padding: var(--vs-space-24);
-}
-
-.api-token-panel__heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--vs-space-20);
-  padding-block-end: var(--vs-space-24);
-  border-block-end: var(--vs-border-width) solid var(--vs-color-border-subtle);
-}
-
-.api-token-panel__heading--compact {
-  padding-block-end: var(--vs-space-20);
-}
-
-.api-token-panel__heading h2,
-.api-token-panel__heading p {
-  margin: 0;
-}
-
-.api-token-panel__heading h2 {
-  margin-block-start: var(--vs-space-4);
-  font-size: var(--vs-type-size-panel);
-  line-height: var(--vs-type-line-height-panel);
-}
-
-.api-token-panel__heading p {
-  max-inline-size: 48rem;
-  margin-block-start: var(--vs-space-4);
-  color: var(--vs-color-text-secondary);
-}
-
-.api-token-panel__eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--vs-space-8);
-  color: var(--vs-color-accent-default);
-  font-size: var(--vs-type-size-metadata);
-  font-weight: var(--vs-type-weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.api-token-builder-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(20rem, 0.75fr);
-  gap: var(--vs-space-24);
-  padding-block-start: var(--vs-space-24);
-}
-
-.api-token-builder__controls {
-  display: grid;
-  align-content: start;
-  gap: var(--vs-space-20);
-  min-inline-size: 0;
-}
-
-.api-token-step-heading {
-  display: flex;
-  align-items: flex-start;
   gap: var(--vs-space-12);
+  padding: var(--vs-space-16);
 }
 
-.api-token-step-heading h3,
-.api-token-step-heading p {
-  margin: 0;
-}
-
-.api-token-step-heading h3 {
+.api-token-panel__title {
   font-size: var(--vs-type-size-section);
   line-height: var(--vs-type-line-height-section);
 }
 
-.api-token-step-heading p {
-  margin-block-start: var(--vs-space-4);
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-helper);
-  line-height: var(--vs-type-line-height-helper);
+.api-token-panel__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--vs-space-8) var(--vs-space-12);
 }
 
-.api-token-step {
+.api-token-panel__search {
+  inline-size: min(100%, 20rem);
+  margin-inline-start: auto;
+}
+
+.api-token-muted {
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-helper);
+  font-weight: var(--vs-type-weight-regular);
+}
+
+.api-token-route-row {
   display: grid;
-  inline-size: 1.75rem;
-  block-size: 1.75rem;
-  flex: none;
-  place-items: center;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--vs-color-accent-default) 18%, transparent);
-  color: var(--vs-color-accent-default);
-  font-size: var(--vs-type-size-metadata);
-  font-weight: var(--vs-type-weight-semibold);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: var(--vs-space-12);
 }
 
 .api-token-search-control {
@@ -926,231 +743,101 @@ onBeforeUnmount(() => {
 }
 
 .api-token-search-control > .vs-input {
-  padding-inline-start: var(--vs-space-40);
+  padding-inline-start: var(--vs-space-32);
 }
 
-.api-token-route-select {
+.api-token-route-select,
+.api-token-method__code,
+.api-token-chip,
+.api-token-rows code {
   font-family: var(--vs-type-family-mono);
+  font-size: var(--vs-type-size-metadata);
 }
 
 .api-token-methods {
-  display: grid;
-  gap: var(--vs-space-12);
-  padding: var(--vs-space-16);
-  border: var(--vs-border-width) solid var(--vs-color-border-subtle);
-  border-radius: var(--vs-radius-card);
-  background: var(--vs-color-bg-subtle);
-}
-
-.api-token-methods__heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--vs-space-12);
-}
-
-.api-token-methods__heading h3,
-.api-token-methods__heading p {
-  margin: 0;
-}
-
-.api-token-methods__heading p {
-  margin-block-start: var(--vs-space-4);
-}
-
-.api-token-methods__list {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--vs-space-8);
-}
-
-.api-token-method {
-  min-block-size: var(--vs-size-control-md);
-  padding: var(--vs-space-4) var(--vs-space-8);
-  border: var(--vs-border-width) solid var(--vs-color-border-strong);
-  border-radius: var(--vs-radius-control);
-  background: var(--vs-color-bg-surface);
-}
-
-.api-token-method:has(input:checked) {
-  border-color: var(--vs-color-accent-default);
-  background: color-mix(in srgb, var(--vs-color-accent-default) 14%, var(--vs-color-bg-surface));
-}
-
-.api-token-method__code,
-.api-token-chip {
-  font-family: var(--vs-type-family-mono);
-  font-size: var(--vs-type-size-metadata);
-  font-weight: var(--vs-type-weight-semibold);
-}
-
-.api-token-empty-hint,
-.api-token-hint {
-  margin: 0;
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-helper);
-}
-
-.api-token-summary {
-  display: flex;
-  min-inline-size: 0;
-  padding: var(--vs-space-20);
-  flex-direction: column;
-  gap: var(--vs-space-16);
-  border: var(--vs-border-width) solid var(--vs-color-border-subtle);
-  border-radius: var(--vs-radius-card);
-  background: var(--vs-color-bg-subtle);
-}
-
-.api-token-summary__stats {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--vs-space-8);
-}
-
-.api-token-summary__stats > div {
-  display: grid;
-  gap: var(--vs-space-2);
-  padding: var(--vs-space-12);
-  border: var(--vs-border-width) solid var(--vs-color-border-subtle);
-  border-radius: var(--vs-radius-control);
-  background: var(--vs-color-bg-surface);
-}
-
-.api-token-summary__stats strong {
-  font-size: 1.5rem;
-  line-height: 1.1;
-}
-
-.api-token-summary__stats span {
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-helper);
-}
-
-.api-token-scope-list,
-.api-token-records {
-  display: grid;
-  gap: var(--vs-space-8);
-}
-
-.api-token-scope {
-  display: grid;
-  gap: var(--vs-space-8);
-  padding: var(--vs-space-12);
-  border: var(--vs-border-width) solid var(--vs-color-border-subtle);
-  border-radius: var(--vs-radius-control);
-  background: var(--vs-color-bg-surface);
-}
-
-.api-token-scope__header,
-.api-token-record__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  align-items: center;
   gap: var(--vs-space-12);
 }
 
-.api-token-scope__path,
-.api-token-record__scope code {
+.api-token-rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border: var(--vs-border-width) solid var(--vs-color-border-subtle);
+  border-radius: var(--vs-radius-control);
+  list-style: none;
+}
+
+.api-token-rows > li {
+  display: flex;
+  align-items: center;
+  gap: var(--vs-space-12);
+  padding: var(--vs-space-4) var(--vs-space-4) var(--vs-space-4) var(--vs-space-12);
+}
+
+.api-token-rows > li + li {
+  border-block-start: var(--vs-border-width) solid var(--vs-color-border-subtle);
+}
+
+.api-token-rows > li > :last-child {
+  margin-inline-start: auto;
+}
+
+.api-token-rows code {
   min-inline-size: 0;
   overflow-wrap: anywhere;
 }
 
-.api-token-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--vs-space-4);
-}
-
-.api-token-chip {
-  display: inline-flex;
-  min-block-size: 1.5rem;
-  align-items: center;
-  padding-inline: var(--vs-space-8);
-  border: var(--vs-border-width) solid
-    color-mix(in srgb, var(--vs-color-accent-default) 50%, transparent);
-  border-radius: var(--vs-radius-pill);
-  background: color-mix(in srgb, var(--vs-color-accent-default) 12%, transparent);
-  color: var(--vs-color-accent-default);
-}
-
-.api-token-summary__action {
-  display: grid;
-  gap: var(--vs-space-8);
-  margin-block-start: auto;
-  padding-block-start: var(--vs-space-4);
-}
-
-.api-token-toolbar {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--vs-space-16);
-  padding-block: var(--vs-space-20);
-}
-
-.api-token-toolbar__search {
-  inline-size: min(100%, 32rem);
-}
-
-.api-token-result-count {
-  padding-block-end: var(--vs-space-8);
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-helper);
-  white-space: nowrap;
-}
-
-.api-token-loading {
-  display: grid;
-  gap: var(--vs-space-12);
-}
-
-.api-token-record {
-  display: grid;
-  gap: var(--vs-space-16);
-  padding: var(--vs-space-16);
-  border: var(--vs-border-width) solid var(--vs-color-border-subtle);
-  border-radius: var(--vs-radius-card);
-  background: var(--vs-color-bg-subtle);
+.api-token-rows--tokens > li {
+  align-items: flex-start;
+  padding-block: var(--vs-space-8);
 }
 
 .api-token-record__identity {
-  min-inline-size: 0;
-}
-
-.api-token-record__title-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--vs-space-8);
-}
-
-.api-token-record__title-line h3 {
-  margin: 0;
-  font-family: var(--vs-type-family-mono);
-  font-size: var(--vs-type-size-control);
-  overflow-wrap: anywhere;
-}
-
-.api-token-record__identity p {
-  margin: var(--vs-space-4) 0 0;
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-helper);
+  display: grid;
+  flex: 0 0 14rem;
+  gap: var(--vs-space-2);
 }
 
 .api-token-record__scopes {
   display: grid;
-  gap: var(--vs-space-8);
-  padding-block-start: var(--vs-space-12);
-  border-block-start: var(--vs-border-width) solid var(--vs-color-border-subtle);
+  min-inline-size: 0;
+  gap: var(--vs-space-4);
 }
 
 .api-token-record__scope {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--vs-space-8) var(--vs-space-16);
+  gap: var(--vs-space-8);
+}
+
+.api-token-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--vs-space-4);
+}
+
+.api-token-chip {
+  padding: 0 var(--vs-space-4);
+  border-radius: var(--vs-radius-subtle);
+  background: var(--vs-color-bg-subtle);
+  color: var(--vs-color-text-secondary);
+  font-size: var(--vs-type-size-helper);
+}
+
+.api-token-generate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--vs-space-12);
+}
+
+.api-token-loading {
+  display: grid;
+  gap: var(--vs-space-8);
 }
 
 .api-token-dialog {
@@ -1228,31 +915,20 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 767px) {
-  .api-token-panel {
-    padding: var(--vs-space-16);
-  }
-
-  .api-token-panel__heading,
-  .api-token-toolbar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .api-token-builder-grid {
+  .api-token-route-row {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .api-token-toolbar__search {
+  .api-token-panel__search {
     inline-size: 100%;
   }
 
-  .api-token-result-count {
-    padding-block-end: 0;
+  .api-token-rows--tokens > li {
+    flex-wrap: wrap;
   }
 
-  .api-token-record__scope {
-    align-items: flex-start;
-    flex-direction: column;
+  .api-token-record__identity {
+    flex-basis: 100%;
   }
 }
 </style>

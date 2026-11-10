@@ -1720,7 +1720,6 @@ onBeforeUnmount(() => {
   <div class="page page--wide browser-stream-page">
     <PageHeader
       :title="t('ui.browser_stream.title')"
-      :description="t('ui.browser_stream.description')"
     >
       <template #actions>
         <AppButton
@@ -1792,7 +1791,6 @@ onBeforeUnmount(() => {
           <h2 id="browser-stream-app-picker-title">
             {{ t('ui.browser_stream.settings.application') }}
           </h2>
-          <p>{{ t('ui.browser_stream.settings.application_help') }}</p>
         </div>
         <label v-if="launchableApps.length" class="app-picker__search">
           <span class="vs-sr-only">{{ t('webrtc.search_placeholder') }}</span>
@@ -1824,9 +1822,9 @@ onBeforeUnmount(() => {
             @click="selectApp()"
           >
             <span class="app-picker__artwork app-picker__artwork--desktop">
-              <UiIcon name="devices" :size="42" />
+              <UiIcon name="devices" :size="28" />
               <span v-if="appSelected()" class="app-picker__selected-mark">
-                <UiIcon name="check" :size="16" />
+                <UiIcon name="check" :size="12" />
               </span>
             </span>
             <span class="app-picker__copy">
@@ -1862,10 +1860,10 @@ onBeforeUnmount(() => {
                 @error="markAppCoverFailed(app.id)"
               />
               <span v-else class="app-picker__artwork-fallback" aria-hidden="true">
-                <UiIcon name="gamepad" :size="34" />
+                <UiIcon name="gamepad" :size="24" />
               </span>
               <span v-if="appSelected(app.id)" class="app-picker__selected-mark">
-                <UiIcon name="check" :size="16" />
+                <UiIcon name="check" :size="12" />
               </span>
             </span>
             <span class="app-picker__copy">
@@ -1887,7 +1885,6 @@ onBeforeUnmount(() => {
       <div class="panel__heading stream-stage__heading">
         <div>
           <h2 id="browser-stream-stage-title">{{ selectedAppName }}</h2>
-          <p>{{ t('ui.browser_stream.stage_description') }}</p>
         </div>
         <div class="stream-stage__heading-actions">
           <StatusBadge :label="connectionLabel" :tone="connectionTone" announce="polite" />
@@ -2055,7 +2052,6 @@ onBeforeUnmount(() => {
         <div class="panel__heading">
           <div>
             <h2 id="browser-stream-settings-title">{{ t('ui.browser_stream.settings.title') }}</h2>
-            <p>{{ t('ui.browser_stream.settings.description') }}</p>
           </div>
         </div>
 
@@ -2237,7 +2233,6 @@ onBeforeUnmount(() => {
         <div class="panel__heading">
           <div>
             <h2 id="browser-stream-controls-title">{{ t('ui.browser_stream.controls.title') }}</h2>
-            <p>{{ t('ui.browser_stream.controls.description') }}</p>
           </div>
         </div>
 
@@ -2330,12 +2325,12 @@ onBeforeUnmount(() => {
 <style scoped>
 .browser-stream-page {
   display: grid;
-  gap: var(--vs-space-24);
+  gap: var(--vs-space-16);
 }
 
 .app-picker {
   display: grid;
-  gap: var(--vs-space-16);
+  gap: var(--vs-space-12);
 }
 
 .app-picker__heading {
@@ -2365,9 +2360,9 @@ onBeforeUnmount(() => {
 
 .app-picker__grid {
   display: grid;
-  max-height: 34rem;
-  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
-  gap: var(--vs-space-12);
+  max-height: 20rem;
+  grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+  gap: var(--vs-space-8);
   padding: var(--vs-space-2);
   overflow-y: auto;
 }
@@ -2384,19 +2379,16 @@ onBeforeUnmount(() => {
   color: var(--vs-color-text-primary);
   text-align: left;
   cursor: pointer;
-  transition:
-    border-color var(--vs-motion-duration-control) var(--vs-motion-easing-standard),
-    transform var(--vs-motion-duration-control) var(--vs-motion-easing-standard);
-}
-
-.app-picker__card:hover:not(:disabled),
-.app-picker__card:focus-visible,
-.app-picker__card--selected {
-  border-color: var(--vs-color-accent-default);
+  transition: border-color var(--vs-motion-duration-control) var(--vs-motion-easing-standard);
 }
 
 .app-picker__card:hover:not(:disabled) {
-  transform: translateY(-2px);
+  border-color: var(--vs-color-border-strong);
+}
+
+.app-picker__card:focus-visible,
+.app-picker__card--selected {
+  border-color: var(--vs-color-accent-default);
 }
 
 .app-picker__card--selected {
@@ -2429,23 +2421,13 @@ onBeforeUnmount(() => {
   color: var(--vs-color-text-muted);
 }
 
-.app-picker__artwork--desktop {
-  background:
-    radial-gradient(
-      circle at 50% 30%,
-      color-mix(in srgb, var(--vs-color-accent-default) 24%, transparent),
-      transparent 55%
-    ),
-    var(--vs-color-bg-subtle);
-}
-
 .app-picker__selected-mark {
   position: absolute;
-  top: var(--vs-space-8);
-  right: var(--vs-space-8);
+  top: var(--vs-space-4);
+  right: var(--vs-space-4);
   display: grid;
-  width: 1.8rem;
-  height: 1.8rem;
+  width: 1.25rem;
+  height: 1.25rem;
   place-items: center;
   border-radius: var(--vs-radius-pill);
   background: var(--vs-color-accent-default);
@@ -2456,12 +2438,12 @@ onBeforeUnmount(() => {
 .app-picker__copy {
   display: grid;
   gap: var(--vs-space-2);
-  padding: var(--vs-space-12);
+  padding: var(--vs-space-4) var(--vs-space-8) var(--vs-space-8);
 }
 
 .app-picker__copy strong {
   overflow: hidden;
-  font-size: var(--vs-type-size-control);
+  font-size: var(--vs-type-size-metadata);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2476,9 +2458,16 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 
+.app-picker__copy small {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .stream-stage {
   display: grid;
-  gap: var(--vs-space-16);
+  gap: var(--vs-space-12);
 }
 
 .stream-stage__heading {
@@ -2506,10 +2495,12 @@ onBeforeUnmount(() => {
 .stream-surface {
   position: relative;
   display: grid;
-  min-height: min(60vw, 42rem);
+  width: min(100%, calc((100dvh - 14rem) * 16 / 9));
+  aspect-ratio: 16 / 9;
+  margin-inline: auto;
   overflow: hidden;
   place-items: center;
-  border: 1px solid var(--vs-color-border-strong);
+  border: 1px solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-card);
   outline: none;
   background: #090b10;
@@ -2570,6 +2561,7 @@ onBeforeUnmount(() => {
   height: 100vh;
   height: 100dvh;
   min-height: 0;
+  aspect-ratio: auto;
   border: 0;
   border-radius: 0;
   background: #000;
@@ -2717,26 +2709,30 @@ onBeforeUnmount(() => {
 .browser-stream-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(18rem, 0.75fr);
-  gap: var(--vs-space-24);
+  gap: var(--vs-space-16);
 }
 
 .stream-form,
 .stream-form__group {
   display: grid;
-  gap: var(--vs-space-16);
+  gap: var(--vs-space-12);
 }
 
 .stream-form__group {
-  padding: var(--vs-space-16);
-  border: 1px solid var(--vs-color-border-subtle);
-  border-radius: var(--vs-radius-control);
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
 }
 
 .stream-form__group legend {
-  padding-inline: var(--vs-space-4);
-  color: var(--vs-color-text-primary);
-  font-size: var(--vs-type-size-control);
+  padding: 0;
+  margin-bottom: var(--vs-space-8);
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-helper);
   font-weight: var(--vs-type-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .stream-form__numeric-grid {
@@ -2748,10 +2744,8 @@ onBeforeUnmount(() => {
 .stream-form__check {
   display: flex;
   align-items: flex-start;
-  gap: var(--vs-space-12);
-  padding: var(--vs-space-12);
-  border: 1px solid var(--vs-color-border-subtle);
-  border-radius: var(--vs-radius-control);
+  gap: var(--vs-space-8);
+  padding: var(--vs-space-4) 0;
   cursor: pointer;
 }
 
@@ -2846,7 +2840,7 @@ onBeforeUnmount(() => {
 }
 
 .browser-capabilities {
-  margin-top: var(--vs-space-24);
+  margin-top: var(--vs-space-16);
 }
 
 .browser-capabilities h3 {
@@ -2867,7 +2861,7 @@ onBeforeUnmount(() => {
   grid-template-columns: minmax(4.5rem, auto) auto minmax(0, 1fr);
   align-items: center;
   gap: var(--vs-space-8);
-  padding: var(--vs-space-8) 0;
+  padding: var(--vs-space-4) 0;
   border-top: 1px solid var(--vs-color-border-subtle);
 }
 
@@ -2897,9 +2891,6 @@ onBeforeUnmount(() => {
     grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
   }
 
-  .stream-surface {
-    min-height: 15rem;
-  }
 
   .stream-stage__input-status {
     width: 100%;

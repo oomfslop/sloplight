@@ -1343,7 +1343,7 @@ function libraryRequest(
       :request="libraryRequest"
       @saved="load()"
     />
-    <PageHeader :title="t('ui.integrations.title')" :description="t('ui.integrations.description')">
+    <PageHeader :title="t('ui.integrations.title')">
       <template #actions>
         <AppButton
           icon="integrations"
@@ -1393,7 +1393,6 @@ function libraryRequest(
         v-for="summary in summaries"
         :key="summary.id"
         class="integration-row"
-        :class="{ 'integration-row--steam': summary.id === 'steam' }"
         :aria-labelledby="`integration-${summary.id}`"
       >
         <span class="integration-row__icon" aria-hidden="true">
@@ -1413,11 +1412,6 @@ function libraryRequest(
             <h2 :id="`integration-${summary.id}`">{{ summary.name }}</h2>
             <StatusBadge :label="summary.status" :tone="summary.tone" compact />
           </div>
-          <PlaynitePolicySettings
-            v-if="summary.id === 'playnite' && isWindows"
-            :needs-directory="!playnite?.extensions_dir"
-            @saved="load"
-          />
           <ul v-if="summary.details.length" class="integration-details">
             <li v-for="detail in summary.details" :key="detail">{{ detail }}</li>
           </ul>
@@ -1425,6 +1419,11 @@ function libraryRequest(
             {{ t('ui.integrations.steam.linuxForced') }}
           </p>
           <p class="integration-row__description">{{ summary.description }}</p>
+          <PlaynitePolicySettings
+            v-if="summary.id === 'playnite' && isWindows"
+            :needs-directory="!playnite?.extensions_dir"
+            @saved="load"
+          />
           <section
             v-if="summary.id === 'steam'"
             class="integration-settings"
@@ -2233,11 +2232,10 @@ function libraryRequest(
 
 .integration-row {
   display: grid;
-  min-height: 7rem;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
-  gap: var(--vs-space-16);
-  padding: var(--vs-space-16) var(--vs-space-20);
+  gap: var(--vs-space-12);
+  padding: var(--vs-space-12) var(--vs-space-16);
 }
 
 .integration-row + .integration-row {
@@ -2246,8 +2244,8 @@ function libraryRequest(
 
 .integration-row__icon {
   display: grid;
-  width: 2.5rem;
-  height: 2.5rem;
+  width: 2rem;
+  height: 2rem;
   place-items: center;
   border-radius: var(--vs-radius-control);
   background: var(--vs-color-bg-subtle);
@@ -2296,8 +2294,8 @@ function libraryRequest(
 .integration-settings {
   display: grid;
   max-width: 52rem;
-  gap: var(--vs-space-16);
-  padding-top: var(--vs-space-16);
+  gap: var(--vs-space-8);
+  padding-top: var(--vs-space-8);
 }
 
 .integration-settings__heading,
@@ -2312,84 +2310,38 @@ function libraryRequest(
 
 .integration-settings h3,
 .integration-settings h4 {
-  font-size: var(--vs-type-size-label);
+  font-size: var(--vs-type-size-control);
 }
 
 .integration-settings small,
 .game-manager small {
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-metadata);
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-helper);
 }
 
 .integration-settings__rows {
-  overflow: hidden;
-  border: var(--vs-border-width) solid var(--vs-color-border-subtle);
-  border-radius: var(--vs-radius-control);
-  background: var(--vs-color-bg-subtle);
+  display: grid;
 }
 
-/* Steam is the primary library integration, so keep its policy controls on
-   the page instead of presenting them as a second card. */
-.integration-row--steam .integration-row__icon {
-  width: 2.25rem;
-  height: 2.25rem;
-}
-
-.integration-row--steam .integration-settings {
-  gap: var(--vs-space-8);
-  padding-top: var(--vs-space-8);
-}
-
-.integration-row--steam .integration-row__description {
-  margin-top: calc(-1 * var(--vs-space-2));
-}
-
-.integration-row--steam .integration-settings__rows {
-  overflow: visible;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.integration-row--steam .integration-settings__rows :deep(.vs-setting-row) {
+.integration-settings__rows :deep(.vs-setting-row) {
   min-block-size: 0;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--vs-space-16);
   padding: var(--vs-space-8) 0;
 }
 
-.integration-row--steam .integration-settings__rows :deep(.vs-setting-row + .vs-setting-row) {
-  border-top: 0;
-}
-
-.integration-row--steam .integration-settings__rows :deep(.vs-setting-row__control) {
+.integration-settings__rows :deep(.vs-setting-row__control) {
   min-inline-size: auto;
 }
 
-.integration-row--steam .integration-settings__rows :deep(.vs-setting-row__copy) {
-  gap: var(--vs-space-2);
-}
-
-.integration-row--steam .integration-settings__rows :deep(.vs-setting-row__description) {
-  max-inline-size: 42rem;
-}
-
-.integration-row--steam .integration-details {
+.integration-details {
   margin-top: 0;
 }
 
 .integration-notice {
-  color: var(--vs-color-text-tertiary);
+  color: var(--vs-color-text-muted);
   font-size: var(--vs-type-size-metadata);
   font-style: italic;
-}
-
-.integration-settings__rows :deep(.vs-setting-row) {
-  padding: var(--vs-space-12);
-}
-
-.integration-settings__rows :deep(.vs-setting-row + .vs-setting-row) {
-  border-top: var(--vs-border-width) solid var(--vs-color-border-subtle);
 }
 
 .integration-advanced {
@@ -2397,7 +2349,7 @@ function libraryRequest(
 }
 
 .integration-advanced summary {
-  padding: var(--vs-space-6) 0;
+  padding: var(--vs-space-4) 0;
   color: var(--vs-color-text-secondary);
   cursor: pointer;
   font-size: var(--vs-type-size-metadata);
@@ -2406,7 +2358,6 @@ function libraryRequest(
 
 .integration-advanced :deep(.vs-setting-row) {
   border-top: 0;
-  padding-top: var(--vs-space-8);
 }
 
 .integration-advanced--manager {
@@ -2426,7 +2377,7 @@ function libraryRequest(
 .integration-control,
 .game-manager input,
 .game-manager select {
-  min-height: 2.25rem;
+  min-height: var(--vs-size-control-compact);
   border: var(--vs-border-width) solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-control);
   background: var(--vs-color-bg-surface);
@@ -2449,13 +2400,12 @@ function libraryRequest(
 }
 
 .integration-number input {
-  width: 8rem;
+  width: 5rem;
 }
 
 .integration-number span {
-  color: var(--vs-color-text-tertiary);
+  color: var(--vs-color-text-muted);
   font-size: var(--vs-type-size-metadata);
-  font-weight: 600;
 }
 
 .game-manager {
@@ -2471,7 +2421,7 @@ function libraryRequest(
 }
 
 .game-manager__heading::marker {
-  color: var(--vs-color-text-tertiary);
+  color: var(--vs-color-text-muted);
 }
 
 .game-manager__heading > div,
@@ -2501,7 +2451,7 @@ function libraryRequest(
   padding-inline-start: var(--vs-space-8);
   border: var(--vs-border-width) solid var(--vs-color-border-subtle);
   border-radius: var(--vs-radius-control);
-  color: var(--vs-color-text-tertiary);
+  color: var(--vs-color-text-muted);
 }
 
 .game-manager__search input {
@@ -2619,7 +2569,7 @@ function libraryRequest(
     grid-column: 1 / -1;
     max-width: none;
     justify-content: flex-start;
-    padding-inline-start: calc(2.5rem + var(--vs-space-16));
+    padding-inline-start: calc(2rem + var(--vs-space-12));
   }
 
   .integration-settings {

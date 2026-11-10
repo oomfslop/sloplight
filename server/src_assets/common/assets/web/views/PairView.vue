@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { ApiError, apiPost } from '@/services/client';
-import { AppButton, InlineAlert, PageHeader, StatusBadge, UiIcon } from '@/components/ui';
+import { AppButton, InlineAlert, PageHeader, UiIcon } from '@/components/ui';
 
 const { t } = useI18n();
 
@@ -73,13 +73,7 @@ function resetForm(): void {
 
 <template>
   <div class="vs-page vs-page--settings pair-page">
-    <PageHeader
-      :title="t('ui.pair.page.title')"
-      :description="t('ui.pair.page.description')"
-    >
-      <template #meta>
-        <StatusBadge :label="t('ui.pair.page.local_approval')" tone="info" compact />
-      </template>
+    <PageHeader :title="t('ui.pair.page.title')">
       <template #actions>
         <RouterLink class="vs-button vs-button--secondary" to="/devices">
           <UiIcon name="chevron-left" aria-hidden="true" />
@@ -88,43 +82,34 @@ function resetForm(): void {
       </template>
     </PageHeader>
 
-    <div class="pair-layout">
-      <section class="pair-instructions" aria-labelledby="pair-steps-title">
-        <h2 id="pair-steps-title">{{ t('ui.pair.steps.title') }}</h2>
-        <ol>
-          <li>
-            <span>{{ t('ui.pair.steps.number', { number: 1 }) }}</span>
-            <div>
-              <strong>{{ t('ui.pair.steps.open_moonlight_title') }}</strong>
-              <p>{{ t('ui.pair.steps.open_moonlight_description') }}</p>
-            </div>
-          </li>
-          <li>
-            <span>{{ t('ui.pair.steps.number', { number: 2 }) }}</span>
-            <div>
-              <strong>{{ t('ui.pair.steps.start_pairing_title') }}</strong>
-              <p>{{ t('ui.pair.steps.start_pairing_description') }}</p>
-            </div>
-          </li>
-          <li>
-            <span>{{ t('ui.pair.steps.number', { number: 3 }) }}</span>
-            <div>
-              <strong>{{ t('ui.pair.steps.approve_title') }}</strong>
-              <p>{{ t('ui.pair.steps.approve_description') }}</p>
-            </div>
-          </li>
-        </ol>
-      </section>
-
-      <section class="pair-panel vs-surface" aria-labelledby="pair-form-title">
-        <div class="pair-panel__heading">
-          <div class="pair-panel__icon" aria-hidden="true"><UiIcon name="devices" :size="20" /></div>
+    <section class="pair-card vs-surface" aria-labelledby="pair-steps-title">
+      <h2 id="pair-steps-title" class="vs-sr-only">{{ t('ui.pair.steps.title') }}</h2>
+      <ol class="pair-steps">
+        <li>
+          <span>{{ t('ui.pair.steps.number', { number: 1 }) }}</span>
           <div>
-            <h2 id="pair-form-title">{{ t('ui.pair.form.title') }}</h2>
-            <p>{{ t('ui.pair.form.description') }}</p>
+            <strong>{{ t('ui.pair.steps.open_moonlight_title') }}</strong>
+            <p>{{ t('ui.pair.steps.open_moonlight_description') }}</p>
           </div>
-        </div>
+        </li>
+        <li>
+          <span>{{ t('ui.pair.steps.number', { number: 2 }) }}</span>
+          <div>
+            <strong>{{ t('ui.pair.steps.start_pairing_title') }}</strong>
+            <p>{{ t('ui.pair.steps.start_pairing_description') }}</p>
+          </div>
+        </li>
+        <li>
+          <span>{{ t('ui.pair.steps.number', { number: 3 }) }}</span>
+          <div>
+            <strong>{{ t('ui.pair.steps.approve_title') }}</strong>
+            <p>{{ t('ui.pair.steps.approve_description') }}</p>
+          </div>
+        </li>
+      </ol>
 
+      <div class="pair-body">
+        <h2 id="pair-form-title" class="vs-sr-only">{{ t('ui.pair.form.title') }}</h2>
         <InlineAlert
           v-if="error"
           tone="danger"
@@ -205,147 +190,98 @@ function resetForm(): void {
             icon="check"
             :busy="submitting"
             :busy-label="t('ui.pair.action.approving')"
-            block
           />
         </form>
 
-        <p class="pair-privacy">
-          <UiIcon name="info" :size="16" aria-hidden="true" />
-          {{ t('ui.pair.privacy') }}
-        </p>
-      </section>
-    </div>
+      </div>
+    </section>
   </div>
 </template>
 
 <style scoped>
 .pair-page {
   display: grid;
-  gap: var(--vs-space-24);
-}
-
-.pair-layout {
-  display: grid;
-  grid-template-columns: minmax(16rem, 0.8fr) minmax(20rem, 1.2fr);
-  gap: var(--vs-space-24);
-  align-items: start;
-}
-
-.pair-instructions,
-.pair-panel {
-  padding: var(--vs-space-24);
-}
-
-.pair-instructions h2,
-.pair-panel h2 {
-  font-size: var(--vs-type-size-section);
-  line-height: var(--vs-type-line-height-section);
-}
-
-.pair-instructions ol {
-  display: grid;
   gap: var(--vs-space-20);
-  padding: 0;
-  margin-top: var(--vs-space-20);
+}
+
+.pair-card {
+  overflow: hidden;
+}
+
+.pair-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--vs-space-16);
+  padding: var(--vs-space-16);
+  margin: 0;
+  border-bottom: 1px solid var(--vs-color-border-subtle);
+  background: var(--vs-color-bg-subtle);
   list-style: none;
 }
 
-.pair-instructions li {
+.pair-steps li {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  gap: var(--vs-space-12);
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: var(--vs-space-8);
 }
 
-.pair-instructions li > span {
+.pair-steps li > span {
   display: grid;
-  width: 32px;
-  height: 32px;
+  width: 20px;
+  height: 20px;
   place-items: center;
-  border: 1px solid var(--vs-color-border-strong);
-  border-radius: var(--vs-radius-control);
-  color: var(--vs-color-accent-default);
+  border-radius: var(--vs-radius-pill);
+  background: var(--vs-color-bg-raised);
+  color: var(--vs-color-text-secondary);
+  font-size: var(--vs-type-size-helper);
   font-weight: var(--vs-type-weight-semibold);
   font-variant-numeric: tabular-nums;
 }
 
-.pair-instructions strong {
+.pair-steps strong {
   display: block;
-  color: var(--vs-color-text-primary);
   font-size: var(--vs-type-size-control);
+  line-height: 20px;
 }
 
-.pair-instructions p,
-.pair-panel__heading p,
-.pair-privacy {
-  margin-top: var(--vs-space-4);
-  color: var(--vs-color-text-secondary);
-  font-size: var(--vs-type-size-metadata);
-  line-height: var(--vs-type-line-height-metadata);
+.pair-steps p {
+  margin-top: var(--vs-space-2);
+  color: var(--vs-color-text-muted);
+  font-size: var(--vs-type-size-helper);
+  line-height: var(--vs-type-line-height-helper);
 }
 
-.pair-panel,
+.pair-body {
+  display: grid;
+  gap: var(--vs-space-12);
+  padding: var(--vs-space-16);
+}
+
 .pair-form {
   display: grid;
-  gap: var(--vs-space-20);
-}
-
-.pair-panel__heading {
-  display: flex;
-  align-items: flex-start;
+  grid-template-columns: minmax(0, 1fr) 10rem auto;
+  align-items: start;
   gap: var(--vs-space-12);
 }
 
-.pair-panel__icon {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  flex: none;
-  place-items: center;
-  border-radius: var(--vs-radius-control);
-  background: var(--vs-color-bg-subtle);
-  color: var(--vs-color-accent-default);
+.pair-form > :last-child {
+  margin-top: calc(var(--vs-type-line-height-control) + var(--vs-space-4));
 }
 
 .pair-pin {
-  max-width: 13rem;
   font-family: var(--vs-type-family-mono);
-  font-size: 1.25rem;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.28em;
-}
-
-.pair-privacy {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--vs-space-8);
-  padding-top: var(--vs-space-16);
-  border-top: 1px solid var(--vs-color-border-subtle);
-}
-
-.pair-privacy > svg {
-  flex: none;
-  margin-top: 1px;
+  letter-spacing: 0.2em;
 }
 
 @media (max-width: 767px) {
-  .pair-layout {
+  .pair-steps,
+  .pair-form {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .pair-instructions,
-  .pair-panel {
-    padding: var(--vs-space-16);
-  }
-
-  .pair-pin {
-    max-width: none;
-  }
-}
-
-@media (forced-colors: active) {
-  .pair-instructions li > span,
-  .pair-panel__icon {
-    border: 1px solid CanvasText;
+  .pair-form > :last-child {
+    margin-top: 0;
   }
 }
 </style>
