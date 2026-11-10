@@ -187,6 +187,7 @@ namespace proc {
     bool _steam_tracking_associated {false};
     std::chrono::steady_clock::time_point _steam_tracking_deadline {};
     std::chrono::steady_clock::time_point _steam_last_tracking_poll {};
+    std::string tracked_app_label() const;
 
 #ifdef _WIN32
     std::atomic_bool _deferred_launch {false};

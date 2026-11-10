@@ -11,6 +11,7 @@ export interface App {
   cmd?: string | string[];
   uuid?: string;
   'working-dir'?: string;
+  'game-path'?: string;
   'image-path'?: string;
   'playnite-icon-path'?: string;
   'image-version'?: number | string;

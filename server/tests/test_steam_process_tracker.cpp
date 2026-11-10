@@ -305,3 +305,20 @@ TEST(SteamProcessTracker, LinuxSnapshotIncludesCurrentUserProcess) {
   EXPECT_TRUE(processes->complete);
 }
 #endif
+
+TEST(SteamProcessTracker, GameExecutableIsTrackedWithoutItsLauncher) {
+  const auto before = snapshot({process(2, 1, "/usr/bin/explorer")});
+  const auto after = snapshot({process(2, 1, "/usr/bin/explorer"),
+                              process(5, 2, "/launcher/HYP.exe", "/launcher"),
+                              process(6, 5, "/launcher/helper.exe", "/launcher"),
+                              process(7, 5, "/games/genshin/GenshinImpact.exe"),
+                              process(8, 7, "/games/genshin/crash_reporter.exe")});
+
+  const auto result = lifecycle::associate(before, after, "/games/genshin/GenshinImpact.exe");
+
+  ASSERT_TRUE(result.associated());
+  EXPECT_EQ(result.tree.root_pid, 7u);
+  std::vector<lifecycle::process_id_t> tracked;
+  for (const auto &[pid, _] : result.tree.processes) tracked.push_back(pid);
+  EXPECT_EQ(tracked, (std::vector<lifecycle::process_id_t> {7, 8}));
+}

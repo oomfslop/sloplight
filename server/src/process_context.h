@@ -80,6 +80,9 @@ namespace proc {
     // lets the shared process tracker own the real Wine/native process.
     std::string lutris_id;
     std::string lutris_directory;
+    // Executable or folder of the real game when cmd starts a launcher. The app
+    // lives as long as processes started from it, not as long as the launcher.
+    std::string game_path;
     // When present, this app should be launched via Playnite instead of direct cmd.
     std::string playnite_id;
     // When true, launch Playnite in fullscreen mode via the helper.

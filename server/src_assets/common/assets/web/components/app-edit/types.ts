@@ -122,6 +122,7 @@ export interface ServerApp {
   cmd?: string | string[];
   uuid?: string;
   'working-dir'?: string;
+  'game-path'?: string;
   'image-path'?: string;
   'playnite-icon-path'?: string;
   'exclude-global-prep-cmd'?: boolean;

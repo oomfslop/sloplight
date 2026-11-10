@@ -86,6 +86,7 @@ interface EditorForm {
   displayOutput: string;
   cmd: string;
   workingDir: string;
+  gamePath: string;
   imagePath: string;
   playniteIconPath: string;
   playniteId: string;
@@ -1213,6 +1214,7 @@ const editableKeys = new Set([
   'display-output',
   'cmd',
   'working-dir',
+  'game-path',
   'image-path',
   'playnite-icon-path',
   'playnite-id',
@@ -1303,6 +1305,7 @@ function emptyForm(): EditorForm {
     displayOutput: '',
     cmd: '',
     workingDir: '',
+    gamePath: '',
     imagePath: '',
     playniteIconPath: '',
     playniteId: '',
@@ -1747,6 +1750,7 @@ function hydrate(app: AppRecord): void {
     displayOutput: asString(app['display-output']),
     cmd: command,
     workingDir: asString(app['working-dir']),
+    gamePath: asString(app['game-path']),
     imagePath: asString(app['image-path']),
     playniteIconPath: asString(app['playnite-icon-path']),
     playniteId: asString(app['playnite-id']),
@@ -2007,6 +2011,7 @@ function buildPayload(): AppRecord {
   setOptionalString(payload, 'output', form.output);
   setOptionalString(payload, 'display-output', form.displayOutput);
   setOptionalString(payload, 'working-dir', form.workingDir);
+  setOptionalString(payload, 'game-path', form.gamePath);
   setOptionalString(payload, 'image-path', form.imagePath);
   setOptionalString(payload, 'playnite-icon-path', form.playniteIconPath);
   setOptionalString(payload, 'playnite-id', form.playniteId);
@@ -3429,6 +3434,22 @@ onBeforeUnmount(() => {
                 class="vs-input vs-monospace"
                 type="text"
               />
+            </label>
+
+            <label
+              v-if="!isProviderLinked && !isRemoteSession"
+              class="vs-field editor-field editor-field--full"
+              for="app-game-path"
+            >
+              <span class="vs-field__label">{{ t('ui.application.fields.gamePath.label') }}</span>
+              <input
+                id="app-game-path"
+                v-model="form.gamePath"
+                class="vs-input vs-monospace"
+                type="text"
+                :placeholder="t('ui.application.fields.gamePath.placeholder')"
+              />
+              <span class="vs-field__helper">{{ t('ui.application.fields.gamePath.help') }}</span>
             </label>
 
             <div class="vs-field editor-field editor-field--full">

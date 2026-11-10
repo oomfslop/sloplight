@@ -2288,19 +2288,20 @@ namespace proc {
       // the process baseline immediately before handing the URI to Steam so
       // the game can be owned independently of that launcher process.
       const auto provider_id = !_app.steam_id.empty() ? _app.steam_id : _app.lutris_id;
-      const auto provider_name = !_app.steam_id.empty() ? "Steam" : "Lutris";
-      const auto provider_directory = !_app.steam_install_dir.empty() ? _app.steam_install_dir : _app.lutris_directory;
-      if (!provider_id.empty() && !provider_directory.empty()) {
+      const auto provider_directory = !_app.game_path.empty()      ? _app.game_path :
+                                      !_app.steam_install_dir.empty() ? _app.steam_install_dir :
+                                                                        _app.lutris_directory;
+      if (!_app.game_path.empty() || (!provider_id.empty() && !provider_directory.empty())) {
         _steam_tracker.clear();
         _steam_tracking_active = _steam_tracker.begin(provider_directory);
         _steam_tracking_associated = false;
         _steam_tracking_deadline = std::chrono::steady_clock::now() + 15s;
         _steam_last_tracking_poll = {};
         if (!_steam_tracking_active) {
-          BOOST_LOG(warning) << provider_name << " app " << provider_id
+          BOOST_LOG(warning) << tracked_app_label()
                              << " could not capture a process baseline; continuing with untrackable detached behavior.";
         } else {
-          BOOST_LOG(debug) << provider_name << " app " << provider_id
+          BOOST_LOG(debug) << tracked_app_label()
                            << " process baseline captured for install directory ["
                            << provider_directory << "]";
         }
@@ -2338,7 +2339,9 @@ namespace proc {
     }
 #endif
 
-    if (_app.playnite_id.empty() && (!_app.steam_id.empty() || !_app.lutris_id.empty())) {
+    if (_app.playnite_id.empty() && !_app.game_path.empty()) {
+      _app_focus = managed_app_focus::start({"game", _app.name, _app.game_path}, managed_app_focus::settings);
+    } else if (_app.playnite_id.empty() && (!_app.steam_id.empty() || !_app.lutris_id.empty())) {
       const bool steam = !_app.steam_id.empty();
       _app_focus = managed_app_focus::start({steam ? "steam" : "lutris",
         steam ? _app.steam_id : _app.lutris_id,
@@ -2460,6 +2463,7 @@ namespace proc {
     }
 #endif
 
+    bool tracked_game_exited = false;
     if (_steam_tracking_active) {
       const auto now = std::chrono::steady_clock::now();
       constexpr auto tracking_poll_interval = 100ms;
@@ -2468,9 +2472,7 @@ namespace proc {
         const auto tracking = _steam_tracker.finish();
         if (tracking.associated()) {
           if (!_steam_tracking_associated) {
-            const auto provider_name = !_app.steam_id.empty() ? "Steam" : "Lutris";
-            const auto provider_id = !_app.steam_id.empty() ? _app.steam_id : _app.lutris_id;
-            BOOST_LOG(info) << provider_name << " app " << provider_id
+            BOOST_LOG(info) << tracked_app_label()
                             << " associated with " << tracking.tree.processes.size()
                             << " tracked process(es).";
           }
@@ -2481,28 +2483,33 @@ namespace proc {
           // tree has exited. Let the normal cleanup path run below.
           _steam_tracking_associated = false;
           _steam_tracking_active = false;
+          tracked_game_exited = true;
         }
       }
 
       if (_steam_tracking_associated) {
         return _app_id;
       }
-      if (now < _steam_tracking_deadline) {
+      if (_steam_tracking_active && (!_app.game_path.empty() || now < _steam_tracking_deadline)) {
         // Keep the stream alive while Steam is still starting the game. This
         // preserves the existing detached/placebo behavior if association
         // eventually fails, without turning polling into a blocking wait.
         return _app_id;
       }
 
-      BOOST_LOG(warning) << "Steam app " << _app.steam_id
-                         << " process tree remained untrackable after the 15 second launch window;"
-                            " retaining detached streaming behavior.";
-      _steam_tracking_active = false;
-      placebo = true;
-      return _app_id;
+      if (_steam_tracking_active) {
+        BOOST_LOG(warning) << tracked_app_label()
+                           << " process tree remained untrackable after the 15 second launch window;"
+                              " retaining detached streaming behavior.";
+        _steam_tracking_active = false;
+        placebo = true;
+        return _app_id;
+      }
     }
 
-    if (placebo) {
+    if (tracked_game_exited) {
+      BOOST_LOG(info) << tracked_app_label() << " exited; ending the app even if its launcher is still running.";
+    } else if (placebo) {
       return _app_id;
     } else if (_process.running()) {
       // Checking the owned child is cheap and collects its exact exit status.
@@ -2536,6 +2543,11 @@ namespace proc {
     }
 
     return 0;
+  }
+
+  std::string proc_t::tracked_app_label() const {
+    if (!_app.game_path.empty()) return "App '" + _app.name + "' game [" + _app.game_path + "]";
+    return !_app.steam_id.empty() ? "Steam app " + _app.steam_id : "Lutris app " + _app.lutris_id;
   }
 
   int proc_t::current_app_id() const {
@@ -2718,8 +2730,7 @@ namespace proc {
         *_steam_process_controller,
         steam_stop_options
       );
-      const auto provider_name = !_app.steam_id.empty() ? "Steam" : "Lutris";
-      BOOST_LOG(info) << provider_name << " tracked tree termination requested: TERM=" << stopped.terminate_sent
+      BOOST_LOG(info) << tracked_app_label() << " tracked tree termination requested: TERM=" << stopped.terminate_sent
                       << ", KILL=" << stopped.kill_sent << ", skipped=" << stopped.skipped
                       << ", complete=" << (stopped.complete ? "yes" : "no");
       // The app timeout has been consumed by the Steam-owned tree. The URI
@@ -3737,6 +3748,7 @@ namespace proc {
         auto steam_install_dir = app_node.get_optional<std::string>("steam-install-dir"s);
         auto lutris_id = app_node.get_optional<std::string>("lutris-id"s);
         auto lutris_directory = app_node.get_optional<std::string>("lutris-directory"s);
+        auto game_path = app_node.get_optional<std::string>("game-path"s);
         auto playnite_id = app_node.get_optional<std::string>("playnite-id"s);
         auto elevated = app_node.get_optional<bool>("elevated"s);
         auto auto_detach = app_node.get_optional<bool>("auto-detach"s);
@@ -3948,6 +3960,10 @@ namespace proc {
         }
         if (lutris_directory) {
           ctx.lutris_directory = parse_env_val(this_env, *lutris_directory);
+        }
+        if (game_path) {
+          ctx.game_path = parse_env_val(this_env, *game_path);
+          boost::erase_all(ctx.game_path, "\"");
         }
 
         if (image_path) {
