@@ -8089,6 +8089,7 @@ namespace VDISPLAY_SUNSHINE {
   }
 
   bool supportsRequestedResolutionCatalog() {
+    if (!ensure_control_transport_responsive("Virtual display catalog capability query", {}, OpenRecoveryBehavior::transport_only)) return false;
     const auto transport = control_transport_snapshot();
     if (!transport || !transport->valid()) return false;
     sunshine_driver::ControlClient client {*transport};
