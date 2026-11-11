@@ -316,6 +316,13 @@ impl Root {
                 .shortcut("⏎"),
             );
         }
+        if running && host.keep_app_on_cancel {
+            let u = uuid.to_string();
+            entries.push(MenuEntry::new("End session", cx.listener(move |this, _, _, cx| {
+                close_popup(this, cx);
+                this.manager.quit_running_app(&u, true);
+            })));
+        }
         if running {
             let u = uuid.to_string();
             entries.push(

@@ -137,10 +137,13 @@ namespace proc {
     bool running_app_contains_pid(uint32_t pid);
 #endif
     // Configuration reload must wait until the caller releases its read gate.
+    // keep_app_running ends the session (undo commands, displays) but leaves
+    // the app's processes alone, so a later launch can adopt them.
     void terminate(
       bool skip_display_revert = false,
       bool stream_lifecycle_lock_held = false,
-      bool config_read_gate_held = false
+      bool config_read_gate_held = false,
+      bool keep_app_running = false
     );
 
     // Hot-update app list and environment without disrupting a running app

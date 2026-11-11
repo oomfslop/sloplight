@@ -270,9 +270,10 @@ impl NvHttp {
         Ok(resp.body)
     }
 
-    /// Sends `cancel` and verifies the game actually stopped.
-    pub fn quit_app(&mut self) -> Result<(), HttpError> {
-        let resp = self.get_string(true, "cancel", "", QUIT_TIMEOUT).map_err(|e| {
+    /// Sends `cancel` and verifies the game actually stopped. `keep_app` ends
+    /// only the session, leaving the app running (see `Host::keep_app_on_cancel`).
+    pub fn quit_app(&mut self, keep_app: bool) -> Result<(), HttpError> {
+        let resp = self.get_string(true, "cancel", if keep_app { "keep_app=1" } else { "" }, QUIT_TIMEOUT).map_err(|e| {
             log::warn!("cancel request failed: {e:?}");
             e
         })?;

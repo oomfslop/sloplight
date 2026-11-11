@@ -637,12 +637,13 @@ impl Root {
                 }
                 cx.notify();
             }
-            ManagerEvent::QuitCompleted { uuid, error } => {
+            ManagerEvent::QuitCompleted { uuid, keep_app, error } => {
                 self.hosts = self.manager.snapshot();
                 if let Some(e) = error {
                     let name = self.host_by_uuid(&uuid).and_then(|h| h.running_app().map(|a| a.name.clone())).unwrap_or_else(|| "the app".into());
                     self.pending_launch = None;
-                    self.dialog = Some(Dialog::Error { title: format!("Couldn't quit {name}"), body: vec![e.clone()], details: e, permission: false, host_uuid: Some(uuid) });
+                    let title = if keep_app { format!("Couldn't end the {name} session") } else { format!("Couldn't quit {name}") };
+                    self.dialog = Some(Dialog::Error { title, body: vec![e.clone()], details: e, permission: false, host_uuid: Some(uuid) });
                 } else {
                     self.try_pending_launch(cx);
                 }
@@ -876,11 +877,11 @@ impl Root {
         self.dialog = None;
         match action {
             ConfirmAction::QuitApp { uuid } => {
-                self.manager.quit_running_app(&uuid);
+                self.manager.quit_running_app(&uuid, false);
             }
             ConfirmAction::QuitAndStart { uuid, next_app_id } => {
                 self.pending_launch = Some(PendingLaunch { uuid: uuid.clone(), app_id: next_app_id });
-                self.manager.quit_running_app(&uuid);
+                self.manager.quit_running_app(&uuid, false);
             }
             ConfirmAction::RemoveHost { uuid } => {
                 let name = self.host_by_uuid(&uuid).map(|h| h.name.clone()).unwrap_or_default();

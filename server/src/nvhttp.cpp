@@ -4455,6 +4455,8 @@ namespace nvhttp {
       }
     }
     tree.put("root.ExternalPort", net::map_port(PORT_HTTP));
+    // /cancel?keep_app=1 ends the session without quitting the app
+    tree.put("root.KeepAppOnCancel", 1);
     // Optional Moonlight extension. These describe integration/configuration,
     // not proof that a particular game's limiter was successfully applied.
     // Virtual-display limiting is independent of the manual limiter switch.
@@ -6541,7 +6543,7 @@ launch_session->exact_target_hold.reset();
     rtsp_stream::terminate_sessions(preserve_deferred_launch);
 
     if (has_running_app && !preserve_deferred_launch) {
-      proc::proc.terminate();
+      proc::proc.terminate(false, false, false, get_arg(request->parse_query_string(), "keep_app", "0") == "1"sv);
     }
     // The config needs to be reverted regardless of whether "proc::proc.terminate()" was called or not.
 

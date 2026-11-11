@@ -222,6 +222,9 @@ pub struct Host {
     pub virtual_display_capable: bool,
     #[serde(skip)]
     pub virtual_display_driver_ready: bool,
+    /// Sloplight server: `cancel` can end the session and leave the app running
+    #[serde(skip)]
+    pub keep_app_on_cancel: bool,
 }
 
 pub fn current_game(server_info: &str) -> i32 {
@@ -304,6 +307,7 @@ impl Host {
         host.server_commands = xml::get_strings(info, "ServerCommand");
         host.virtual_display_capable = xml::get_string(info, "VirtualDisplayCapable").as_deref() == Some("true");
         host.virtual_display_driver_ready = xml::get_string(info, "VirtualDisplayDriverReady").as_deref() == Some("true");
+        host.keep_app_on_cancel = xml::get_string(info, "KeepAppOnCancel").as_deref() == Some("1");
 
         host.server_codec_mode_support = xml::get_string(info, "ServerCodecModeSupport")
             .and_then(|s| s.trim().parse().ok())
@@ -447,6 +451,7 @@ impl Host {
         assign!(server_commands);
         assign!(virtual_display_capable);
         assign!(virtual_display_driver_ready);
+        assign!(keep_app_on_cancel);
         assign_if_some!(server_cert_pem);
         if !that.display_modes.is_empty() && self.display_modes != that.display_modes {
             self.display_modes = that.display_modes.clone();

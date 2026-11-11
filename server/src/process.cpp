@@ -2746,7 +2746,8 @@ namespace proc {
   void proc_t::terminate(
     bool skip_display_revert,
     bool stream_lifecycle_lock_held,
-    bool config_read_gate_held
+    bool config_read_gate_held,
+    bool keep_app_running
   ) {
     host_stream_control::activity_guard_t activity;
     if (!activity) return;
@@ -2796,7 +2797,9 @@ namespace proc {
     if (had_active_app && !_app.playnite_id.empty()) {
       bool should_request_playnite_stop = true;
       try {
-        if (_process && !_process.running() && _process.native_exit_code() == 0) {
+        if (keep_app_running) {
+          should_request_playnite_stop = false;
+        } else if (_process && !_process.running() && _process.native_exit_code() == 0) {
           // The launcher already exited cleanly (typically after receiving gameStopped).
           // Avoid sending a redundant stop command that can race into the next launch.
           should_request_playnite_stop = false;
@@ -2823,11 +2826,11 @@ namespace proc {
     // Provider URI launchers are not the game process and their process group
     // does not own the Proton/Wine tree. Stop only identities retained by the
     // tracker; Steam/Lutris client and runtime PIDs are never inserted.
-    if (_steam_tracking_associated) {
+    if (_steam_tracking_associated && !keep_app_running) {
       // Children started since the last snapshot must be stopped with the tree.
       (void) _steam_tracker.finish();
     }
-    if (!_steam_tracker.tree().empty()) {
+    if (!_steam_tracker.tree().empty() && !keep_app_running) {
       if (!_steam_process_controller) {
         _steam_process_controller = platf::steam::lifecycle::native_process_controller();
       }
@@ -2858,8 +2861,16 @@ namespace proc {
     _launcher_tracking_associated = false;
     publish_tracked_game_pids();
 
-    // Regardless, ensure process group is terminated (graceful then forceful with remaining timeout)
-    terminate_process_group(_process, _process_group, remaining_timeout);
+    if (keep_app_running) {
+      BOOST_LOG(info) << tracked_app_label() << " keeps running: only the session ends";
+      _process_group.detach_keeping_processes();
+      if (_process.valid()) {
+        _process.detach();
+      }
+    } else {
+      // Regardless, ensure process group is terminated (graceful then forceful with remaining timeout)
+      terminate_process_group(_process, _process_group, remaining_timeout);
+    }
     _process = bp::child();
     _process_group = bp::group();
 

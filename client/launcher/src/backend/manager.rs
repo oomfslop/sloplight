@@ -37,7 +37,7 @@ pub enum ManagerEvent {
     HostRemoved { uuid: String },
     AddCompleted { address: String, result: Result<String, AddError> },
     PairingCompleted { uuid: String, error: Option<String> },
-    QuitCompleted { uuid: String, error: Option<String> },
+    QuitCompleted { uuid: String, keep_app: bool, error: Option<String> },
     BoxArtLoaded { uuid: String, app_id: i32 },
 }
 
@@ -636,7 +636,7 @@ impl HostManager {
 
     // --------------------------------------------------------------- quit app
 
-    pub fn quit_running_app(&self, uuid: &str) {
+    pub fn quit_running_app(&self, uuid: &str, keep_app: bool) {
         let Some(host) = self.host_arc(uuid) else { return };
         host.write().unwrap().pending_quit = true;
         self.emit(ManagerEvent::HostsChanged);
@@ -653,7 +653,7 @@ impl HostManager {
                 if current_game != 0 {
                     match http {
                         Some(mut http) => {
-                            if let Err(e) = http.quit_app() {
+                            if let Err(e) = http.quit_app(keep_app) {
                                 error = Some(match e {
                                     HttpError::Status { code: 599, .. } => {
                                         "This app wasn't started by this PC. Quit it on the host or from the device that started it.".to_string()
@@ -674,7 +674,7 @@ impl HostManager {
                 }
                 me.refresh();
                 me.emit(ManagerEvent::HostsChanged);
-                me.emit(ManagerEvent::QuitCompleted { uuid, error });
+                me.emit(ManagerEvent::QuitCompleted { uuid, keep_app, error });
             })
             .ok();
     }

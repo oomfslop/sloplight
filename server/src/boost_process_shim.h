@@ -536,6 +536,18 @@ namespace boost_process_shim {
 #endif
     }
 
+    // Lets go of the group without ending its processes
+    void detach_keeping_processes() {
+#ifdef _WIN32
+      if (job_) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION info {};
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        SetInformationJobObject(job_, JobObjectExtendedLimitInformation, &info, sizeof(info));
+      }
+#endif
+      detach();
+    }
+
     void terminate(std::error_code &ec) {
       ec.clear();
 #ifdef _WIN32
