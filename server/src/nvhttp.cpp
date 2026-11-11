@@ -1391,14 +1391,13 @@ namespace nvhttp {
         launch_session->virtual_display_catalog_error = "Unable to verify that the current capture display has an unrestricted catalog; this client cannot share it.";
         return;
       }
+      if (launch_session->requested_resolution_only &&
+          (!request_virtual_display || shared_virtual_display_mode || launch_session->client_uuid.empty() ||
+           !config::video.dd.use_sunshine_virtual_display_driver || !no_active_sessions ||
+           launch_session->role != remote_session::role_e::game)) {
+        launch_session->requested_resolution_only = false;
+      }
       if (launch_session->requested_resolution_only) {
-        if (!request_virtual_display || shared_virtual_display_mode || launch_session->client_uuid.empty() ||
-            !config::video.dd.use_sunshine_virtual_display_driver || !no_active_sessions ||
-            launch_session->role != remote_session::role_e::game) {
-          launch_session->virtual_display_catalog_error =
-            "Requested-resolution catalog requires this client's private bundled-driver display at a session boundary; shared, physical and peer sessions cannot use it.";
-          return;
-        }
         if (!VDISPLAY::supportsRequestedResolutionCatalog()) {
           launch_session->virtual_display_catalog_error =
             "Requested-resolution catalog is unavailable: the opened bundled virtual display producer must support control protocol 3.8 or later.";
@@ -2076,7 +2075,7 @@ namespace nvhttp {
     std::string virtual_display_mode_override;
     std::string virtual_display_layout_override;
     bool always_use_virtual_display = false;
-    bool requested_resolution_only = false;
+    bool requested_resolution_only = true;
     bool enabled = true;
     bool allow_sleep = false;
     bool allow_clipboard = false;
@@ -2386,7 +2385,7 @@ namespace nvhttp {
               named_cert.allow_sleep = element.get<bool>("allow_sleep", false);
               named_cert.allow_clipboard = element.get<bool>("allow_clipboard", false);
               named_cert.allow_windows = element.get<bool>("allow_windows", false);
-              named_cert.requested_resolution_only = element.get<bool>("requested_resolution_only", false);
+              named_cert.requested_resolution_only = element.get<bool>("requested_resolution_only", true);
               named_cert.prefer_10bit_sdr = element.get<bool>("prefer_10bit_sdr", false);
               if (auto last_seen = element.get_optional<std::int64_t>("last_seen")) {
                 named_cert.last_seen = *last_seen;
@@ -2573,7 +2572,7 @@ namespace nvhttp {
     named_cert.virtual_display_layout_override.clear();
     named_cert.always_use_virtual_display = false;
     named_cert.enabled = true;
-    named_cert.requested_resolution_only = false;
+    named_cert.requested_resolution_only = true;
     named_cert.prefer_10bit_sdr = false;
     named_cert.last_seen.reset();
     named_cert.config_overrides.clear();

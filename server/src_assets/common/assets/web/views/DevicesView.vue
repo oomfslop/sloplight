@@ -188,7 +188,7 @@ function normalizeDevice(device: unknown, index: number): PairedDevice {
     virtual_display_mode: stringValue(raw.virtual_display_mode),
     virtual_display_layout: stringValue(raw.virtual_display_layout),
     always_use_virtual_display: booleanValue(raw.always_use_virtual_display, false),
-    requested_resolution_only: booleanValue(raw.requested_resolution_only, false),
+    requested_resolution_only: booleanValue(raw.requested_resolution_only, true),
     requested_resolution_catalog_supported: booleanValue(
       raw.requested_resolution_catalog_supported,
       false,
