@@ -77,5 +77,6 @@ impl gpui::Render for Root {
             .text_color(theme.text)
             .child(self.render_shell(width, window, cx))
             .children(self.render_overlays(window, cx))
+            .children(self.render_toasts(&theme, cx))
     }
 }

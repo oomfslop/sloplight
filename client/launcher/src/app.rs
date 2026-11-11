@@ -55,6 +55,7 @@ pub enum ViewMode {
 pub enum ConfirmAction {
     QuitApp { uuid: String },
     QuitAndStart { uuid: String, next_app_id: i32 },
+    EndSessionAndStart { uuid: String, next_app_id: i32 },
     RemoveHost { uuid: String },
     QuitWhileStreaming,
 }
@@ -66,6 +67,8 @@ pub enum Dialog {
         primary: String,
         danger: bool,
         action: ConfirmAction,
+        /// A second, non-destructive way to proceed: label and action
+        secondary: Option<(String, ConfirmAction)>,
     },
     Error {
         title: String,
@@ -183,6 +186,8 @@ pub struct Root {
     pub recording_hotkey: Option<crate::views::panel::PanelKind>,
     pub cache_dir: PathBuf,
     pub pending_launch: Option<PendingLaunch>,
+    /// Launched (through the usual prompts) once the current stream has ended
+    pub launch_after_stream: Option<PendingLaunch>,
     pub box_art_requested: HashSet<(String, i32)>,
     pub helper_path: Option<PathBuf>,
     pub window_active: bool,
@@ -254,6 +259,7 @@ impl Root {
             stream: None,
             stream_tx,
             pending_launch: None,
+            launch_after_stream: None,
             box_art_requested: HashSet::new(),
             windows: Default::default(),
             launchables: Default::default(),
@@ -688,8 +694,19 @@ impl Root {
     /// Starts or resumes an app, asking to quit a different running app first.
     pub fn launch(&mut self, uuid: &str, app_id: i32, cx: &mut Context<Self>) {
         let Some(host) = self.host_by_uuid(uuid).cloned() else { return };
-        if self.stream.is_some() {
-            return;
+        if let Some(stream) = &self.stream {
+            if stream.host_uuid == uuid && stream.app_id == app_id {
+                if let Some(pid) = stream.process.pid() {
+                    crate::backend::platform::activate_app(pid);
+                }
+                return;
+            }
+            if stream.host_uuid != uuid {
+                // The app streamed from the other host keeps running there
+                self.launch_after_stream = Some(PendingLaunch { uuid: uuid.to_string(), app_id });
+                self.cancel_stream(cx);
+                return;
+            }
         }
         if host.current_game_id != 0 && host.current_game_id != app_id {
             if host.running_app().is_some_and(|a| !a.has_process) {
@@ -704,6 +721,9 @@ impl Root {
                 primary: "Quit and start".into(),
                 danger: true,
                 action: ConfirmAction::QuitAndStart { uuid: uuid.to_string(), next_app_id: app_id },
+                secondary: host.keep_app_on_cancel.then(|| {
+                    ("End session and start".to_string(), ConfirmAction::EndSessionAndStart { uuid: uuid.to_string(), next_app_id: app_id })
+                }),
             });
             cx.notify();
             return;
@@ -761,6 +781,9 @@ impl Root {
     }
 
     fn try_pending_launch(&mut self, cx: &mut Context<Self>) {
+        if self.stream.is_some() {
+            return;
+        }
         let Some(pending) = &self.pending_launch else { return };
         let Some(host) = self.host_by_uuid(&pending.uuid).cloned() else {
             self.pending_launch = None;
@@ -858,6 +881,10 @@ impl Root {
                     self.polling_paused = false;
                     self.manager.start_polling();
                 }
+                self.try_pending_launch(cx);
+                if let Some(next) = self.launch_after_stream.take() {
+                    self.launch(&next.uuid, next.app_id, cx);
+                }
             }
         }
         cx.notify();
@@ -885,7 +912,13 @@ impl Root {
             }
             ConfirmAction::QuitAndStart { uuid, next_app_id } => {
                 self.pending_launch = Some(PendingLaunch { uuid: uuid.clone(), app_id: next_app_id });
+                self.cancel_stream(cx);
                 self.manager.quit_running_app(&uuid, false);
+            }
+            ConfirmAction::EndSessionAndStart { uuid, next_app_id } => {
+                self.pending_launch = Some(PendingLaunch { uuid: uuid.clone(), app_id: next_app_id });
+                self.cancel_stream(cx);
+                self.manager.quit_running_app(&uuid, true);
             }
             ConfirmAction::RemoveHost { uuid } => {
                 let name = self.host_by_uuid(&uuid).map(|h| h.name.clone()).unwrap_or_default();
@@ -1070,6 +1103,7 @@ impl Root {
             primary: "Remove".into(),
             danger: true,
             action: ConfirmAction::RemoveHost { uuid: uuid.to_string() },
+            secondary: None,
         });
         self.popup = None;
         cx.notify();
@@ -1088,6 +1122,7 @@ impl Root {
             primary: "Quit".into(),
             danger: true,
             action: ConfirmAction::QuitApp { uuid: uuid.to_string() },
+            secondary: None,
         });
         self.popup = None;
         cx.notify();
@@ -1747,6 +1782,7 @@ impl Root {
                 primary: "Quit".into(),
                 danger: true,
                 action: ConfirmAction::QuitWhileStreaming,
+                secondary: None,
             });
             cx.notify();
         } else {

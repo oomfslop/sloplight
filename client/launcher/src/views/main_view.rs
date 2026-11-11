@@ -102,8 +102,7 @@ impl Root {
                         crate::views::settings::render_content(self, &theme, content_w, window, cx).into_any_element()
                     } else {
                         self.render_main_body(&theme, content_w, window, cx)
-                    })
-                    .children(self.render_toasts(&theme, cx)),
+                    }),
             )
     }
 
@@ -434,13 +433,13 @@ impl Root {
         }
 
         let focused = self.region == Region::Grid;
-        let launching = self.stream.as_ref().filter(|s| s.host_uuid == host.uuid).map(|s| s.app_id);
+        let stream = self.stream.as_ref().filter(|s| s.host_uuid == host.uuid).map(|s| (s.app_id, s.connected));
         let uuid = host.uuid.clone();
         let split = self.visible_count().min(apps.len());
         let mut tiles: Vec<AnyElement> = Vec::with_capacity(apps.len());
         for (i, app) in apps.iter().enumerate() {
             let selected = self.grid_selected == Some(i);
-            tiles.push(self.render_tile(theme, &uuid, app, i, tile_w, tile_h, selected && focused, host.current_game_id == app.id, launching == Some(app.id), cx));
+            tiles.push(self.render_tile(theme, &uuid, app, i, tile_w, tile_h, selected && focused, host.current_game_id == app.id, stream.filter(|(id, _)| *id == app.id).map(|(_, connected)| connected), cx));
         }
         let hidden_tiles: Vec<AnyElement> = tiles.split_off(split);
         // Window streaming: keep the host ready (after the visible apps)
@@ -569,7 +568,8 @@ impl Root {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn render_tile(&mut self, theme: &Theme, uuid: &str, app: &NvApp, index: usize, tile_w: f32, tile_h: f32, selected: bool, running: bool, launching: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_tile(&mut self, theme: &Theme, uuid: &str, app: &NvApp, index: usize, tile_w: f32, tile_h: f32, selected: bool, running: bool, streaming: Option<bool>, cx: &mut Context<Self>) -> AnyElement {
+        let launching = streaming == Some(false);
         let key = (uuid.to_string(), app.id);
         if !self.box_art_requested.contains(&key) {
             self.box_art_requested.insert(key.clone());
@@ -606,7 +606,11 @@ impl Root {
             None
         };
         let hover_overlay = theme.text.alpha(0.06);
-        let caption: SharedString = if launching { "Starting…".into() } else { name.clone().into() };
+        let caption: SharedString = match streaming {
+            Some(false) => "Starting…".into(),
+            Some(true) => "Streaming…".into(),
+            None => name.clone().into(),
+        };
         div()
             .id(ElementId::NamedInteger("tile".into(), app_id as u64))
             .group("tile")

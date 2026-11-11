@@ -96,7 +96,8 @@ impl Root {
                     }),
             );
         }
-        Some(stack.into_any_element())
+        // Above everything, deferred popups and dropdowns included
+        Some(deferred(stack).with_priority(usize::MAX).into_any_element())
     }
 
     pub fn popup_entries(&mut self, cx: &mut Context<Self>) -> Vec<MenuEntry> {

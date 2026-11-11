@@ -10,17 +10,21 @@ use crate::ui::*;
 pub fn render(root: &mut Root, theme: &Theme, cx: &mut Context<Root>) -> Option<AnyElement> {
     let dialog = root.dialog.as_ref()?;
     let content: AnyElement = match dialog {
-        Dialog::Confirm { title, body, primary, danger, action } => {
+        Dialog::Confirm { title, body, primary, danger, action, secondary } => {
             let action = action.clone();
-            let footer = vec![
-                button("confirm-cancel", "Cancel").on_click(cx.listener(|this, _, _, cx| this.close_dialog(cx))).into_any_element(),
+            let mut footer = vec![button("confirm-cancel", "Cancel").on_click(cx.listener(|this, _, _, cx| this.close_dialog(cx))).into_any_element()];
+            if let Some((label, secondary_action)) = secondary.clone() {
+                footer.push(button("confirm-secondary", label).on_click(cx.listener(move |this, _, _, cx| this.confirm(secondary_action.clone(), cx))).into_any_element());
+            }
+            footer.push(
                 button("confirm-ok", primary.clone())
                     .variant(if *danger { ButtonVariant::Danger } else { ButtonVariant::Primary })
                     .kbd("⏎")
                     .on_click(cx.listener(move |this, _, _, cx| this.confirm(action.clone(), cx)))
                     .into_any_element(),
-            ];
-            dialog_shell(theme, 360., title.clone(), None, vec![text_ui(theme, body.clone()).into_any_element()], footer).into_any_element()
+            );
+            let width = if secondary.is_some() { 480. } else { 360. };
+            dialog_shell(theme, width, title.clone(), None, vec![text_ui(theme, body.clone()).into_any_element()], footer).into_any_element()
         }
         Dialog::Error { title, body, details, permission, host_uuid } => {
             let mut body_els: Vec<AnyElement> = body.iter().map(|line| text_ui(theme, line.clone()).into_any_element()).collect();

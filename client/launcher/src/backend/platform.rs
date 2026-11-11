@@ -52,6 +52,20 @@ pub fn yield_activation_to(pid: u32) {
     let _ = pid;
 }
 
+/// Brings the app with this pid to the front (the stream helper's window)
+pub fn activate_app(pid: u32) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+        yield_activation_to(pid);
+        if let Some(target) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid as i32) {
+            target.activateWithOptions(NSApplicationActivationOptions::empty());
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = pid;
+}
+
 /// Where the pointer is, in global points from the top-left of the main
 /// screen (GPUI's display coordinates)
 pub fn mouse_location() -> Option<(f32, f32)> {
