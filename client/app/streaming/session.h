@@ -208,9 +208,17 @@ public:
         FromHost,
     };
 
+    // What text fetched from the host does to the local clipboard
+    enum class ClipboardApply {
+        IfHostChanged,
+        Always,
+        RecordOnly,
+    };
+
     // Starts an asynchronous clipboard sync with an Apollo host. The result
     // is reported via the quick menu toast if showResult is true.
-    void syncClipboard(ClipboardDirection direction, bool showResult);
+    void syncClipboard(ClipboardDirection direction, bool showResult,
+                       ClipboardApply apply = ClipboardApply::IfHostChanged);
 
     // The host types in the language of our keyboard input source (Sloplight server)
     void syncKeyboardLanguage(bool force);
@@ -265,7 +273,7 @@ private:
 
     bool isClipboardSyncAllowed(ClipboardDirection direction);
 
-    void onClipboardTextReceived(const QString& text);
+    void onClipboardTextReceived(const QString& text, ClipboardApply apply);
 
     void updateOptimalWindowDisplayMode();
 

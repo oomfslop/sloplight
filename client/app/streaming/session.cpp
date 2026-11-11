@@ -2298,12 +2298,14 @@ class ClipboardSyncTask : public QRunnable
 {
 public:
     ClipboardSyncTask(NvComputer* computer, QSharedPointer<QAtomicInt> inProgress,
-                      Session::ClipboardDirection direction, QString text, bool showResult)
+                      Session::ClipboardDirection direction, QString text, bool showResult,
+                      Session::ClipboardApply apply)
         : m_Computer(computer),
           m_InProgress(inProgress),
           m_Direction(direction),
           m_Text(text),
-          m_ShowResult(showResult)
+          m_ShowResult(showResult),
+          m_Apply(apply)
     {
     }
 
@@ -2328,6 +2330,7 @@ public:
                 event.type = SDL_USEREVENT;
                 event.user.code = SDL_CODE_CLIPBOARD_TEXT_RECEIVED;
                 event.user.data1 = new QString(text);
+                event.user.data2 = reinterpret_cast<void*>(static_cast<intptr_t>(m_Apply));
                 SDL_PushEvent(&event);
 
                 resultMessage = text.isEmpty() ?
@@ -2360,9 +2363,10 @@ private:
     Session::ClipboardDirection m_Direction;
     QString m_Text;
     bool m_ShowResult;
+    Session::ClipboardApply m_Apply;
 };
 
-void Session::syncClipboard(ClipboardDirection direction, bool showResult)
+void Session::syncClipboard(ClipboardDirection direction, bool showResult, ClipboardApply apply)
 {
     if (!isClipboardSyncAllowed(direction)) {
         if (showResult) {
@@ -2399,7 +2403,8 @@ void Session::syncClipboard(ClipboardDirection direction, bool showResult)
     }
 
     m_ClipboardSyncInProgress->storeRelease(1);
-    QThreadPool::globalInstance()->start(new ClipboardSyncTask(m_Computer, m_ClipboardSyncInProgress, direction, text, showResult));
+    QThreadPool::globalInstance()->start(new ClipboardSyncTask(m_Computer, m_ClipboardSyncInProgress, direction, text, showResult,
+                                                               showResult ? ClipboardApply::Always : apply));
 }
 
 void Session::syncKeyboardLanguage(bool force)
@@ -2421,14 +2426,16 @@ void Session::syncKeyboardLanguage(bool force)
     }));
 }
 
-void Session::onClipboardTextReceived(const QString& text)
+void Session::onClipboardTextReceived(const QString& text, ClipboardApply apply)
 {
-    if (text.isEmpty()) {
-        return;
-    }
-
+    // Rewriting unchanged host text would clobber whatever was copied locally
+    // since (images included) and add a clipboard history entry every time
+    const bool applyText = apply == ClipboardApply::Always ||
+                            (apply == ClipboardApply::IfHostChanged && text != m_LastSyncedClipboardText);
     m_LastSyncedClipboardText = text;
-    SDL_SetClipboardText(text.toUtf8().constData());
+    if (applyText && !text.isEmpty()) {
+        SDL_SetClipboardText(text.toUtf8().constData());
+    }
 }
 
 void Session::setShouldExit(bool quitHostApp)
@@ -2610,9 +2617,15 @@ void Session::exec()
         startDeskPoller();
     }
 
-    // Push our clipboard to the host at the start of the stream if enabled
+    // Push our clipboard to the host at the start of the stream if enabled.
+    // Without local text, learn the host's instead, so only later host copies come back.
     if (m_Preferences->clipboardSync) {
-        syncClipboard(ClipboardDirection::ToHost, false);
+        if (SDL_HasClipboardText()) {
+            syncClipboard(ClipboardDirection::ToHost, false);
+        }
+        else {
+            syncClipboard(ClipboardDirection::FromHost, false, ClipboardApply::RecordOnly);
+        }
     }
 
     // Typing in the language picked here: now, and whenever another is picked
@@ -2806,7 +2819,7 @@ void Session::exec()
             case SDL_CODE_CLIPBOARD_TEXT_RECEIVED:
             {
                 QString* text = (QString*)event.user.data1;
-                onClipboardTextReceived(*text);
+                onClipboardTextReceived(*text, static_cast<ClipboardApply>(reinterpret_cast<intptr_t>(event.user.data2)));
                 delete text;
                 break;
             }
