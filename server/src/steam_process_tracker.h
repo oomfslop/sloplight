@@ -113,10 +113,16 @@ namespace platf::steam::lifecycle {
     // Whether any retained PID is present in a current snapshot. Incomplete
     // snapshots conservatively retain the prior running state.
     bool has_live_processes(const process_snapshot &current) const;
+    // Per-process liveness of the retained tree without a system snapshot.
+    // Processes whose liveness can't be observed count as running.
+    bool retained_processes_alive() const;
     const tracked_tree &tree() const { return tree_; }
     void clear();
 
   private:
+    void watch_retained_processes();
+    // Windows process handles keep their PIDs from being reused while watched.
+    std::map<process_id_t, std::shared_ptr<void>> watched_;
     std::shared_ptr<process_snapshot_provider> provider_;
     process_snapshot baseline_;
     std::filesystem::path install_dir_;

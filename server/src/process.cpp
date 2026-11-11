@@ -2525,8 +2525,14 @@ namespace proc {
     bool tracked_launcher_exited = false;
     if (_steam_tracking_active) {
       const auto now = std::chrono::steady_clock::now();
-      constexpr auto tracking_poll_interval = 100ms;
-      if (_steam_last_tracking_poll.time_since_epoch().count() == 0 || now - _steam_last_tracking_poll >= tracking_poll_interval) {
+      // A snapshot finds new processes; exits of known ones are seen through
+      // their handles on every call, so snapshots can be rare once associated.
+      const auto snapshot_interval = _steam_tracking_associated ? 5s : 1s;
+      const bool retained_exited =
+        _steam_tracking_associated ? !_steam_tracker.retained_processes_alive() :
+                                     _launcher_tracking_associated && !_launcher_tracker.retained_processes_alive();
+      if (_steam_last_tracking_poll.time_since_epoch().count() == 0 ||
+          now - _steam_last_tracking_poll >= (retained_exited ? 100ms : snapshot_interval)) {
         _steam_last_tracking_poll = now;
         const auto tracking = _steam_tracker.finish();
         publish_tracked_game_pids();
@@ -2817,6 +2823,10 @@ namespace proc {
     // Provider URI launchers are not the game process and their process group
     // does not own the Proton/Wine tree. Stop only identities retained by the
     // tracker; Steam/Lutris client and runtime PIDs are never inserted.
+    if (_steam_tracking_associated) {
+      // Children started since the last snapshot must be stopped with the tree.
+      (void) _steam_tracker.finish();
+    }
     if (!_steam_tracker.tree().empty()) {
       if (!_steam_process_controller) {
         _steam_process_controller = platf::steam::lifecycle::native_process_controller();

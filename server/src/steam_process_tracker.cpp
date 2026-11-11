@@ -33,6 +33,18 @@ namespace {
     return value;
   }
 
+  std::filesystem::path normalize_for_comparison(std::filesystem::path result) {
+    result = result.lexically_normal();
+#if defined(_WIN32)
+    // Windows paths are case-insensitive.  The returned path is only used for
+    // comparison; preserve the original process paths in the public result.
+    auto text = lower(result.generic_string());
+    return std::filesystem::path(text);
+#else
+    return result;
+#endif
+  }
+
   std::filesystem::path normalize(const std::filesystem::path &value) {
     if (value.empty()) {
       return {};
@@ -46,15 +58,28 @@ namespace {
         result = value;
       }
     }
-    result = result.lexically_normal();
-#if defined(_WIN32)
-    // Windows paths are case-insensitive.  The returned path is only used for
-    // comparison; preserve the original process paths in the public result.
-    auto text = lower(result.generic_string());
-    return std::filesystem::path(text);
-#else
-    return result;
-#endif
+    return normalize_for_comparison(std::move(result));
+  }
+
+  bool starts_with_components(const std::filesystem::path &candidate, const std::filesystem::path &root) {
+    if (candidate.empty() || root.empty()) {
+      return false;
+    }
+    auto candidate_it = candidate.begin();
+    for (auto root_it = root.begin(); root_it != root.end(); ++root_it, ++candidate_it) {
+      if (candidate_it == candidate.end() || candidate_it->generic_string() != root_it->generic_string()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Process paths come from the kernel already absolute and resolved, so a
+  // lexical comparison against the canonical root avoids filesystem calls per
+  // process on every poll.
+  bool process_path_within(const std::filesystem::path &path, const std::filesystem::path &normalized_root) {
+    return !path.empty() && path.is_absolute() &&
+           starts_with_components(normalize_for_comparison(path), normalized_root);
   }
 
   std::string basename(const std::filesystem::path &value) {
@@ -106,8 +131,8 @@ namespace {
 
   bool direct_install_evidence(const process_info &process,
                                const std::filesystem::path &install_dir) {
-    return path_is_within(process.executable, install_dir) ||
-           path_is_within(process.cwd, install_dir) ||
+    return process_path_within(process.executable, install_dir) ||
+           process_path_within(process.cwd, install_dir) ||
            command_line_contains_install(process, install_dir);
   }
 
@@ -340,26 +365,7 @@ bool path_is_within(const std::filesystem::path &path,
   if (path.empty() || directory.empty()) {
     return false;
   }
-  const auto candidate = normalize(path);
-  const auto root = normalize(directory);
-  if (candidate.empty() || root.empty()) {
-    return false;
-  }
-  auto candidate_it = candidate.begin();
-  auto root_it = root.begin();
-  for (; root_it != root.end(); ++root_it, ++candidate_it) {
-    if (candidate_it == candidate.end()) {
-      return false;
-    }
-#if defined(_WIN32)
-    if (lower(candidate_it->generic_string()) != lower(root_it->generic_string())) {
-#else
-    if (candidate_it->generic_string() != root_it->generic_string()) {
-#endif
-      return false;
-    }
-  }
-  return true;
+  return starts_with_components(normalize(path), normalize(directory));
 }
 
 bool is_protected_steam_process(const process_info &process,
@@ -589,6 +595,7 @@ association_result tracker::finish(const process_snapshot &after) {
     } else {
       tree_ = result.tree;
     }
+    watch_retained_processes();
   } else if (!tree_.empty()) {
     const bool retained = std::any_of(tree_.processes.begin(), tree_.processes.end(),
                                       [&](const auto &entry) {
@@ -606,9 +613,55 @@ association_result tracker::finish(const process_snapshot &after) {
       result.reason = "retained previously associated game process tree";
     } else {
       tree_ = {};
+      watched_.clear();
     }
   }
   return result;
+}
+
+void tracker::watch_retained_processes() {
+#if defined(_WIN32)
+  std::erase_if(watched_, [this](const auto &entry) { return !tree_.processes.contains(entry.first); });
+  for (const auto &[pid, process] : tree_.processes) {
+    if (watched_.contains(pid)) {
+      continue;
+    }
+    HANDLE handle = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+    if (!handle) {
+      continue;
+    }
+    FILETIME creation {}, exit {}, kernel {}, user {};
+    if (process.info.start_time_ticks != 0 &&
+        (!GetProcessTimes(handle, &creation, &exit, &kernel, &user) ||
+         file_time_ticks(creation) != process.info.start_time_ticks)) {
+      CloseHandle(handle);
+      continue;
+    }
+    watched_.emplace(pid, std::shared_ptr<void>(handle, CloseHandle));
+  }
+#endif
+}
+
+bool tracker::retained_processes_alive() const {
+  if (tree_.empty()) {
+    return false;
+  }
+#if defined(_WIN32)
+  if (watched_.size() != tree_.processes.size()) {
+    return true;
+  }
+  return std::any_of(watched_.begin(), watched_.end(), [](const auto &entry) {
+    return WaitForSingleObject(entry.second.get(), 0) == WAIT_TIMEOUT;
+  });
+#elif defined(__linux__)
+  return std::any_of(tree_.processes.begin(), tree_.processes.end(), [](const auto &entry) {
+    const auto current = read_proc_stat(entry.first);
+    return current && (entry.second.info.start_time_ticks == 0 ||
+                       current->start_time_ticks == entry.second.info.start_time_ticks);
+  });
+#else
+  return true;
+#endif
 }
 
 bool tracker::has_live_processes(const process_snapshot &current) const {
@@ -633,6 +686,7 @@ void tracker::clear() {
   install_dir_.clear();
   options_ = {};
   tree_ = {};
+  watched_.clear();
   begun_ = false;
 }
 
