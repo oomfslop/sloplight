@@ -1007,6 +1007,7 @@ namespace proc {
       _launcher_tracker(std::move(other._launcher_tracker)),
       _launcher_tracking_active(other._launcher_tracking_active),
       _launcher_tracking_associated(other._launcher_tracking_associated),
+      _tracked_game_pids(other._tracked_game_pids),
       _process(std::move(other._process)),
       _process_group(std::move(other._process_group)),
 #ifdef _WIN32
@@ -1055,6 +1056,10 @@ namespace proc {
       _launcher_tracker = std::move(other._launcher_tracker);
       _launcher_tracking_active = other._launcher_tracking_active;
       _launcher_tracking_associated = other._launcher_tracking_associated;
+      {
+        std::scoped_lock lock(_tracked_game_pids_mutex, other._tracked_game_pids_mutex);
+        _tracked_game_pids = other._tracked_game_pids;
+      }
       _process = std::move(other._process);
       _process_group = std::move(other._process_group);
       _pipe = std::move(other._pipe);
@@ -2028,6 +2033,7 @@ namespace proc {
 
   int proc_t::launch_app_commands(bool stream_lifecycle_lock_held, bool config_read_gate_held) {
     std::error_code ec;
+    std::string app_focus_dir = _app.game_path;
     // Executed when returning from function
     auto fg = util::fail_guard([&]() {
       terminate(false, stream_lifecycle_lock_held, config_read_gate_held);
@@ -2327,11 +2333,13 @@ namespace proc {
                            << " process baseline captured for install directory ["
                            << provider_directory << "]";
           game_already_running = !_app.game_path.empty() && _steam_tracker.finish().associated();
+          publish_tracked_game_pids();
         }
       }
       _launcher_tracker.clear();
       _launcher_tracking_active = false;
       _launcher_tracking_associated = false;
+      bool launcher_already_running = false;
       if (!_app.game_path.empty()) {
         // Only a launcher that installs the game is tracked: a shared directory
         // such as System32 or a drive root would adopt unrelated processes.
@@ -2339,10 +2347,21 @@ namespace proc {
         if (launcher_dir.has_relative_path() &&
             platf::steam::lifecycle::path_is_within(_app.game_path, launcher_dir.string())) {
           _launcher_tracking_active = _launcher_tracker.begin(launcher_dir.string(), {.adopt_existing = true});
+#ifdef _WIN32
+          // A launcher hidden in the tray has no window to focus: its command is what shows it.
+          launcher_already_running = !game_already_running && _launcher_tracking_active &&
+                                     _launcher_tracker.finish().associated() &&
+                                     !playnite_launcher::focus::discover_game_windows(launcher_dir.wstring()).empty();
+          if (launcher_already_running) {
+            app_focus_dir = launcher_dir.string();
+          }
+#endif
         }
       }
       if (game_already_running) {
         BOOST_LOG(info) << tracked_app_label() << " is already running; taking it over instead of executing [" << _app.cmd << ']';
+      } else if (launcher_already_running) {
+        BOOST_LOG(info) << "App '" << _app.name << "' launcher is already open; taking it over instead of executing [" << _app.cmd << ']';
       } else {
         BOOST_LOG(info) << "Executing: ["sv << _app.cmd << "] in ["sv << working_dir << ']';
         std::string launch_command = _app.cmd;
@@ -2379,7 +2398,7 @@ namespace proc {
 #endif
 
     if (_app.playnite_id.empty() && !_app.game_path.empty()) {
-      _app_focus = managed_app_focus::start({"game", _app.name, _app.game_path}, managed_app_focus::settings);
+      _app_focus = managed_app_focus::start({"game", _app.name, app_focus_dir}, managed_app_focus::settings);
     } else if (_app.playnite_id.empty() && (!_app.steam_id.empty() || !_app.lutris_id.empty())) {
       const bool steam = !_app.steam_id.empty();
       _app_focus = managed_app_focus::start({steam ? "steam" : "lutris",
@@ -2510,6 +2529,7 @@ namespace proc {
       if (_steam_last_tracking_poll.time_since_epoch().count() == 0 || now - _steam_last_tracking_poll >= tracking_poll_interval) {
         _steam_last_tracking_poll = now;
         const auto tracking = _steam_tracker.finish();
+        publish_tracked_game_pids();
         if (tracking.associated()) {
           if (!_steam_tracking_associated) {
             BOOST_LOG(info) << tracked_app_label()
@@ -2605,6 +2625,25 @@ namespace proc {
     return !_app.steam_id.empty() ? "Steam app " + _app.steam_id : "Lutris app " + _app.lutris_id;
   }
 
+  void proc_t::publish_tracked_game_pids() {
+    std::set<std::uint32_t> pids;
+    for (const auto &[pid, _] : _steam_tracker.tree().processes) {
+      pids.insert(static_cast<std::uint32_t>(pid));
+    }
+    std::lock_guard lock(_tracked_game_pids_mutex);
+    _tracked_game_pids = std::move(pids);
+  }
+
+  bool proc_t::tracked_game_contains_pid(const std::uint32_t pid) const {
+    std::lock_guard lock(_tracked_game_pids_mutex);
+    return _tracked_game_pids.contains(pid);
+  }
+
+  bool proc_t::has_tracked_game() const {
+    std::lock_guard lock(_tracked_game_pids_mutex);
+    return !_tracked_game_pids.empty();
+  }
+
   int proc_t::current_app_id() const {
     return _app_id.load(std::memory_order_acquire);
   }
@@ -2618,6 +2657,9 @@ namespace proc {
     const auto foreground_pid = foreground_window_process_id();
     if (!foreground_pid) {
       return false;
+    }
+    if (tracked_game_contains_pid(*foreground_pid)) {
+      return true;
     }
 
     try {
@@ -2643,6 +2685,9 @@ namespace proc {
       return false;
     }
 
+    if (tracked_game_contains_pid(pid)) {
+      return true;
+    }
     const auto win_pid = static_cast<DWORD>(pid);
     try {
       if (_process && static_cast<DWORD>(_process.id()) == win_pid) {
@@ -2665,7 +2710,7 @@ namespace proc {
       return state;
     }
 
-    state.trackable = !placebo && (_process || _process_group);
+    state.trackable = !placebo && (_process || _process_group || has_tracked_game());
     state.uses_playnite = !_app.playnite_id.empty();
     state.playnite_id = _app.playnite_id;
     state.name = _app.name;
@@ -2686,7 +2731,7 @@ namespace proc {
 
   bool proc_t::has_trackable_running_app() const {
 #ifdef _WIN32
-    return _app_id > 0 && !placebo && (_process || _process_group);
+    return _app_id > 0 && !placebo && (_process || _process_group || has_tracked_game());
 #else
     return _app_id > 0 && !placebo && (_steam_tracking_associated || static_cast<bool>(_process));
 #endif
@@ -2801,6 +2846,7 @@ namespace proc {
     _launcher_tracker.clear();
     _launcher_tracking_active = false;
     _launcher_tracking_associated = false;
+    publish_tracked_game_pids();
 
     // Regardless, ensure process group is terminated (graceful then forceful with remaining timeout)
     terminate_process_group(_process, _process_group, remaining_timeout);

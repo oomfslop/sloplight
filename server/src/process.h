@@ -17,6 +17,7 @@
 #include <chrono>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -190,6 +191,12 @@ namespace proc {
     platf::steam::lifecycle::tracker _launcher_tracker;
     bool _launcher_tracking_active {false};
     bool _launcher_tracking_associated {false};
+    // Read by the foreground-window classifier thread.
+    mutable std::mutex _tracked_game_pids_mutex;
+    std::set<std::uint32_t> _tracked_game_pids;
+    void publish_tracked_game_pids();
+    bool tracked_game_contains_pid(std::uint32_t pid) const;
+    bool has_tracked_game() const;
     std::string tracked_app_label() const;
 
 #ifdef _WIN32
