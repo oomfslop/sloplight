@@ -367,6 +367,8 @@ pub struct Settings {
     // Host
     pub game_optimizations: bool,
     pub quit_app_after: bool,
+    /// Apps without a process on the host (Desktop) quit when the stream ends
+    pub quit_processless_app_after: bool,
     // Interface
     pub language: i32,
     pub ui_display_mode: UiDisplayMode,
@@ -451,6 +453,7 @@ impl Default for Settings {
             background_gamepad: false,
             game_optimizations: true,
             quit_app_after: false,
+            quit_processless_app_after: true,
             language: 0,
             ui_display_mode: UiDisplayMode::Windowed,
             connection_warnings: true,
@@ -693,7 +696,7 @@ fn default_app_window_bitrate() -> i32 {
     20000
 }
 
-fn default_true() -> bool {
+pub(crate) fn default_true() -> bool {
     true
 }
 

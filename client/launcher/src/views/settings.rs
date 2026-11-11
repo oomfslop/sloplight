@@ -787,6 +787,7 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
             let mut r = toggle_row(root, cx, theme, "tg-quitafter", "Quit app on host when the stream ends", "Closes the app when you disconnect. Unsaved progress is lost.", |s| s.quit_app_after, |s, v| s.quit_app_after = v, None);
             r.badge = Some(("Danger", true));
             rows.push(r);
+            rows.push(toggle_row(root, cx, theme, "tg-quitdesktop", "Quit Desktop when the stream ends", "Apps that run nothing on the host, like Desktop, end instead of staying open in the background.", |s| s.quit_processless_app_after, |s, v| s.quit_processless_app_after = v, None));
         }
         "interface" => {
             let lang = LANGUAGES.get(s.language.max(0) as usize).map(|l| l.1).unwrap_or("Automatic").to_string();

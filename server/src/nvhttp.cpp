@@ -4831,6 +4831,13 @@ namespace nvhttp {
       } else {
         app.put("ArtVersion", configured == configured_apps.end() ? "" : configured->art_version);
       }
+      if (configured != configured_apps.end() && remote_session::identify(entry.id, entry.uuid) == remote_session::control_e::none) {
+        // Without a process (Desktop) quitting loses nothing, so clients may do it freely
+        const bool has_process = !configured->cmd.empty() || !configured->detached.empty() || !configured->playnite_id.empty() ||
+                                 configured->playnite_fullscreen || !configured->steam_id.empty() || !configured->lutris_id.empty() ||
+                                 !configured->game_path.empty();
+        app.put("HasProcess", has_process ? 1 : 0);
+      }
 
       apps.push_back(std::make_pair("App", std::move(app)));
     }

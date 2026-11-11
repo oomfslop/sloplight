@@ -692,6 +692,10 @@ impl Root {
             return;
         }
         if host.current_game_id != 0 && host.current_game_id != app_id {
+            if host.running_app().is_some_and(|a| !a.has_process) {
+                self.confirm(ConfirmAction::QuitAndStart { uuid: uuid.to_string(), next_app_id: app_id }, cx);
+                return;
+            }
             let running = host.running_app().map(|a| a.name.clone()).unwrap_or_else(|| "the running app".into());
             let next = host.apps.iter().find(|a| a.id == app_id).map(|a| a.name.clone()).unwrap_or_default();
             self.dialog = Some(Dialog::Confirm {
@@ -1073,6 +1077,10 @@ impl Root {
 
     pub fn confirm_quit_app(&mut self, uuid: &str, cx: &mut Context<Self>) {
         let Some(host) = self.host_by_uuid(uuid) else { return };
+        if host.running_app().is_some_and(|a| !a.has_process) {
+            self.confirm(ConfirmAction::QuitApp { uuid: uuid.to_string() }, cx);
+            return;
+        }
         let app = host.running_app().map(|a| a.name.clone()).unwrap_or_else(|| "the running app".into());
         self.dialog = Some(Dialog::Confirm {
             title: format!("Quit {app} on {}?", host.name),

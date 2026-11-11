@@ -81,6 +81,9 @@ pub struct App {
     pub hidden: bool,
     #[serde(default)]
     pub direct_launch: bool,
+    /// False for apps that run nothing on the host (Desktop): quitting them loses nothing
+    #[serde(default = "crate::settings::default_true")]
+    pub has_process: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +281,7 @@ pub fn parse_app_list(app_xml: &str) -> Result<Vec<App>, String> {
             is_app_collector_game: text("IsAppCollectorGame").map(|v| v == "1").unwrap_or(false),
             hidden: false,
             direct_launch: false,
+            has_process: text("HasProcess").map(|v| v != "0").unwrap_or(true),
         });
     }
     Ok(apps)
