@@ -3188,33 +3188,68 @@ namespace platf {
       }
 
     private:
+      static std::wstring desktop_name(HDESK desktop) {
+        wchar_t name[256] {};
+        DWORD needed = 0;
+        return desktop && GetUserObjectInformationW(desktop, UOI_NAME, name, sizeof(name), &needed) ? name : L"";
+      }
+
+      static std::wstring input_desktop_name() {
+        const HDESK desktop = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+        auto name = desktop_name(desktop);
+        if (desktop) {
+          CloseDesktop(desktop);
+        }
+        return name;
+      }
+
       void run() {
         platf::set_thread_name("host-cursor");
-        syncThreadDesktop();
         // DPI-unaware threads get cursors (and monitors) scaled down to 96 DPI
         SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         current = this;
 
-        // Out-of-context WinEvents arrive on this thread while it pumps messages
-        const HWINEVENTHOOK hooks[] = {
-          SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_HIDE, nullptr, on_event, 0, 0, WINEVENT_OUTOFCONTEXT),
-          SetWinEventHook(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, nullptr, on_event, 0, 0, WINEVENT_OUTOFCONTEXT),
-        };
-        if (!hooks[0] || !hooks[1]) {
-          BOOST_LOG(warning) << "Host cursor: SetWinEventHook failed: "sv << GetLastError();
-        }
+        // WinEvent hooks only see the thread's desktop, and SetThreadDesktop fails while
+        // the thread owns hooks: rebind on every input desktop switch (UAC, lock screen).
+        for (bool stopping = false; !stopping;) {
+          syncThreadDesktop();
+          const auto desktop = desktop_name(GetThreadDesktop(GetCurrentThreadId()));
 
-        refresh();
-        while (MsgWaitForMultipleObjects(1, &stop_event, FALSE, INFINITE, QS_ALLINPUT) == WAIT_OBJECT_0 + 1) {
-          MSG msg;
-          while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            DispatchMessageW(&msg);
+          // Out-of-context WinEvents arrive on this thread while it pumps messages
+          const HWINEVENTHOOK hooks[] = {
+            SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_HIDE, nullptr, on_event, 0, 0, WINEVENT_OUTOFCONTEXT),
+            SetWinEventHook(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, nullptr, on_event, 0, 0, WINEVENT_OUTOFCONTEXT),
+          };
+          if (!hooks[0] || !hooks[1]) {
+            BOOST_LOG(warning) << "Host cursor: SetWinEventHook failed: "sv << GetLastError();
           }
-        }
 
-        for (auto hook : hooks) {
-          if (hook) {
-            UnhookWinEvent(hook);
+          refresh();
+          constexpr auto desktop_poll = std::chrono::milliseconds(250);
+          auto next_desktop_check = std::chrono::steady_clock::now() + desktop_poll;
+          while (true) {
+            const auto wait = MsgWaitForMultipleObjects(1, &stop_event, FALSE, static_cast<DWORD>(desktop_poll.count()), QS_ALLINPUT);
+            if (wait == WAIT_OBJECT_0 + 1) {
+              MSG msg;
+              while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                DispatchMessageW(&msg);
+              }
+            } else if (wait != WAIT_TIMEOUT) {
+              stopping = true;
+              break;
+            }
+            if (const auto now = std::chrono::steady_clock::now(); now >= next_desktop_check) {
+              next_desktop_check = now + desktop_poll;
+              if (input_desktop_name() != desktop) {
+                break;
+              }
+            }
+          }
+
+          for (auto hook : hooks) {
+            if (hook) {
+              UnhookWinEvent(hook);
+            }
           }
         }
       }
