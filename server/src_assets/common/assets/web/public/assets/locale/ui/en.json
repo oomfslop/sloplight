@@ -178,7 +178,7 @@
         "gamePath": {
           "label": "Game process",
           "placeholder": "C:\\Games\\Genshin Impact Game\\GenshinImpact.exe",
-          "help": "For apps started through a launcher. The stream follows the processes started from this executable or folder, not the launcher, and ends when the game exits."
+          "help": "For apps started through a launcher. If the game is already running, it is taken over instead of starting the command. The stream ends when the game exits, or when the launcher closes before the game starts (only if the game is installed inside the launcher's folder)."
         }
       },
       "framegenHealth": {

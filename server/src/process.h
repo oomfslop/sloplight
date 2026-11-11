@@ -187,6 +187,9 @@ namespace proc {
     bool _steam_tracking_associated {false};
     std::chrono::steady_clock::time_point _steam_tracking_deadline {};
     std::chrono::steady_clock::time_point _steam_last_tracking_poll {};
+    platf::steam::lifecycle::tracker _launcher_tracker;
+    bool _launcher_tracking_active {false};
+    bool _launcher_tracking_associated {false};
     std::string tracked_app_label() const;
 
 #ifdef _WIN32

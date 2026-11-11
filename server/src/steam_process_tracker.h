@@ -75,6 +75,8 @@ namespace platf::steam::lifecycle {
   // useful when a launcher uses a wrapper with a non-Steam executable name.
   struct association_options {
     std::vector<process_id_t> protected_steam_roots;
+    // Also select processes that were already running at the baseline.
+    bool adopt_existing = false;
   };
 
   // Pure policy: compare the post-launch snapshot with the pre-launch

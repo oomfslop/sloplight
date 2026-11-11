@@ -1004,6 +1004,9 @@ namespace proc {
       _steam_tracking_associated(other._steam_tracking_associated),
       _steam_tracking_deadline(other._steam_tracking_deadline),
       _steam_last_tracking_poll(other._steam_last_tracking_poll),
+      _launcher_tracker(std::move(other._launcher_tracker)),
+      _launcher_tracking_active(other._launcher_tracking_active),
+      _launcher_tracking_associated(other._launcher_tracking_associated),
       _process(std::move(other._process)),
       _process_group(std::move(other._process_group)),
 #ifdef _WIN32
@@ -1049,6 +1052,9 @@ namespace proc {
       _steam_tracking_associated = other._steam_tracking_associated;
       _steam_tracking_deadline = other._steam_tracking_deadline;
       _steam_last_tracking_poll = other._steam_last_tracking_poll;
+      _launcher_tracker = std::move(other._launcher_tracker);
+      _launcher_tracking_active = other._launcher_tracking_active;
+      _launcher_tracking_associated = other._launcher_tracking_associated;
       _process = std::move(other._process);
       _process_group = std::move(other._process_group);
       _pipe = std::move(other._pipe);
@@ -1286,8 +1292,23 @@ namespace proc {
       return boost::filesystem::path();
     }
 
-    // If the cmd path is not an absolute path, resolve it using our PATH variable
     boost::filesystem::path cmd_path(parts.at(0));
+#ifdef _WIN32
+    // CreateProcess resolves an unquoted path with spaces to the first space-delimited prefix that is a file.
+    if (!cmd.starts_with('"') && cmd_path.is_absolute()) {
+      for (std::size_t end = cmd.find(' ');; end = cmd.find(' ', end + 1)) {
+        const auto prefix = cmd.substr(0, end);
+        boost::system::error_code ec;
+        if (boost::filesystem::is_regular_file(prefix, ec) || boost::filesystem::is_regular_file(prefix + ".exe", ec)) {
+          cmd_path = prefix;
+          break;
+        }
+        if (end == std::string::npos) break;
+      }
+    }
+#endif
+
+    // If the cmd path is not an absolute path, resolve it using our PATH variable
     if (!cmd_path.is_absolute()) {
       auto resolved = bp::search_path(parts.at(0));
       cmd_path = boost::filesystem::path(resolved.string());
@@ -2291,9 +2312,10 @@ namespace proc {
       const auto provider_directory = !_app.game_path.empty()      ? _app.game_path :
                                       !_app.steam_install_dir.empty() ? _app.steam_install_dir :
                                                                         _app.lutris_directory;
+      bool game_already_running = false;
       if (!_app.game_path.empty() || (!provider_id.empty() && !provider_directory.empty())) {
         _steam_tracker.clear();
-        _steam_tracking_active = _steam_tracker.begin(provider_directory);
+        _steam_tracking_active = _steam_tracker.begin(provider_directory, {.adopt_existing = !_app.game_path.empty()});
         _steam_tracking_associated = false;
         _steam_tracking_deadline = std::chrono::steady_clock::now() + 15s;
         _steam_last_tracking_poll = {};
@@ -2304,14 +2326,31 @@ namespace proc {
           BOOST_LOG(debug) << tracked_app_label()
                            << " process baseline captured for install directory ["
                            << provider_directory << "]";
+          game_already_running = !_app.game_path.empty() && _steam_tracker.finish().associated();
         }
       }
-      BOOST_LOG(info) << "Executing: ["sv << _app.cmd << "] in ["sv << working_dir << ']';
-      std::string launch_command = _app.cmd;
-      _process = platf::run_command(_app.elevated, true, launch_command, working_dir, _env, _pipe.get(), ec, &_process_group);
-      if (ec) {
-        BOOST_LOG(warning) << "Couldn't run ["sv << _app.cmd << "]: System: "sv << ec.message();
-        return -1;
+      _launcher_tracker.clear();
+      _launcher_tracking_active = false;
+      _launcher_tracking_associated = false;
+      if (!_app.game_path.empty()) {
+        // Only a launcher that installs the game is tracked: a shared directory
+        // such as System32 or a drive root would adopt unrelated processes.
+        const auto launcher_dir = find_working_directory(_app.cmd, _env);
+        if (launcher_dir.has_relative_path() &&
+            platf::steam::lifecycle::path_is_within(_app.game_path, launcher_dir.string())) {
+          _launcher_tracking_active = _launcher_tracker.begin(launcher_dir.string(), {.adopt_existing = true});
+        }
+      }
+      if (game_already_running) {
+        BOOST_LOG(info) << tracked_app_label() << " is already running; taking it over instead of executing [" << _app.cmd << ']';
+      } else {
+        BOOST_LOG(info) << "Executing: ["sv << _app.cmd << "] in ["sv << working_dir << ']';
+        std::string launch_command = _app.cmd;
+        _process = platf::run_command(_app.elevated, true, launch_command, working_dir, _env, _pipe.get(), ec, &_process_group);
+        if (ec) {
+          BOOST_LOG(warning) << "Couldn't run ["sv << _app.cmd << "]: System: "sv << ec.message();
+          return -1;
+        }
       }
     }
 
@@ -2464,6 +2503,7 @@ namespace proc {
 #endif
 
     bool tracked_game_exited = false;
+    bool tracked_launcher_exited = false;
     if (_steam_tracking_active) {
       const auto now = std::chrono::steady_clock::now();
       constexpr auto tracking_poll_interval = 100ms;
@@ -2484,6 +2524,17 @@ namespace proc {
           _steam_tracking_associated = false;
           _steam_tracking_active = false;
           tracked_game_exited = true;
+        }
+        if (!_steam_tracking_associated && _launcher_tracking_active) {
+          const auto launcher = _launcher_tracker.finish();
+          if (launcher.associated()) {
+            _launcher_tracking_associated = true;
+          } else if (_launcher_tracking_associated && launcher.reason.find("unavailable") == std::string::npos) {
+            _launcher_tracking_associated = false;
+            _launcher_tracking_active = false;
+            _steam_tracking_active = false;
+            tracked_launcher_exited = !tracked_game_exited;
+          }
         }
       }
 
@@ -2509,6 +2560,8 @@ namespace proc {
 
     if (tracked_game_exited) {
       BOOST_LOG(info) << tracked_app_label() << " exited; ending the app even if its launcher is still running.";
+    } else if (tracked_launcher_exited) {
+      BOOST_LOG(info) << "App '" << _app.name << "' launcher exited before its game started; ending the app.";
     } else if (placebo) {
       return _app_id;
     } else if (_process.running()) {
@@ -2527,7 +2580,7 @@ namespace proc {
     }
 
     // Perform cleanup actions now if needed
-    if (_process) {
+    if (_process || tracked_game_exited || tracked_launcher_exited) {
       std::unique_lock<std::mutex> stream_lifecycle_lock {nvhttp::stream_lifecycle_mutex(), std::try_to_lock};
       if (!stream_lifecycle_lock.owns_lock()) {
         // Teardown is already in flight on another thread. Blocking here
@@ -2538,7 +2591,9 @@ namespace proc {
         BOOST_LOG(debug) << "[running] App exited but stream teardown is already in flight; deferring cleanup to the gate owner.";
         return 0;
       }
-      BOOST_LOG(info) << "[running] _process.running() is false; calling terminate(). App exited with code ["sv << _process.native_exit_code() << "] for app '" << _app.name << "' (id=" << _app_id << ")";
+      if (_process) {
+        BOOST_LOG(info) << "[running] _process.running() is false; calling terminate(). App exited with code ["sv << _process.native_exit_code() << "] for app '" << _app.name << "' (id=" << _app_id << ")";
+      }
       terminate(false, true);
     }
 
@@ -2743,6 +2798,9 @@ namespace proc {
     _steam_tracking_associated = false;
     _steam_tracking_deadline = {};
     _steam_last_tracking_poll = {};
+    _launcher_tracker.clear();
+    _launcher_tracking_active = false;
+    _launcher_tracking_associated = false;
 
     // Regardless, ensure process group is terminated (graceful then forceful with remaining timeout)
     terminate_process_group(_process, _process_group, remaining_timeout);

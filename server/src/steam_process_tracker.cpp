@@ -392,7 +392,7 @@ association_result associate(const process_snapshot &baseline,
   for (const auto &[pid, process] : after.processes) {
     // PID reuse is intentionally conservative: a PID present in the baseline
     // is never attributed to this launch.
-    if (!baseline.processes.contains(pid)) {
+    if (options.adopt_existing || !baseline.processes.contains(pid)) {
       fresh.emplace(pid, process);
     }
   }
