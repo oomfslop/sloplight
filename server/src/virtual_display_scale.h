@@ -26,12 +26,18 @@ namespace virtual_display_scale {
     500
   };
 
+  /** Config value: the scale of the primary display at launch, resolved by the platform (0 where it can't). */
+  inline constexpr int match_primary_display = -2;
+
   /** Resolve -1 to a resolution-based recommendation and preserve other values. */
   inline std::uint32_t effective_percent(
     const int configured_percent,
     const std::uint32_t width,
     const std::uint32_t height
   ) {
+    if (configured_percent == match_primary_display) {
+      return 0;
+    }
     if (configured_percent >= 0) {
       return static_cast<std::uint32_t>(configured_percent);
     }
@@ -53,7 +59,7 @@ namespace virtual_display_scale {
   }
 
   inline bool supported_config_value(const int configured_percent) {
-    return configured_percent == -1 || configured_percent == 0 ||
+    return configured_percent == -1 || configured_percent == 0 || configured_percent == match_primary_display ||
            std::ranges::find(supported_percentages, configured_percent) != supported_percentages.end();
   }
 
@@ -69,7 +75,7 @@ namespace virtual_display_scale {
     const double current_factor,
     const std::optional<double> retained_factor = std::nullopt
   ) {
-    if (configured_percent == 0) {
+    if (configured_percent == 0 || configured_percent == match_primary_display) {
       return retained_factor.value_or(current_factor);
     }
     return static_cast<double>(effective_percent(configured_percent, width, height)) / 100.0;

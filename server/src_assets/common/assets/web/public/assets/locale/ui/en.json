@@ -2117,6 +2117,7 @@
         "virtual_scale": {
           "percent": "{value}%",
           "preserve": "@:config.virtual_display_scale_auto",
+          "match_primary": "@:config.virtual_display_scale_match_primary",
           "recommended": "@:config.virtual_display_scale_recommended"
         },
         "unsupported_saved": "Unsupported saved value ({value})"

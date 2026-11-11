@@ -238,6 +238,7 @@ const virtualLayoutOptions = [
 const virtualScaleOptions = [
   option('-1', 'ui.settings.options.virtual_scale.recommended'),
   option('0', 'ui.settings.options.virtual_scale.preserve'),
+  option('-2', 'ui.settings.options.virtual_scale.match_primary'),
   ...[100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500].map((scale) =>
     option(String(scale), 'ui.settings.options.virtual_scale.percent'),
   ),

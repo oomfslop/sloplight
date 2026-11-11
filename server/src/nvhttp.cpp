@@ -57,6 +57,7 @@
 #include "httpcommon.h"
 #include "http_pairing_policy.h"
 #include "tls_client_identity.h"
+#include "virtual_display_scale.h"
 #include "hdr_request_policy.h"
 #include "logging.h"
 #include "network.h"
@@ -1829,8 +1830,15 @@ namespace nvhttp {
         }
 
         VDISPLAY::setWatchdogFeedingEnabled(true);
-        // The client's own scaling, if it asked (a phone wants more than a monitor)
-        VDISPLAY::set_client_scale_percent(launch_session->display_scale_percent);
+        // The client's own scaling, if it asked (a phone wants more than a monitor).
+        // Matching the primary display is resolved before the virtual display
+        // joins the desktop, so windows keep their scale moving onto it.
+        int session_scale_percent = launch_session->display_scale_percent;
+        if (session_scale_percent <= 0 && config::video.dd.virtual_display_scale_percent == virtual_display_scale::match_primary_display) {
+          session_scale_percent = static_cast<int>(VDISPLAY::get_primary_display_scale_percent().value_or(0));
+          BOOST_LOG(info) << "Virtual display scale: matching the primary display at " << session_scale_percent << "%.";
+        }
+        VDISPLAY::set_client_scale_percent(session_scale_percent);
         auto display_info = VDISPLAY::createVirtualDisplay(
           display_uuid_source.c_str(),
           client_label.c_str(),

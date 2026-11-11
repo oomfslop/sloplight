@@ -1914,7 +1914,7 @@ namespace config {
         video.dd.virtual_display_scale_percent = value;
       } else {
         BOOST_LOG(warning) << "Ignoring unsupported virtual display scale " << value
-                           << "%; use -1 (recommended), 0, 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, or 500.";
+                           << "%; use -1 (recommended), -2 (match the primary display), 0, 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, or 500.";
       }
     }
     bool_f(vars, "vulkan_hdr_layer", video.dd.vulkan_hdr_layer);

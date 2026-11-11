@@ -608,6 +608,7 @@ export function getConfigSelectOptions(
       const options: ConfigSelectOption[] = [
         { label: t('config.virtual_display_scale_recommended'), value: -1 },
         { label: t('config.virtual_display_scale_auto'), value: 0 },
+        { label: t('config.virtual_display_scale_match_primary'), value: -2 },
         ...[100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500].map((value) => ({
           label: `${value}%`,
           value,

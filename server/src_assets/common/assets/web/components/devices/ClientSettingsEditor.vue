@@ -180,7 +180,9 @@ const globalVirtualDisplayScale = computed(() => {
 
 const globalVirtualDisplayScaleLabel = computed(() => {
   let valueLabel: string;
-  if (globalVirtualDisplayScale.value < 0)
+  if (globalVirtualDisplayScale.value === -2)
+    valueLabel = t('ui.settings.options.virtual_scale.match_primary');
+  else if (globalVirtualDisplayScale.value < 0)
     valueLabel = t('ui.settings.options.virtual_scale.recommended');
   else if (globalVirtualDisplayScale.value === 0)
     valueLabel = t('ui.settings.options.virtual_scale.preserve');
@@ -230,6 +232,7 @@ const hdrProfileOptions = computed(() => {
 const virtualDisplayScaleOptions = computed(() => [
   { label: t('ui.settings.options.virtual_scale.recommended'), value: -1 },
   { label: t('ui.settings.options.virtual_scale.preserve'), value: 0 },
+  { label: t('ui.settings.options.virtual_scale.match_primary'), value: -2 },
   ...[100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500].map((value) => ({
     label: `${value}%`,
     value,
@@ -301,7 +304,7 @@ const peakBrightness = computed(() => {
 
 const displayScale = computed(() => {
   const value = Number(draft.configOverrides.dd_virtual_display_scale ?? '');
-  return Number.isFinite(value) && (value === -1 || value === 0 || (value >= 100 && value <= 500))
+  return Number.isFinite(value) && (value === -1 || value === -2 || value === 0 || (value >= 100 && value <= 500))
     ? value
     : '';
 });

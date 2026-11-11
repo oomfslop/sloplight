@@ -341,6 +341,37 @@ namespace VDISPLAY {
     return result;
   }
 
+  std::optional<std::uint32_t> get_primary_display_scale_percent() {
+    UINT32 path_count = 0;
+    UINT32 mode_count = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count) != ERROR_SUCCESS) {
+      return std::nullopt;
+    }
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(path_count);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(mode_count);
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths.data(), &mode_count, modes.data(), nullptr) != ERROR_SUCCESS) {
+      return std::nullopt;
+    }
+    for (UINT32 i = 0; i < path_count; ++i) {
+      const auto &source = paths[i].sourceInfo;
+      if (source.modeInfoIdx >= mode_count || modes[source.modeInfoIdx].infoType != DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE) {
+        continue;
+      }
+      const auto &position = modes[source.modeInfoIdx].sourceMode.position;
+      if (position.x != 0 || position.y != 0) {
+        continue;
+      }
+      sunshine_displayconfig_get_dpi_scale_t get {};
+      initialize_dpi_header(get.header, advanced_color_target_t {paths[i].targetInfo.adapterId, source.adapterId, source.id}, kDisplayConfigGetDpiScale, sizeof(get));
+      if (DisplayConfigGetDeviceInfo(&get.header) != ERROR_SUCCESS) {
+        return std::nullopt;
+      }
+      const auto current = scale_index(-static_cast<std::int64_t>(get.min_scale_relative) + get.current_scale_relative);
+      return current ? std::optional {kWindowsScalePercentages[*current]} : std::nullopt;
+    }
+    return std::nullopt;
+  }
+
   display_scale_result_t set_display_scale_percent(
     const std::wstring &monitor_device_path,
     const std::uint32_t scale_percent

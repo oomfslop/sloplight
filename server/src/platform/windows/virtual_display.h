@@ -95,6 +95,9 @@ namespace VDISPLAY {
     std::uint32_t scale_percent
   );
 
+  // The current Windows scale of the primary display (the one at 0,0).
+  std::optional<std::uint32_t> get_primary_display_scale_percent();
+
   // Resolve the configured virtual-display scale. -1 selects a resolution-based
   // recommendation, 0 preserves Windows' existing choice, and positive values are exact.
   std::uint32_t effective_virtual_display_scale_percent(
