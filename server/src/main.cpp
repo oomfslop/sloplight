@@ -338,6 +338,11 @@ int main(int argc, char *argv[]) {
   SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
 
   setlocale(LC_ALL, "C");
+
+  // Launched as the signed-in user by the host's clipboard sync
+  if (argc == 3 && argv[1] == "--clipboard-read"sv) {
+    return platf::run_clipboard_read_command(std::strtoull(argv[2], nullptr, 10));
+  }
 #endif
 
   // Explicit snapshot copies only: recover without parsing the host profile,

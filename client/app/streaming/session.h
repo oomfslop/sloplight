@@ -25,10 +25,11 @@
 #include <QVector>
 #include <QRect>
 #include "quickmenu.h"
+#include "clipboard.h"
 
 // SDL_USEREVENT codes shared with helper classes
 #define SDL_CODE_QUICKMENU_TIMER 106
-#define SDL_CODE_CLIPBOARD_TEXT_RECEIVED 107
+#define SDL_CODE_CLIPBOARD_SYNCED 107
 #define SDL_CODE_QUICKMENU_TOAST 108
 #define SDL_CODE_APPWINDOW_CMD 109
 #define SDL_CODE_HOST_CURSOR 110
@@ -208,17 +209,22 @@ public:
         FromHost,
     };
 
-    // What text fetched from the host does to the local clipboard
-    enum class ClipboardApply {
-        IfHostChanged,
-        Always,
-        RecordOnly,
+    // What a ClipboardSyncTask hands back to the main thread
+    struct ClipboardSyncResult {
+        ClipboardDirection direction;
+        // The host clipboard after the sync; formats (from the host) are
+        // empty when it hasn't changed since the last sync
+        QString hostSequence;
+        QVector<Clipboard::Format> formats;
+        bool force;
+        qint64 localChangeCount;
+        bool succeeded;
     };
 
-    // Starts an asynchronous clipboard sync with an Apollo host. The result
-    // is reported via the quick menu toast if showResult is true.
-    void syncClipboard(ClipboardDirection direction, bool showResult,
-                       ClipboardApply apply = ClipboardApply::IfHostChanged);
+    // Starts an asynchronous clipboard sync with an Apollo host. Unless
+    // forced (from the quick menu, with the result shown in a toast),
+    // only a side that changed since the last sync is copied.
+    void syncClipboard(ClipboardDirection direction, bool force);
 
     // The host types in the language of our keyboard input source (Sloplight server)
     void syncKeyboardLanguage(bool force);
@@ -273,7 +279,7 @@ private:
 
     bool isClipboardSyncAllowed(ClipboardDirection direction);
 
-    void onClipboardTextReceived(const QString& text, ClipboardApply apply);
+    void onClipboardSynced(const ClipboardSyncResult& result);
 
     void updateOptimalWindowDisplayMode();
 
@@ -452,9 +458,11 @@ private:
 
     Overlay::OverlayManager m_OverlayManager;
     QuickMenu m_QuickMenu;
-    QString m_LastSyncedClipboardText;
-    // Shared with ClipboardSyncTask, which may outlive this Session
-    QSharedPointer<QAtomicInt> m_ClipboardSyncInProgress;
+    // Both clipboards as of the last sync
+    qint64 m_ClipboardLocalChangeCount = -1;
+    QString m_ClipboardHostSequence;
+    bool m_ClipboardSyncInProgress;
+    QSharedPointer<QAtomicInt> m_ClipboardHostTextOnly = QSharedPointer<QAtomicInt>::create(0);
     QString m_KeyboardLanguageSent;
     QSharedPointer<QAtomicInt> m_KeyboardLanguageUnsupported = QSharedPointer<QAtomicInt>::create(0);
 

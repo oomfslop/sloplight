@@ -1685,6 +1685,18 @@ namespace platf {
     return false;
   }
 
+  std::uint32_t get_clipboard_sequence() {
+    return 0;
+  }
+
+  std::string get_clipboard_formats(std::size_t) {
+    return {};
+  }
+
+  bool set_clipboard_formats(std::string_view) {
+    return false;
+  }
+
   std::string resolve_render_device() {
     if (!config::video.adapter_name.empty()) {
       return config::video.adapter_name;

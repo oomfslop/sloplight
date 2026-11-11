@@ -3891,7 +3891,13 @@ namespace nvhttp {
   // Apollo clipboard sync: GET returns the host clipboard as UTF-8 text, POST
   // replaces it with the request body. Both require the per-device clipboard
   // grant and an active stream from the same client.
+  // type=formats (Sloplight) carries every format instead (encoded as
+  // platf::get_clipboard_formats does), with the host clipboard sequence
+  // number in X-Clipboard-Sequence. GET with since=<that number> gets
+  // 204 while the host clipboard is unchanged.
   namespace {
+    constexpr std::size_t clipboard_formats_max_bytes = 32U * 1024U * 1024U;
+
     bool clipboard_request_allowed(resp_https_t &response, req_https_t &request, const char *action) {
       const auto identity = resolve_client_identity_from_request(request);
       if (identity.uuid.empty()) {
@@ -3907,7 +3913,7 @@ namespace nvhttp {
         return false;
       }
       const auto args = request->parse_query_string();
-      if (get_arg(args, "type", "text") != "text"sv) {
+      if (const auto type = get_arg(args, "type", "text"); type != "text"sv && type != "formats"sv) {
         response->write(SimpleWeb::StatusCode::client_error_bad_request);
         response->close_connection_after_response = true;
         return false;
@@ -3926,22 +3932,46 @@ namespace nvhttp {
   void get_clipboard(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
     if (!clipboard_request_allowed(response, request, "read")) return;
+    const auto args = request->parse_query_string();
     SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/plain; charset=utf-8");
     headers.emplace("Cache-Control", "no-store");
-    response->write(SimpleWeb::StatusCode::success_ok, platf::get_clipboard(), headers);
+    if (get_arg(args, "type", "text") != "formats"sv) {
+      headers.emplace("Content-Type", "text/plain; charset=utf-8");
+      response->write(SimpleWeb::StatusCode::success_ok, platf::get_clipboard(), headers);
+      return;
+    }
+    const auto sequence = std::to_string(platf::get_clipboard_sequence());
+    headers.emplace("X-Clipboard-Sequence", sequence);
+    if (sequence != "0" && get_arg(args, "since", "") == sequence) {
+      response->write(SimpleWeb::StatusCode::success_no_content, headers);
+      return;
+    }
+    headers.emplace("Content-Type", "application/octet-stream");
+    response->write(SimpleWeb::StatusCode::success_ok, platf::get_clipboard_formats(clipboard_formats_max_bytes), headers);
   }
 
   void set_clipboard(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
     if (!clipboard_request_allowed(response, request, "write")) return;
-    if (!platf::set_clipboard(request->content.string())) {
+    if (get_arg(request->parse_query_string(), "type", "text") != "formats"sv) {
+      if (!platf::set_clipboard(request->content.string())) {
+        BOOST_LOG(warning) << "Setting the host clipboard failed";
+        response->write(SimpleWeb::StatusCode::server_error_internal_server_error);
+        response->close_connection_after_response = true;
+        return;
+      }
+      response->write(SimpleWeb::StatusCode::success_ok);
+      return;
+    }
+    if (!platf::set_clipboard_formats(request->content.string())) {
       BOOST_LOG(warning) << "Setting the host clipboard failed";
       response->write(SimpleWeb::StatusCode::server_error_internal_server_error);
       response->close_connection_after_response = true;
       return;
     }
-    response->write(SimpleWeb::StatusCode::success_ok);
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("X-Clipboard-Sequence", std::to_string(platf::get_clipboard_sequence()));
+    response->write(SimpleWeb::StatusCode::success_ok, headers);
   }
 
   // App-window streaming support: list the host's windows, fetch an icon,
@@ -7080,7 +7110,8 @@ launch_session->exact_target_hold.reset();
     };
 
     https_server.config.reuse_address = true;
-    https_server.config.max_request_streambuf_size = 256U * 1024U;
+    // Clipboard images; TLS client identity is verified before a body is read
+    https_server.config.max_request_streambuf_size = clipboard_formats_max_bytes + 1024U * 1024U;
     https_server.config.address = net::get_bind_address(address_family);
     https_server.config.port = port_https;
 

@@ -1098,6 +1098,18 @@ namespace platf {
   /** Replace the host clipboard with UTF-8 text; false on failure. */
   bool set_clipboard(const std::string &content);
 
+  /** Changes whenever the host clipboard does (0 when unavailable). */
+  std::uint32_t get_clipboard_sequence();
+  /**
+   * Every host clipboard format, translated ones first, at most `max_bytes` in total:
+   * [u32be type length][type][u32be data length][data] per format. Types are
+   * "text/plain" (UTF-8), "text/html", "image/png", "text/rtf",
+   * "application/x-chromium-web-custom-data", or a native format name.
+   */
+  std::string get_clipboard_formats(std::size_t max_bytes);
+  /** Replace the host clipboard with formats encoded like the above; false when none could be set. */
+  bool set_clipboard_formats(std::string_view formats);
+
   bool has_elevated_privileges(bool all_caps);
   [[nodiscard]] bool drop_effective_elevated_privileges(bool all_caps);
   [[nodiscard]] bool drop_elevated_privileges(bool all_caps);

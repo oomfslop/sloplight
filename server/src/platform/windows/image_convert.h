@@ -13,6 +13,9 @@ namespace platf::img {
   int probe_largest_icon_size(const std::wstring &exe_path);
   /** Encode a window/class icon to PNG bytes (straight-alpha BGRA). */
   bool encode_hicon_to_png_bytes(void *hicon, std::string &out_png);
+  bool encode_hbitmap_to_png_bytes(void *hbitmap, std::string &out_png);
+  /** Decode an image (PNG, ...) to a 32bpp bottom-up CF_DIB: BITMAPINFOHEADER followed by BGRA rows. */
+  bool decode_image_to_dib(const std::string &image, std::string &out_dib);
 
   // Extract the largest icon embedded in an executable/DLL and write it as a 96 DPI PNG.
   // out_native_size receives the icon's native pixel dimension. Returns false when the file

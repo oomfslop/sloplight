@@ -383,39 +383,90 @@ namespace platf::img {
     }
   }  // namespace
 
+  namespace {
+    bool encode_bitmap_to_png_bytes(IWICImagingFactory *factory, IWICBitmapSource *bmp, std::string &out_png) {
+      winrt::com_ptr<IWICFormatConverter> conv;
+      if (FAILED(factory->CreateFormatConverter(conv.put()))) return false;
+      if (FAILED(conv->Initialize(bmp, GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) return false;
+      winrt::com_ptr<IStream> stream;
+      if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, stream.put()))) return false;
+      winrt::com_ptr<IWICBitmapEncoder> encoder;
+      if (FAILED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, encoder.put()))) return false;
+      if (FAILED(encoder->Initialize(stream.get(), WICBitmapEncoderNoCache))) return false;
+      winrt::com_ptr<IWICBitmapFrameEncode> frame;
+      if (FAILED(encoder->CreateNewFrame(frame.put(), nullptr))) return false;
+      if (FAILED(frame->Initialize(nullptr))) return false;
+      UINT w = 0, h = 0;
+      conv->GetSize(&w, &h);
+      frame->SetSize(w, h);
+      WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppBGRA;
+      frame->SetPixelFormat(&fmt);
+      if (FAILED(frame->WriteSource(conv.get(), nullptr))) return false;
+      if (FAILED(frame->Commit()) || FAILED(encoder->Commit())) return false;
+      HGLOBAL global = nullptr;
+      if (FAILED(GetHGlobalFromStream(stream.get(), &global)) || !global) return false;
+      const SIZE_T size = GlobalSize(global);
+      const void *data = GlobalLock(global);
+      if (!data) return false;
+      out_png.assign(static_cast<const char *>(data), size);
+      GlobalUnlock(global);
+      // The stream owns the HGLOBAL (fDeleteOnRelease) and frees it on release.
+      return !out_png.empty();
+    }
+  }  // namespace
+
   bool encode_hicon_to_png_bytes(void *hicon_raw, std::string &out_png) {
     CoInitGuard co;
     winrt::com_ptr<IWICImagingFactory> factory;
     if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(factory.put())))) return false;
     winrt::com_ptr<IWICBitmap> bmp;
     if (FAILED(factory->CreateBitmapFromHICON(static_cast<HICON>(hicon_raw), bmp.put()))) return false;
+    return encode_bitmap_to_png_bytes(factory.get(), bmp.get(), out_png);
+  }
+
+  bool encode_hbitmap_to_png_bytes(void *hbitmap, std::string &out_png) {
+    CoInitGuard co;
+    winrt::com_ptr<IWICImagingFactory> factory;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(factory.put())))) return false;
+    winrt::com_ptr<IWICBitmap> bmp;
+    // Clipboard DIBs rarely carry meaningful alpha
+    if (FAILED(factory->CreateBitmapFromHBITMAP(static_cast<HBITMAP>(hbitmap), nullptr, WICBitmapIgnoreAlpha, bmp.put()))) return false;
+    return encode_bitmap_to_png_bytes(factory.get(), bmp.get(), out_png);
+  }
+
+  bool decode_image_to_dib(const std::string &image, std::string &out_dib) {
+    CoInitGuard co;
+    winrt::com_ptr<IWICImagingFactory> factory;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(factory.put())))) return false;
+    winrt::com_ptr<IWICStream> stream;
+    if (FAILED(factory->CreateStream(stream.put()))) return false;
+    if (FAILED(stream->InitializeFromMemory(reinterpret_cast<BYTE *>(const_cast<char *>(image.data())), static_cast<DWORD>(image.size())))) return false;
+    winrt::com_ptr<IWICBitmapDecoder> decoder;
+    if (FAILED(factory->CreateDecoderFromStream(stream.get(), nullptr, WICDecodeMetadataCacheOnDemand, decoder.put()))) return false;
+    winrt::com_ptr<IWICBitmapFrameDecode> frame;
+    if (FAILED(decoder->GetFrame(0, frame.put()))) return false;
     winrt::com_ptr<IWICFormatConverter> conv;
     if (FAILED(factory->CreateFormatConverter(conv.put()))) return false;
-    if (FAILED(conv->Initialize(bmp.get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) return false;
-    winrt::com_ptr<IStream> stream;
-    if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, stream.put()))) return false;
-    winrt::com_ptr<IWICBitmapEncoder> encoder;
-    if (FAILED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, encoder.put()))) return false;
-    if (FAILED(encoder->Initialize(stream.get(), WICBitmapEncoderNoCache))) return false;
-    winrt::com_ptr<IWICBitmapFrameEncode> frame;
-    if (FAILED(encoder->CreateNewFrame(frame.put(), nullptr))) return false;
-    if (FAILED(frame->Initialize(nullptr))) return false;
+    if (FAILED(conv->Initialize(frame.get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) return false;
     UINT w = 0, h = 0;
-    conv->GetSize(&w, &h);
-    frame->SetSize(w, h);
-    WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppBGRA;
-    frame->SetPixelFormat(&fmt);
-    if (FAILED(frame->WriteSource(conv.get(), nullptr))) return false;
-    if (FAILED(frame->Commit()) || FAILED(encoder->Commit())) return false;
-    HGLOBAL global = nullptr;
-    if (FAILED(GetHGlobalFromStream(stream.get(), &global)) || !global) return false;
-    const SIZE_T size = GlobalSize(global);
-    const void *data = GlobalLock(global);
-    if (!data) return false;
-    out_png.assign(static_cast<const char *>(data), size);
-    GlobalUnlock(global);
-    // The stream owns the HGLOBAL (fDeleteOnRelease) and frees it on release.
-    return !out_png.empty();
+    if (FAILED(conv->GetSize(&w, &h)) || w == 0 || h == 0) return false;
+    const UINT stride = w * 4;
+    std::vector<BYTE> pixels(std::size_t(stride) * h);
+    if (FAILED(conv->CopyPixels(nullptr, stride, static_cast<UINT>(pixels.size()), pixels.data()))) return false;
+    BITMAPINFOHEADER header {};
+    header.biSize = sizeof(header);
+    header.biWidth = static_cast<LONG>(w);
+    header.biHeight = static_cast<LONG>(h);
+    header.biPlanes = 1;
+    header.biBitCount = 32;
+    header.biCompression = BI_RGB;
+    header.biSizeImage = static_cast<DWORD>(pixels.size());
+    out_dib.assign(reinterpret_cast<const char *>(&header), sizeof(header));
+    out_dib.reserve(sizeof(header) + pixels.size());
+    for (UINT y = h; y-- > 0;) {
+      out_dib.append(reinterpret_cast<const char *>(pixels.data()) + std::size_t(y) * stride, stride);
+    }
+    return true;
   }
 
   int probe_largest_icon_size(const std::wstring &exe_path) {

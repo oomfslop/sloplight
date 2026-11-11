@@ -195,6 +195,7 @@ SOURCES += \
     streaming/session.cpp \
     streaming/appwindow_stub.cpp \
     streaming/keyboardlanguage_stub.cpp \
+    streaming/clipboard_stub.cpp \
     streaming/quickmenu.cpp \
     streaming/audio/audio.cpp \
     streaming/audio/renderers/sdlaud.cpp \
@@ -236,6 +237,7 @@ HEADERS += \
     streaming/session.h \
     streaming/appwindow.h \
     streaming/keyboardlanguage.h \
+    streaming/clipboard.h \
     streaming/quickmenu.h \
     backend/apollopermissions.h \
     streaming/audio/renderers/renderer.h \
@@ -422,6 +424,7 @@ macx {
         streaming/video/ffmpeg-renderers/vt_metal.mm \
         streaming/appwindow_mac.mm \
         streaming/keyboardlanguage_mac.mm \
+        streaming/clipboard_mac.mm \
         streaming/audio/renderers/coreaudio.cpp
 
     HEADERS += \

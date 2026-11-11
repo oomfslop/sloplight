@@ -6,6 +6,7 @@
 #include <QtNetwork/QNetworkReply>
 #include <QEventLoop>
 #include <QTimer>
+#include <QDataStream>
 #include <QXmlStreamReader>
 #include <QSslKey>
 #include <QImageReader>
@@ -474,6 +475,54 @@ NvHTTP::getClipboardText()
                                   "actions/clipboard",
                                   "type=text",
                                   REQUEST_TIMEOUT_MS);
+}
+
+// [u32be type length][type][u32be data length][data] per format
+#define CLIPBOARD_FORMATS_TIMEOUT_MS 30000
+
+NvHTTP::HostClipboard
+NvHTTP::getClipboardFormats(const QString& since)
+{
+    QNetworkReply* reply = openConnection(m_BaseUrlHttps,
+                                          "actions/clipboard",
+                                          "type=formats&since=" + since,
+                                          CLIPBOARD_FORMATS_TIMEOUT_MS,
+                                          NvLogLevel::NVLL_VERBOSE);
+    HostClipboard clipboard;
+    clipboard.sequence = QString::fromLatin1(reply->rawHeader("X-Clipboard-Sequence"));
+    clipboard.unchanged = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 204;
+    const QByteArray body = reply->readAll();
+    delete reply;
+    QDataStream stream(body);
+    while (!stream.atEnd()) {
+        QByteArray type, data;
+        stream >> type >> data;
+        if (stream.status() != QDataStream::Ok) {
+            throw QtNetworkReplyException(QNetworkReply::ProtocolFailure, "Malformed clipboard formats");
+        }
+        clipboard.formats.append({ QString::fromUtf8(type), data });
+    }
+    return clipboard;
+}
+
+QString
+NvHTTP::setClipboardFormats(const QVector<Clipboard::Format>& formats)
+{
+    QByteArray body;
+    QDataStream stream(&body, QIODevice::WriteOnly);
+    for (const Clipboard::Format& format : formats) {
+        stream << format.type.toUtf8() << format.data;
+    }
+    QNetworkReply* reply = openConnection(m_BaseUrlHttps,
+                                          "actions/clipboard",
+                                          "type=formats",
+                                          CLIPBOARD_FORMATS_TIMEOUT_MS,
+                                          NvLogLevel::NVLL_VERBOSE,
+                                          &body,
+                                          "application/octet-stream");
+    QString sequence = QString::fromLatin1(reply->rawHeader("X-Clipboard-Sequence"));
+    delete reply;
+    return sequence;
 }
 
 QString

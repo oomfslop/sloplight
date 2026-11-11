@@ -3,6 +3,7 @@
 #include "identitymanager.h"
 #include "nvapp.h"
 #include "nvaddress.h"
+#include "streaming/clipboard.h"
 
 #include <Limelight.h>
 
@@ -216,6 +217,22 @@ public:
     // Both throw GfeHttpResponseException/QtNetworkReplyException on failure.
     QString
     getClipboardText();
+
+    // Sloplight host: every clipboard format. `unchanged` (and no formats) while
+    // the host clipboard sequence still equals `since`. A host that only does
+    // text answers with ProtocolInvalidOperationError.
+    struct HostClipboard
+    {
+        QString sequence;
+        bool unchanged = false;
+        QVector<Clipboard::Format> formats;
+    };
+    HostClipboard
+    getClipboardFormats(const QString& since);
+
+    // Returns the host clipboard sequence afterwards
+    QString
+    setClipboardFormats(const QVector<Clipboard::Format>& formats);
 
     // App-window streaming: what the host app says is under a frame-relative
     // pixel ("drag", "min", "max", "close", "border", "client", "none").

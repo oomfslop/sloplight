@@ -8,6 +8,9 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <cwchar>
 #include <csignal>
 #include <filesystem>
 #include <iomanip>
@@ -19,6 +22,9 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <stop_token>
+#include <thread>
 #include <vector>
 
 // lib includes
@@ -49,6 +55,8 @@
 #undef NTDDI_VERSION
 #define NTDDI_VERSION NTDDI_WIN10
 #include <Shlwapi.h>
+#include <fcntl.h>
+#include <io.h>
 
 // lib includes
 #include <libvirtualgamepad/client.h>
@@ -67,6 +75,7 @@
 #include "src/process.h"
 #include "src/utility.h"
 #include "udp_send_retry.h"
+#include "image_convert.h"
 #include "utf_utils.h"
 
 // UDP_SEND_MSG_SIZE was added in the Windows 10 20H1 SDK
@@ -3316,6 +3325,324 @@ namespace platf {
     return std::make_unique<host_cursor_watcher_t>(std::move(on_change));
   }
 
+  namespace {
+    std::string read_clipboard_global(UINT format) {
+      HANDLE data = GetClipboardData(format);
+      if (!data) {
+        return {};
+      }
+      const auto *bytes = static_cast<const char *>(GlobalLock(data));
+      if (!bytes) {
+        return {};
+      }
+      std::string value(bytes, GlobalSize(data));
+      GlobalUnlock(data);
+      return value;
+    }
+
+    bool write_clipboard_global(UINT format, const void *data, std::size_t size) {
+      HGLOBAL global = GlobalAlloc(GMEM_MOVEABLE, size);
+      if (!global) {
+        BOOST_LOG(warning) << "Clipboard: GlobalAlloc failed: " << GetLastError();
+        return false;
+      }
+      void *dest = GlobalLock(global);
+      if (!dest) {
+        BOOST_LOG(warning) << "Clipboard: GlobalLock failed: " << GetLastError();
+        GlobalFree(global);
+        return false;
+      }
+      std::memcpy(dest, data, size);
+      GlobalUnlock(global);
+      if (!SetClipboardData(format, global)) {
+        BOOST_LOG(warning) << "Clipboard: SetClipboardData(" << format << ") failed: " << GetLastError();
+        GlobalFree(global);
+        return false;
+      }
+      return true;
+    }
+
+    std::string read_clipboard_text() {
+      const std::string utf16 = read_clipboard_global(CF_UNICODETEXT);
+      std::wstring value(reinterpret_cast<const wchar_t *>(utf16.data()), utf16.size() / sizeof(wchar_t));
+      value.resize(std::wcslen(value.c_str()));
+      return utf_utils::to_utf8(value);
+    }
+
+    std::string trim_at_nul(std::string value) {
+      value.resize(std::strlen(value.c_str()));
+      return value;
+    }
+
+    // CF_HTML: an ASCII header of byte offsets into the UTF-8 payload
+    std::string html_from_cf_html(const std::string &cf_html) {
+      const auto offset = [&](std::string_view key) -> long long {
+        const auto pos = cf_html.find(key);
+        return pos == std::string::npos ? -1 : std::strtoll(cf_html.c_str() + pos + key.size(), nullptr, 10);
+      };
+      auto start = offset("StartHTML:");
+      auto end = offset("EndHTML:");
+      if (start < 0 || end < 0) {
+        start = offset("StartFragment:");
+        end = offset("EndFragment:");
+      }
+      if (start < 0 || end <= start || static_cast<std::size_t>(end) > cf_html.size()) {
+        return {};
+      }
+      return cf_html.substr(start, end - start);
+    }
+
+    std::string cf_html_from_html(const std::string &html) {
+      constexpr std::string_view start_marker = "<!--StartFragment-->";
+      constexpr std::string_view end_marker = "<!--EndFragment-->";
+      const std::string body = html.find(start_marker) != std::string::npos && html.find(end_marker) != std::string::npos ?
+                                 html :
+                                 "<html><body>" + std::string(start_marker) + html + std::string(end_marker) + "</body></html>";
+      constexpr auto header_format = "Version:0.9\r\nStartHTML:%010zu\r\nEndHTML:%010zu\r\nStartFragment:%010zu\r\nEndFragment:%010zu\r\n";
+      const std::size_t header_size = std::snprintf(nullptr, 0, header_format, std::size_t {}, std::size_t {}, std::size_t {}, std::size_t {});
+      std::string header(header_size, '\0');
+      std::snprintf(header.data(), header_size + 1, header_format, header_size, header_size + body.size(), header_size + body.find(start_marker) + start_marker.size(), header_size + body.find(end_marker));
+      return header + body;
+    }
+
+    // Chromium/Electron pack DataTransfer custom types into one pickle, named
+    // "org.chromium.web-custom-data" on macOS
+    constexpr auto chromium_custom_data_format_name = L"Chromium Web Custom MIME Data Format";
+
+    std::string read_clipboard_format_name(UINT format) {
+      wchar_t name[256];
+      const int length = GetClipboardFormatNameW(format, name, static_cast<int>(std::size(name)));
+      return length > 0 ? utf_utils::to_utf8(std::wstring(name, length)) : std::string {};
+    }
+
+    struct clipboard_format_t {
+      std::string type;
+      std::string data;
+    };
+
+    // [u32be type length][type][u32be data length][data] per format
+    std::string encode_clipboard_formats(const std::vector<clipboard_format_t> &formats) {
+      std::string encoded;
+      const auto append = [&](const std::string &value) {
+        const auto size = static_cast<std::uint32_t>(value.size());
+        encoded.push_back(static_cast<char>(size >> 24));
+        encoded.push_back(static_cast<char>(size >> 16));
+        encoded.push_back(static_cast<char>(size >> 8));
+        encoded.push_back(static_cast<char>(size));
+        encoded += value;
+      };
+      for (const auto &format : formats) {
+        append(format.type);
+        append(format.data);
+      }
+      return encoded;
+    }
+
+    std::optional<std::vector<clipboard_format_t>> decode_clipboard_formats(std::string_view encoded) {
+      std::vector<clipboard_format_t> formats;
+      const auto read = [&](std::string &out) {
+        if (encoded.size() < 4) {
+          return false;
+        }
+        const std::uint32_t size = std::uint32_t(std::uint8_t(encoded[0])) << 24 | std::uint32_t(std::uint8_t(encoded[1])) << 16 |
+                                   std::uint32_t(std::uint8_t(encoded[2])) << 8 | std::uint32_t(std::uint8_t(encoded[3]));
+        encoded.remove_prefix(4);
+        if (encoded.size() < size) {
+          return false;
+        }
+        out.assign(encoded.substr(0, size));
+        encoded.remove_prefix(size);
+        return true;
+      };
+      while (!encoded.empty()) {
+        clipboard_format_t format;
+        if (!read(format.type) || !read(format.data)) {
+          return std::nullopt;
+        }
+        formats.push_back(std::move(format));
+      }
+      return formats;
+    }
+
+    std::vector<clipboard_format_t> read_clipboard_formats(std::size_t max_bytes) {
+      if (!open_clipboard_with_retry()) {
+        BOOST_LOG(warning) << "Clipboard: OpenClipboard failed: " << GetLastError();
+        return {};
+      }
+      auto close_guard = util::fail_guard([]() {
+        CloseClipboard();
+      });
+
+      const UINT html_format = RegisterClipboardFormatW(L"HTML Format");
+      const UINT png_format = RegisterClipboardFormatW(L"PNG");
+      const UINT rtf_format = RegisterClipboardFormatW(L"Rich Text Format");
+      const UINT chromium_custom_data_format = RegisterClipboardFormatW(chromium_custom_data_format_name);
+
+      std::vector<clipboard_format_t> formats;
+      std::size_t total = 0;
+      const auto add = [&](std::string type, std::string data) {
+        if (data.empty() || total + type.size() + data.size() > max_bytes) {
+          return;
+        }
+        total += type.size() + data.size();
+        formats.push_back({std::move(type), std::move(data)});
+      };
+
+      if (IsClipboardFormatAvailable(CF_UNICODETEXT)) {
+        add("text/plain", read_clipboard_text());
+      }
+      if (IsClipboardFormatAvailable(html_format)) {
+        add("text/html", html_from_cf_html(read_clipboard_global(html_format)));
+      }
+      if (IsClipboardFormatAvailable(png_format)) {
+        add("image/png", read_clipboard_global(png_format));
+      } else if (IsClipboardFormatAvailable(CF_BITMAP)) {
+        std::string png;
+        if (img::encode_hbitmap_to_png_bytes(GetClipboardData(CF_BITMAP), png)) {
+          add("image/png", std::move(png));
+        }
+      }
+      if (IsClipboardFormatAvailable(rtf_format)) {
+        add("text/rtf", trim_at_nul(read_clipboard_global(rtf_format)));
+      }
+      if (IsClipboardFormatAvailable(chromium_custom_data_format)) {
+        add("application/x-chromium-web-custom-data", read_clipboard_global(chromium_custom_data_format));
+      }
+
+      // Registered formats hold plain memory; the predefined ones below
+      // 0xC000 are handles or synthesized variants of the above
+      for (UINT format = EnumClipboardFormats(0); format != 0; format = EnumClipboardFormats(format)) {
+        if (format < 0xC000 || format == html_format || format == png_format || format == rtf_format || format == chromium_custom_data_format) {
+          continue;
+        }
+        std::string name = read_clipboard_format_name(format);
+        if (!name.empty()) {
+          add(std::move(name), read_clipboard_global(format));
+        }
+      }
+      return formats;
+    }
+
+    bool write_clipboard_formats(const std::vector<clipboard_format_t> &formats) {
+      if (!open_clipboard_with_retry()) {
+        BOOST_LOG(warning) << "Clipboard: OpenClipboard failed: " << GetLastError();
+        return false;
+      }
+      auto close_guard = util::fail_guard([]() {
+        CloseClipboard();
+      });
+      if (!EmptyClipboard()) {
+        BOOST_LOG(warning) << "Clipboard: EmptyClipboard failed: " << GetLastError();
+        return false;
+      }
+
+      bool any = false;
+      for (const auto &format : formats) {
+        if (format.type == "text/plain") {
+          const std::wstring value = utf_utils::from_utf8(ensure_crlf(format.data));
+          any |= write_clipboard_global(CF_UNICODETEXT, value.c_str(), (value.size() + 1) * sizeof(wchar_t));
+        } else if (format.type == "text/html") {
+          const std::string cf_html = cf_html_from_html(format.data);
+          any |= write_clipboard_global(RegisterClipboardFormatW(L"HTML Format"), cf_html.c_str(), cf_html.size() + 1);
+        } else if (format.type == "image/png") {
+          any |= write_clipboard_global(RegisterClipboardFormatW(L"PNG"), format.data.data(), format.data.size());
+          std::string dib;
+          if (img::decode_image_to_dib(format.data, dib)) {
+            any |= write_clipboard_global(CF_DIB, dib.data(), dib.size());
+          }
+        } else if (format.type == "text/rtf") {
+          any |= write_clipboard_global(RegisterClipboardFormatW(L"Rich Text Format"), format.data.c_str(), format.data.size() + 1);
+        } else if (format.type == "application/x-chromium-web-custom-data") {
+          any |= write_clipboard_global(RegisterClipboardFormatW(chromium_custom_data_format_name), format.data.data(), format.data.size());
+        } else if (const UINT native = RegisterClipboardFormatW(utf_utils::from_utf8(format.type).c_str()); native != 0) {
+          any |= write_clipboard_global(native, format.data.data(), format.data.size());
+        }
+      }
+      return any;
+    }
+
+    // Registered formats other users' windows put on the clipboard (Chromium's
+    // HTML, custom data, ...) are invisible to SYSTEM, standard ones are not
+    std::optional<std::string> read_clipboard_formats_as_user(std::size_t max_bytes) {
+      HANDLE token = retrieve_users_token(false);
+      if (!token) {
+        return std::nullopt;
+      }
+      auto close_token = util::fail_guard([token]() {
+        CloseHandle(token);
+      });
+
+      SECURITY_ATTRIBUTES inheritable {sizeof(inheritable), nullptr, TRUE};
+      HANDLE output_read = nullptr;
+      HANDLE output_write = nullptr;
+      if (!CreatePipe(&output_read, &output_write, &inheritable, 0)) {
+        BOOST_LOG(warning) << "Clipboard: CreatePipe failed: " << GetLastError();
+        return std::nullopt;
+      }
+      auto close_output_read = util::fail_guard([output_read]() {
+        CloseHandle(output_read);
+      });
+      SetHandleInformation(output_read, HANDLE_FLAG_INHERIT, 0);
+
+      std::error_code startup_error;
+      STARTUPINFOEXW startup_info = create_startup_info(nullptr, nullptr, startup_error);
+      if (startup_error) {
+        return std::nullopt;
+      }
+      auto free_attributes = util::fail_guard([list = startup_info.lpAttributeList]() {
+        free_proc_thread_attr_list(list);
+      });
+      startup_info.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+      startup_info.StartupInfo.hStdOutput = output_write;
+      UpdateProcThreadAttribute(startup_info.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &startup_info.StartupInfo.hStdOutput, sizeof(startup_info.StartupInfo.hStdOutput), nullptr, nullptr);
+      std::wstring desktop = L"winsta0\\default";
+      startup_info.StartupInfo.lpDesktop = desktop.data();
+
+      wchar_t executable[MAX_PATH];
+      GetModuleFileNameW(nullptr, executable, MAX_PATH);
+      std::wstring command = L"\"" + std::wstring(executable) + L"\" --clipboard-read " + std::to_wstring(max_bytes);
+      PROCESS_INFORMATION process_info {};
+      const BOOL launched = CreateProcessAsUserW(token, executable, command.data(), nullptr, nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW, nullptr, nullptr, reinterpret_cast<LPSTARTUPINFOW>(&startup_info), &process_info);
+      CloseHandle(output_write);
+      if (!launched) {
+        BOOST_LOG(warning) << "Clipboard: launching the user clipboard reader failed: " << GetLastError();
+        return std::nullopt;
+      }
+      auto close_process = util::fail_guard([&process_info]() {
+        CloseHandle(process_info.hThread);
+        CloseHandle(process_info.hProcess);
+      });
+
+      // A hung clipboard owner would otherwise keep the pipe open forever
+      std::jthread watchdog([process = process_info.hProcess](std::stop_token stop) {
+        for (int waited = 0; waited < 100 && !stop.stop_requested(); ++waited) {
+          if (WaitForSingleObject(process, 100) == WAIT_OBJECT_0) {
+            return;
+          }
+        }
+        if (!stop.stop_requested()) {
+          BOOST_LOG(warning) << "Clipboard: the user clipboard reader timed out";
+          TerminateProcess(process, 1);
+        }
+      });
+
+      std::string encoded;
+      char buffer[64 * 1024];
+      DWORD read = 0;
+      while (ReadFile(output_read, buffer, sizeof(buffer), &read, nullptr) && read > 0) {
+        encoded.append(buffer, read);
+      }
+      WaitForSingleObject(process_info.hProcess, INFINITE);
+      DWORD exit_code = 1;
+      GetExitCodeProcess(process_info.hProcess, &exit_code);
+      if (exit_code != 0) {
+        BOOST_LOG(warning) << "Clipboard: the user clipboard reader failed: " << exit_code;
+        return std::nullopt;
+      }
+      return encoded;
+    }
+  }  // namespace
+
   std::string get_clipboard() {
     if (!open_clipboard_with_retry()) {
       BOOST_LOG(warning) << "Clipboard: OpenClipboard failed: " << GetLastError();
@@ -3324,53 +3651,34 @@ namespace platf {
     auto close_guard = util::fail_guard([]() {
       CloseClipboard();
     });
-    HANDLE data = GetClipboardData(CF_UNICODETEXT);
-    if (!data) {
-      return {};
-    }
-    auto *text = static_cast<wchar_t *>(GlobalLock(data));
-    if (!text) {
-      BOOST_LOG(warning) << "Clipboard: GlobalLock failed: " << GetLastError();
-      return {};
-    }
-    std::wstring value(text);
-    GlobalUnlock(data);
-    return utf_utils::to_utf8(value);
+    return read_clipboard_text();
   }
 
   bool set_clipboard(const std::string &content) {
-    const std::wstring value = utf_utils::from_utf8(ensure_crlf(content));
-    if (!open_clipboard_with_retry()) {
-      BOOST_LOG(warning) << "Clipboard: OpenClipboard failed: " << GetLastError();
-      return false;
+    return write_clipboard_formats({{"text/plain", content}});
+  }
+
+  std::uint32_t get_clipboard_sequence() {
+    return GetClipboardSequenceNumber();
+  }
+
+  std::string get_clipboard_formats(std::size_t max_bytes) {
+    if (is_running_as_system()) {
+      if (auto encoded = read_clipboard_formats_as_user(max_bytes)) {
+        return std::move(*encoded);
+      }
     }
-    auto close_guard = util::fail_guard([]() {
-      CloseClipboard();
-    });
-    if (!EmptyClipboard()) {
-      BOOST_LOG(warning) << "Clipboard: EmptyClipboard failed: " << GetLastError();
-      return false;
-    }
-    const size_t bytes = (value.size() + 1) * sizeof(wchar_t);
-    HGLOBAL global = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!global) {
-      BOOST_LOG(warning) << "Clipboard: GlobalAlloc failed: " << GetLastError();
-      return false;
-    }
-    void *dest = GlobalLock(global);
-    if (!dest) {
-      BOOST_LOG(warning) << "Clipboard: GlobalLock failed: " << GetLastError();
-      GlobalFree(global);
-      return false;
-    }
-    std::memcpy(dest, value.c_str(), bytes);
-    GlobalUnlock(global);
-    if (!SetClipboardData(CF_UNICODETEXT, global)) {
-      BOOST_LOG(warning) << "Clipboard: SetClipboardData failed: " << GetLastError();
-      GlobalFree(global);
-      return false;
-    }
-    // Ownership of `global` passed to the system.
-    return true;
+    return encode_clipboard_formats(read_clipboard_formats(max_bytes));
+  }
+
+  bool set_clipboard_formats(std::string_view encoded) {
+    const auto formats = decode_clipboard_formats(encoded);
+    return formats && !formats->empty() && write_clipboard_formats(*formats);
+  }
+
+  int run_clipboard_read_command(std::size_t max_bytes) {
+    _setmode(_fileno(stdout), _O_BINARY);
+    const std::string encoded = encode_clipboard_formats(read_clipboard_formats(max_bytes));
+    return std::fwrite(encoded.data(), 1, encoded.size(), stdout) == encoded.size() && std::fflush(stdout) == 0 ? 0 : 1;
   }
 }  // namespace platf

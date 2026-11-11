@@ -68,6 +68,9 @@ namespace platf {
    */
   bool is_running_as_system();
 
+  /** `sunshine --clipboard-read <max bytes>`: writes the clipboard to stdout as platf::get_clipboard_formats encodes it. */
+  int run_clipboard_read_command(std::size_t max_bytes);
+
   /**
    * @brief Check whether a user is logged into the active console session.
    * @return true if an active console session exists, false otherwise.

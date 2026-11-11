@@ -45,7 +45,7 @@
 #define SDL_CODE_GAMECONTROLLER_SET_MOTION_EVENT_STATE 103
 #define SDL_CODE_GAMECONTROLLER_SET_CONTROLLER_LED 104
 #define SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS 105
-// SDL_CODE_QUICKMENU_TIMER (106) and SDL_CODE_CLIPBOARD_TEXT_RECEIVED (107) are in session.h
+// SDL_CODE_QUICKMENU_TIMER (106) and SDL_CODE_CLIPBOARD_SYNCED (107) are in session.h
 
 #include <openssl/rand.h>
 
@@ -623,7 +623,7 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_AudioSampleCount(0),
       m_DropAudioEndTime(0),
       m_QuickMenu(this),
-      m_ClipboardSyncInProgress(new QAtomicInt(0))
+      m_ClipboardSyncInProgress(false)
 {
 }
 
@@ -2297,15 +2297,10 @@ bool Session::isClipboardSyncAllowed(ClipboardDirection direction)
 class ClipboardSyncTask : public QRunnable
 {
 public:
-    ClipboardSyncTask(NvComputer* computer, QSharedPointer<QAtomicInt> inProgress,
-                      Session::ClipboardDirection direction, QString text, bool showResult,
-                      Session::ClipboardApply apply)
+    ClipboardSyncTask(NvComputer* computer, QSharedPointer<QAtomicInt> hostTextOnly, Session::ClipboardSyncResult request)
         : m_Computer(computer),
-          m_InProgress(inProgress),
-          m_Direction(direction),
-          m_Text(text),
-          m_ShowResult(showResult),
-          m_Apply(apply)
+          m_HostTextOnly(hostTextOnly),
+          m_Result(std::move(request))
     {
     }
 
@@ -2318,25 +2313,17 @@ public:
             // the stream ended while we were waiting for the host to respond.
             NvHTTP http(m_Computer);
 
-            if (m_Direction == Session::ClipboardDirection::ToHost) {
-                http.setClipboardText(m_Text);
+            if (m_Result.direction == Session::ClipboardDirection::ToHost) {
+                pushToHost(http);
                 resultMessage = QCoreApplication::translate("QuickMenu", "Clipboard sent to host");
             }
             else {
-                QString text = http.getClipboardText();
-
-                // Hand the text to the main thread which owns the SDL clipboard
-                SDL_Event event = {};
-                event.type = SDL_USEREVENT;
-                event.user.code = SDL_CODE_CLIPBOARD_TEXT_RECEIVED;
-                event.user.data1 = new QString(text);
-                event.user.data2 = reinterpret_cast<void*>(static_cast<intptr_t>(m_Apply));
-                SDL_PushEvent(&event);
-
-                resultMessage = text.isEmpty() ?
-                            QCoreApplication::translate("QuickMenu", "Host clipboard is empty") :
+                pullFromHost(http);
+                resultMessage = m_Result.formats.isEmpty() ?
+                            QCoreApplication::translate("QuickMenu", "Host clipboard is unchanged") :
                             QCoreApplication::translate("QuickMenu", "Clipboard received from host");
             }
+            m_Result.succeeded = true;
         } catch (const GfeHttpResponseException& e) {
             resultMessage = QCoreApplication::translate("QuickMenu", "Clipboard sync failed: %1").arg(e.toQString());
         } catch (const QtNetworkReplyException& e) {
@@ -2345,7 +2332,7 @@ public:
 
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "%s", qPrintable(resultMessage));
 
-        if (m_ShowResult) {
+        if (m_Result.force) {
             // The quick menu is owned by the main thread, so post the toast there
             SDL_Event event = {};
             event.type = SDL_USEREVENT;
@@ -2354,57 +2341,106 @@ public:
             SDL_PushEvent(&event);
         }
 
-        m_InProgress->storeRelease(0);
+        // Hand the result to the main thread which owns the clipboard
+        SDL_Event event = {};
+        event.type = SDL_USEREVENT;
+        event.user.code = SDL_CODE_CLIPBOARD_SYNCED;
+        event.user.data1 = new Session::ClipboardSyncResult(std::move(m_Result));
+        SDL_PushEvent(&event);
     }
 
 private:
+    static QString getTextSequence(const QString& text)
+    {
+        return "text:" + QString::number(qHash(text));
+    }
+
+    void pushToHost(NvHTTP& http)
+    {
+        if (!m_HostTextOnly->loadAcquire()) {
+            try {
+                m_Result.hostSequence = http.setClipboardFormats(m_Result.formats);
+                return;
+            } catch (const QtNetworkReplyException& e) {
+                // Hosts without type=formats (Apollo) reject it with 400
+                if (e.getError() != QNetworkReply::ProtocolInvalidOperationError) {
+                    throw;
+                }
+                m_HostTextOnly->storeRelease(1);
+            }
+        }
+        for (const Clipboard::Format& format : m_Result.formats) {
+            if (format.type == "text/plain") {
+                const QString text = QString::fromUtf8(format.data);
+                http.setClipboardText(text);
+                m_Result.hostSequence = getTextSequence(text);
+                return;
+            }
+        }
+    }
+
+    void pullFromHost(NvHTTP& http)
+    {
+        const QString since = m_Result.hostSequence;
+        if (!m_HostTextOnly->loadAcquire()) {
+            try {
+                NvHTTP::HostClipboard clipboard = http.getClipboardFormats(since);
+                m_Result.hostSequence = clipboard.sequence;
+                m_Result.formats = clipboard.unchanged ? QVector<Clipboard::Format>() : std::move(clipboard.formats);
+                return;
+            } catch (const QtNetworkReplyException& e) {
+                // Hosts without type=formats (Apollo) reject it with 400
+                if (e.getError() != QNetworkReply::ProtocolInvalidOperationError) {
+                    throw;
+                }
+                m_HostTextOnly->storeRelease(1);
+            }
+        }
+        const QString text = http.getClipboardText();
+        m_Result.hostSequence = getTextSequence(text);
+        if (!text.isEmpty() && m_Result.hostSequence != since) {
+            m_Result.formats = { { "text/plain", text.toUtf8() } };
+        }
+    }
+
     NvComputer* m_Computer;
-    QSharedPointer<QAtomicInt> m_InProgress;
-    Session::ClipboardDirection m_Direction;
-    QString m_Text;
-    bool m_ShowResult;
-    Session::ClipboardApply m_Apply;
+    QSharedPointer<QAtomicInt> m_HostTextOnly;
+    Session::ClipboardSyncResult m_Result;
 };
 
-void Session::syncClipboard(ClipboardDirection direction, bool showResult, ClipboardApply apply)
+// Matches the host's limit
+#define CLIPBOARD_SYNC_MAX_BYTES (32 * 1024 * 1024)
+
+void Session::syncClipboard(ClipboardDirection direction, bool force)
 {
     if (!isClipboardSyncAllowed(direction)) {
-        if (showResult) {
+        if (force) {
             m_QuickMenu.showToast(tr("Clipboard sync is not permitted for this client"));
         }
         return;
     }
 
-    if (m_ClipboardSyncInProgress->loadAcquire()) {
+    if (m_ClipboardSyncInProgress) {
         return;
     }
 
-    QString text;
+    const bool refetch = force && direction == ClipboardDirection::FromHost;
+    ClipboardSyncResult request = { direction, refetch ? QString() : m_ClipboardHostSequence, {}, force, Clipboard::getChangeCount(), false };
     if (direction == ClipboardDirection::ToHost) {
-        char* clipboardText = SDL_HasClipboardText() ? SDL_GetClipboardText() : nullptr;
-        if (clipboardText != nullptr) {
-            text = QString::fromUtf8(clipboardText);
-            SDL_free(clipboardText);
+        if (!force && request.localChangeCount == m_ClipboardLocalChangeCount) {
+            return;
         }
-
-        if (text.isEmpty()) {
-            if (showResult) {
+        request.formats = Clipboard::read(CLIPBOARD_SYNC_MAX_BYTES);
+        if (request.formats.isEmpty()) {
+            if (force) {
                 m_QuickMenu.showToast(tr("Clipboard is empty"));
             }
             return;
         }
-
-        // Don't bounce the same text back and forth during automatic sync
-        if (!showResult && text == m_LastSyncedClipboardText) {
-            return;
-        }
-
-        m_LastSyncedClipboardText = text;
     }
 
-    m_ClipboardSyncInProgress->storeRelease(1);
-    QThreadPool::globalInstance()->start(new ClipboardSyncTask(m_Computer, m_ClipboardSyncInProgress, direction, text, showResult,
-                                                               showResult ? ClipboardApply::Always : apply));
+    m_ClipboardSyncInProgress = true;
+    QThreadPool::globalInstance()->start(new ClipboardSyncTask(m_Computer, m_ClipboardHostTextOnly, std::move(request)));
 }
 
 void Session::syncKeyboardLanguage(bool force)
@@ -2426,16 +2462,26 @@ void Session::syncKeyboardLanguage(bool force)
     }));
 }
 
-void Session::onClipboardTextReceived(const QString& text, ClipboardApply apply)
+void Session::onClipboardSynced(const ClipboardSyncResult& result)
 {
-    // Rewriting unchanged host text would clobber whatever was copied locally
-    // since (images included) and add a clipboard history entry every time
-    const bool applyText = apply == ClipboardApply::Always ||
-                            (apply == ClipboardApply::IfHostChanged && text != m_LastSyncedClipboardText);
-    m_LastSyncedClipboardText = text;
-    if (applyText && !text.isEmpty()) {
-        SDL_SetClipboardText(text.toUtf8().constData());
+    m_ClipboardSyncInProgress = false;
+    if (!result.succeeded) {
+        return;
     }
+    m_ClipboardHostSequence = result.hostSequence;
+    if (result.direction == ClipboardDirection::ToHost) {
+        m_ClipboardLocalChangeCount = result.localChangeCount;
+        return;
+    }
+    if (result.formats.isEmpty()) {
+        return;
+    }
+    // Something copied here while the host was answering wins
+    if (!result.force && Clipboard::getChangeCount() != result.localChangeCount) {
+        return;
+    }
+    Clipboard::write(result.formats);
+    m_ClipboardLocalChangeCount = Clipboard::getChangeCount();
 }
 
 void Session::setShouldExit(bool quitHostApp)
@@ -2617,15 +2663,9 @@ void Session::exec()
         startDeskPoller();
     }
 
-    // Push our clipboard to the host at the start of the stream if enabled.
-    // Without local text, learn the host's instead, so only later host copies come back.
+    // Push our clipboard to the host at the start of the stream if enabled
     if (m_Preferences->clipboardSync) {
-        if (SDL_HasClipboardText()) {
-            syncClipboard(ClipboardDirection::ToHost, false);
-        }
-        else {
-            syncClipboard(ClipboardDirection::FromHost, false, ClipboardApply::RecordOnly);
-        }
+        syncClipboard(ClipboardDirection::ToHost, false);
     }
 
     // Typing in the language picked here: now, and whenever another is picked
@@ -2816,11 +2856,11 @@ void Session::exec()
                 delete pixels;
                 break;
             }
-            case SDL_CODE_CLIPBOARD_TEXT_RECEIVED:
+            case SDL_CODE_CLIPBOARD_SYNCED:
             {
-                QString* text = (QString*)event.user.data1;
-                onClipboardTextReceived(*text, static_cast<ClipboardApply>(reinterpret_cast<intptr_t>(event.user.data2)));
-                delete text;
+                auto result = (ClipboardSyncResult*)event.user.data1;
+                onClipboardSynced(*result);
+                delete result;
                 break;
             }
             case SDL_CODE_QUICKMENU_TOAST:
