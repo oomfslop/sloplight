@@ -117,6 +117,9 @@ namespace remote_display_topology {
     // live owners. Paused games, captures and retained monitors still own it.
     bool has_live_managed_client_identity() const;
     bool normal_game_release_pending() const;
+    // A pending release without capture references is a failed platform apply
+    // (SetDisplayConfig is ACCESS_DENIED while the secure desktop is up).
+    bool normal_game_capture_draining() const;
     std::vector<std::string> managed_client_identity_ids() const;
     std::vector<std::string> protected_remote_monitor_client_ids() const;
     // Recovery belongs to live capture. At the final capture boundary, return

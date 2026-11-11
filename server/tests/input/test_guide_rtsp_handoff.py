@@ -78,7 +78,7 @@ namespace proc {
 namespace remote_display_topology {
   struct fake_t {
     std::shared_ptr<void> retain_normal_game_capture(const std::string &, uint64_t) { return {}; }
-    bool normal_game_release_pending() { return false; }
+    bool normal_game_capture_draining() { return false; }
   };
   fake_t &instance() { static fake_t value; return value; }
 }

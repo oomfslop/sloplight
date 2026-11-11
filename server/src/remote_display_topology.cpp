@@ -196,6 +196,13 @@ namespace remote_display_topology {
     });
   }
 
+  bool coordinator_t::normal_game_capture_draining() const {
+    std::lock_guard lock(mutex_);
+    return std::any_of(clients_.begin(), clients_.end(), [](const auto &entry) {
+      return entry.second.normal_release_pending && !entry.second.normal_capture_references.empty();
+    });
+  }
+
   std::size_t coordinator_t::managed_client_identity_count() const {
     std::lock_guard lock(mutex_);
     return static_cast<std::size_t>(std::count_if(clients_.begin(), clients_.end(), [](const auto &entry) {

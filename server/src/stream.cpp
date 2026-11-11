@@ -4102,7 +4102,7 @@ namespace stream {
           if (!session->normal_display_capture) {
             throw std::runtime_error("The app's display ownership ended before capture could start");
           }
-        } else if (remote_display_topology::instance().normal_game_release_pending()) {
+        } else if (remote_display_topology::instance().normal_game_capture_draining()) {
           throw std::runtime_error("The previous app's display is still being released");
         }
       }

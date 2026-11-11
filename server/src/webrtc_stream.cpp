@@ -3285,7 +3285,7 @@ namespace webrtc_stream {
 #if defined(_WIN32) || defined(__linux__)
       // A fresh desktop capture can inherit RTSP's output after its app exits.
       // It must not attach to an ended generation while that output drains.
-      if (!capture_already_active && remote_display_topology::instance().normal_game_release_pending()) {
+      if (!capture_already_active && remote_display_topology::instance().normal_game_capture_draining()) {
         return std::string {"The previous app's display is still being released; retry after its capture stops"};
       }
 #endif
