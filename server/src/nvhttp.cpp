@@ -1424,7 +1424,10 @@ namespace nvhttp {
           launch_session->virtual_display_catalog_error = "The retained Sunshine display still belongs to the bundled provider; select that provider before resuming. The target was preserved.";
           return;
         }
-        if (!matches || !*matches || launch_session->requested_resolution_only) allow_display_changes = true;
+        if ((!matches || !*matches || launch_session->requested_resolution_only) && !allow_display_changes) {
+          allow_display_changes = true;
+          launch_session->virtual_display_recreated_on_demand = true;
+        }
       }
       auto reserve_normal_vdd_identity = [&]() {
         if (shared_virtual_display_mode || launch_session->role != remote_session::role_e::game) return true;
