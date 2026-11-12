@@ -6,6 +6,7 @@
 pub struct DisplayInfo {
     pub name: String,
     pub builtin: bool,
+    pub main: bool,
     /// Largest pixel mode the panel supports (its native resolution).
     pub native: (i32, i32),
     /// Backing pixel size of the mode currently in use.
@@ -47,6 +48,11 @@ pub fn displays() -> Vec<DisplayInfo> {
     {
         Vec::new()
     }
+}
+
+/// The display macOS treats as primary (menu bar).
+pub fn primary_display() -> Option<DisplayInfo> {
+    displays().into_iter().find(|d| d.main)
 }
 
 /// Every display-derived resolution choice, de-duplicated across displays.
@@ -158,7 +164,7 @@ mod macos {
                     external += 1;
                     if id == main { format!("External display {external} (main)") } else { format!("External display {external}") }
                 };
-                out.push(DisplayInfo { name, builtin, native, current, points, refresh_hz, below_notch });
+                out.push(DisplayInfo { name, builtin, main: id == main, native, current, points, refresh_hz, below_notch });
             }
             // Built-in / main first so the most likely target is on top.
             out.sort_by_key(|d| !d.builtin);

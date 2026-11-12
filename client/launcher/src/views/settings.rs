@@ -178,12 +178,14 @@ impl SettingsViewState {
         commit_on!(width, |root, text, _cx| {
             if let Ok(v) = text.trim().parse::<i32>() {
                 root.settings.width = v.clamp(256, 8192);
+                root.settings.primary_display_resolution = false;
                 root.settings.apply_auto_bitrate();
             }
         });
         commit_on!(height, |root, text, _cx| {
             if let Ok(v) = text.trim().parse::<i32>() {
                 root.settings.height = v.clamp(256, 8192);
+                root.settings.primary_display_resolution = false;
                 root.settings.apply_auto_bitrate();
             }
         });
@@ -221,7 +223,7 @@ impl SettingsViewState {
         self.width.update(cx, |t, cx| t.set_text(s.width.to_string(), cx));
         self.height.update(cx, |t, cx| t.set_text(s.height.to_string(), cx));
         self.helper.update(cx, |t, cx| t.set_text(s.helper_path.clone(), cx));
-        if !is_preset_res(s.width, s.height) {
+        if !s.primary_display_resolution && !is_preset_res(s.width, s.height) {
             self.custom_res = true;
         }
         if s.fractional_fps > 0.0 || !is_preset_fps(s.fps) {
@@ -231,6 +233,9 @@ impl SettingsViewState {
 }
 
 fn res_label(s: &Settings) -> String {
+    if s.primary_display_resolution {
+        return format!("Primary display ({}×{})", s.width, s.height);
+    }
     for (name, w, h) in PRESET_RES {
         if w == s.width && h == s.height {
             return format!("{name} ({w}×{h})");
@@ -322,24 +327,39 @@ pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>)
             }
         }
         Dropdown::Resolution => {
-            for (name, w, h) in PRESET_RES {
-                let cur = s.width == w && s.height == h && !root.settings_view.custom_res;
+            if let Some((w, h)) = crate::display::primary_display().map(|d| d.native) {
                 entries.push(
-                    MenuEntry::new(format!("{name}  {w}×{h}"), cx.listener(move |this, _, _, cx| {
-                        this.settings.width = w;
-                        this.settings.height = h;
-                        this.settings.apply_auto_bitrate();
+                    MenuEntry::new(format!("Primary display  {w}×{h}"), cx.listener(move |this, _, _, cx| {
+                        this.settings.primary_display_resolution = true;
+                        this.settings.resolve_primary_display_resolution();
                         this.settings_view.custom_res = false;
                         close(this, cx);
                     }))
-                    .checked(cur),
+                    .checked(s.primary_display_resolution),
                 );
             }
-            for (i, (name, (w, h))) in crate::display::display_resolutions().into_iter().enumerate() {
-                let cur = s.width == w && s.height == h && !root.settings_view.custom_res;
+            for (i, (name, w, h)) in PRESET_RES.into_iter().enumerate() {
+                let cur = s.width == w && s.height == h && !s.primary_display_resolution && !root.settings_view.custom_res;
                 let mut entry = MenuEntry::new(format!("{name}  {w}×{h}"), cx.listener(move |this, _, _, cx| {
                     this.settings.width = w;
                     this.settings.height = h;
+                    this.settings.primary_display_resolution = false;
+                    this.settings.apply_auto_bitrate();
+                    this.settings_view.custom_res = false;
+                    close(this, cx);
+                }))
+                .checked(cur);
+                if i == 0 {
+                    entry = entry.separator();
+                }
+                entries.push(entry);
+            }
+            for (i, (name, (w, h))) in crate::display::display_resolutions().into_iter().enumerate() {
+                let cur = s.width == w && s.height == h && !s.primary_display_resolution && !root.settings_view.custom_res;
+                let mut entry = MenuEntry::new(format!("{name}  {w}×{h}"), cx.listener(move |this, _, _, cx| {
+                    this.settings.width = w;
+                    this.settings.height = h;
+                    this.settings.primary_display_resolution = false;
                     this.settings.apply_auto_bitrate();
                     this.settings_view.custom_res = false;
                     close(this, cx);
@@ -353,6 +373,7 @@ pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>)
             let custom = root.settings_view.custom_res;
             entries.push(
                 MenuEntry::new("Custom…", cx.listener(move |this, _, _, cx| {
+                    this.settings.primary_display_resolution = false;
                     this.settings_view.custom_res = true;
                     this.popup = None;
                     let h = this.settings_view.width.read(cx).focus_handle.clone();
@@ -651,7 +672,7 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
             rows.push(Row {
                 label: "Resolution",
                 help: if root.settings_view.custom_res { "GeForce Experience won't change the host resolution for custom values. Unsupported resolutions may fail to stream.".into() } else { String::new() },
-                modified: s.width != d.width || s.height != d.height,
+                modified: s.width != d.width || s.height != d.height || s.primary_display_resolution,
                 disabled_reason: None,
                 badge: None,
                 control: dropdown_control(root, theme, "dd-res", res_label(&s), Dropdown::Resolution, cx),
@@ -659,6 +680,7 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
                 reset: Some(Box::new(|s| {
                     s.width = 1920;
                     s.height = 1080;
+                    s.primary_display_resolution = false;
                     s.apply_auto_bitrate();
                 })),
             });

@@ -67,6 +67,7 @@ impl Default for BackgroundQuality {
 pub struct Preset {
     pub width: i32,
     pub height: i32,
+    pub primary_display_resolution: bool,
     pub fps: i32,
     pub fractional_fps: f64,
     pub bitrate_kbps: i32,
@@ -97,12 +98,14 @@ impl Default for Preset {
 
 impl Preset {
     pub fn of(s: &Settings) -> Preset {
+        let follow = s.primary_display_resolution;
         Preset {
-            width: s.width,
-            height: s.height,
+            width: if follow { 0 } else { s.width },
+            height: if follow { 0 } else { s.height },
+            primary_display_resolution: follow,
             fps: s.fps,
             fractional_fps: s.fractional_fps,
-            bitrate_kbps: s.bitrate_kbps,
+            bitrate_kbps: if follow && s.auto_adjust_bitrate { 0 } else { s.bitrate_kbps },
             auto_adjust_bitrate: s.auto_adjust_bitrate,
             enable_yuv444: s.enable_yuv444,
             video_codec_config: s.video_codec_config,
@@ -118,11 +121,16 @@ impl Preset {
     }
 
     pub fn apply_to(&self, s: &mut Settings) {
-        s.width = self.width;
-        s.height = self.height;
+        if !self.primary_display_resolution {
+            s.width = self.width;
+            s.height = self.height;
+        }
+        s.primary_display_resolution = self.primary_display_resolution;
         s.fps = self.fps;
         s.fractional_fps = self.fractional_fps;
-        s.bitrate_kbps = self.bitrate_kbps;
+        if !(self.primary_display_resolution && self.auto_adjust_bitrate) {
+            s.bitrate_kbps = self.bitrate_kbps;
+        }
         s.auto_adjust_bitrate = self.auto_adjust_bitrate;
         s.enable_yuv444 = self.enable_yuv444;
         s.video_codec_config = self.video_codec_config;
@@ -134,6 +142,7 @@ impl Preset {
         s.app_window_background_quality = self.app_window_background_quality;
         s.app_window_efficient_encoding = self.app_window_efficient_encoding;
         s.app_window_quiet_idle = self.app_window_quiet_idle;
+        s.resolve_primary_display_resolution();
     }
 
     /// Full quality (home Wi-Fi, LAN): the screen's own resolution at its
@@ -144,6 +153,7 @@ impl Preset {
         Preset {
             width,
             height,
+            primary_display_resolution: false,
             fps,
             fractional_fps: 0.0,
             bitrate_kbps: default_bitrate(width, height, fps, false).min(150_000),
@@ -171,6 +181,7 @@ impl Preset {
         Preset {
             width,
             height,
+            primary_display_resolution: false,
             fps: 60,
             fractional_fps: 0.0,
             bitrate_kbps: 12000,
@@ -275,6 +286,8 @@ pub struct Settings {
     // Stream
     pub width: i32,
     pub height: i32,
+    /// `width`/`height` follow the native resolution of the primary display
+    pub primary_display_resolution: bool,
     pub fps: i32,
     /// Fractional refresh rate (Apollo), 0 = use `fps`
     pub fractional_fps: f64,
@@ -411,6 +424,7 @@ impl Default for Settings {
         Settings {
             width,
             height,
+            primary_display_resolution: false,
             fps,
             fractional_fps: 0.0,
             bitrate_kbps: default_bitrate(width, height, fps, false),
@@ -530,6 +544,7 @@ impl Settings {
         match fs::read(Self::path(dir)) {
             Ok(bytes) => match serde_json::from_slice::<Settings>(&bytes) {
                 Ok(mut s) => {
+                    s.resolve_primary_display_resolution();
                     s.sanitize();
                     // Efficient was called Data saver before
                     if s.active_preset == "data-saver" {
@@ -636,6 +651,18 @@ impl Settings {
 
     pub fn current_default_bitrate(&self) -> i32 {
         default_bitrate(self.width, self.height, self.fps, self.enable_yuv444)
+    }
+
+    /// The primary display can change between launches and streams
+    pub fn resolve_primary_display_resolution(&mut self) {
+        if !self.primary_display_resolution {
+            return;
+        }
+        if let Some((w, h)) = crate::display::primary_display().map(|d| d.native) {
+            self.width = w.clamp(256, 8192);
+            self.height = h.clamp(256, 8192);
+        }
+        self.apply_auto_bitrate();
     }
 
     /// Applies the auto-bitrate rule after a resolution/fps/yuv change.
