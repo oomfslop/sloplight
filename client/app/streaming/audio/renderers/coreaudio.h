@@ -4,6 +4,7 @@
 
 #include <AudioToolbox/AudioToolbox.h>
 
+#include <array>
 #include <atomic>
 #include <vector>
 
@@ -26,7 +27,8 @@ private:
     static OSStatus renderCallback(void* context, AudioUnitRenderActionFlags* flags, const AudioTimeStamp* timestamp,
                                    UInt32 bus, UInt32 frameCount, AudioBufferList* data);
 
-    void adjustBuffering(uint64_t buffered);
+    void trackArrival(uint64_t nowUs, UInt32 frames);
+    void adjustBuffering(uint64_t nowUs, uint64_t buffered);
 
     AudioComponentInstance m_OutputUnit = nullptr;
     AudioComponentInstance m_Varispeed = nullptr;
@@ -55,8 +57,23 @@ private:
     bool m_HasSkippedFrame = false;
     uint32_t m_Drops = 0;
     uint32_t m_HandledUnderruns = 0;
+    uint32_t m_UnderrunPadFrames = 0;
+    uint64_t m_LastPadChangeUs = 0;
     uint64_t m_WindowStartUs = 0;
     uint64_t m_WindowMinBuffered = UINT64_MAX;
-    uint64_t m_LastTargetChangeUs = 0;
     float m_PlaybackRate = 1.0f;
+
+    struct JitterBucket {
+        int64_t minDelayUs;
+        int64_t maxLatenessUs;
+    };
+    std::array<JitterBucket, 6> m_JitterBuckets {};
+    size_t m_JitterBucket = 0;
+    uint64_t m_JitterBucketStartUs = 0;
+    uint64_t m_TimelineStartUs = 0;
+    uint64_t m_TimelineFrames = 0;
+    uint64_t m_FirstArrivalUs = 0;
+    uint64_t m_LastArrivalUs = 0;
+    uint32_t m_JitterFrames = 0;
+    uint32_t m_LoggedTargetFrames = 0;
 };

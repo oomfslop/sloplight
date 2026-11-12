@@ -51,7 +51,7 @@ bool CoreAudioRenderer::prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION*
     m_SampleRate = opusConfig->sampleRate;
     m_SamplesPerFrame = opusConfig->samplesPerFrame;
     m_DecodeBuffer.resize(m_SamplesPerFrame * m_Channels);
-    m_RingFrames = 16 * m_SamplesPerFrame;
+    m_RingFrames = m_SampleRate / 2;
     m_Ring.resize(m_RingFrames * m_Channels);
     m_LastOutput.resize(m_Channels);
     m_SkippedFrame.reserve(m_DecodeBuffer.size());
@@ -169,28 +169,90 @@ void* CoreAudioRenderer::getAudioBuffer(int*)
     return m_DecodeBuffer.data();
 }
 
-void CoreAudioRenderer::adjustBuffering(uint64_t buffered)
+static const uint64_t k_JitterBucketUs = 5000000;
+static const uint64_t k_StreamGapUs = 1000000;
+static const int k_MaxTargetMs = 150;
+static const uint64_t k_WarmupUs = 2000000;
+
+void CoreAudioRenderer::trackArrival(uint64_t nowUs, UInt32 frames)
 {
-    uint64_t nowUs = LiGetMicroseconds();
-    m_WindowMinBuffered = SDL_min(m_WindowMinBuffered, buffered);
-    if (nowUs - m_WindowStartUs < 500000) {
+    // A pause longer than any stall we'd buffer for is a gap in the stream
+    // (host stopped sending, packets flushed), not lateness
+    if (m_FirstArrivalUs == 0) {
+        m_FirstArrivalUs = nowUs;
+    }
+    // The host's backlog arrives in a burst at the start, ahead of the
+    // schedule everything after it follows
+    if (nowUs - m_FirstArrivalUs < k_WarmupUs) {
         return;
     }
 
-    uint32_t target = m_TargetFrames.load();
+    if (m_LastArrivalUs == 0 || nowUs - m_LastArrivalUs > k_StreamGapUs) {
+        m_TimelineStartUs = nowUs;
+        m_TimelineFrames = 0;
+        m_JitterBuckets.fill({ INT64_MAX, 0 });
+        m_JitterBucketStartUs = nowUs;
+    }
+    m_LastArrivalUs = nowUs;
+
+    if (nowUs - m_JitterBucketStartUs >= k_JitterBucketUs) {
+        m_JitterBucket = (m_JitterBucket + 1) % m_JitterBuckets.size();
+        m_JitterBuckets[m_JitterBucket] = { INT64_MAX, 0 };
+        m_JitterBucketStartUs = nowUs;
+    }
+
+    int64_t delayUs = (int64_t)(nowUs - m_TimelineStartUs) - (int64_t)(m_TimelineFrames * 1000000 / m_SampleRate);
+    m_TimelineFrames += frames;
+
+    // The earliest arrival of the last two buckets is "on time"; looking back
+    // only that far follows the drift between the host's clock and ours
+    JitterBucket& current = m_JitterBuckets[m_JitterBucket];
+    const JitterBucket& previous = m_JitterBuckets[(m_JitterBucket + m_JitterBuckets.size() - 1) % m_JitterBuckets.size()];
+    current.minDelayUs = SDL_min(current.minDelayUs, delayUs);
+    current.maxLatenessUs = SDL_max(current.maxLatenessUs, delayUs - SDL_min(current.minDelayUs, previous.minDelayUs));
+
+    int64_t peakUs = 0;
+    for (const JitterBucket& bucket : m_JitterBuckets) {
+        peakUs = SDL_max(peakUs, bucket.maxLatenessUs);
+    }
+    m_JitterFrames = (uint32_t)(peakUs * m_SampleRate / 1000000);
+}
+
+void CoreAudioRenderer::adjustBuffering(uint64_t nowUs, uint64_t buffered)
+{
     uint32_t underruns = m_Underruns.load();
     if (underruns != m_HandledUnderruns) {
-        // A late packet ran us dry: hold more from now on
         m_HandledUnderruns = underruns;
-        target = SDL_min(target + (uint32_t)m_SamplesPerFrame, 6 * (uint32_t)m_SamplesPerFrame);
-        m_TargetFrames = target;
-        m_LastTargetChangeUs = nowUs;
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "CoreAudio: underrun, buffer target now %.1f ms", target * 1000.0 / m_SampleRate);
+        m_UnderrunPadFrames = SDL_min(m_UnderrunPadFrames + (uint32_t)m_SamplesPerFrame, 4 * (uint32_t)m_SamplesPerFrame);
+        m_LastPadChangeUs = nowUs;
     }
-    else if (nowUs - m_LastTargetChangeUs > 30000000 && target > (uint32_t)m_SamplesPerFrame / 2) {
-        target -= m_SamplesPerFrame / 2;
-        m_TargetFrames = target;
-        m_LastTargetChangeUs = nowUs;
+    else if (m_UnderrunPadFrames > 0 && nowUs - m_LastPadChangeUs > 30000000) {
+        m_UnderrunPadFrames -= SDL_min(m_UnderrunPadFrames, (uint32_t)m_SamplesPerFrame / 2);
+        m_LastPadChangeUs = nowUs;
+    }
+
+    uint32_t desired = SDL_min(m_JitterFrames + m_SamplesPerFrame / 2 + m_UnderrunPadFrames,
+                               (uint32_t)(m_SampleRate * k_MaxTargetMs / 1000));
+    uint32_t target = m_TargetFrames.load();
+    bool windowEnded = nowUs - m_WindowStartUs >= 500000;
+    if (desired > target) {
+        // Grow at once, so the burst that follows a stall is kept
+        target = desired;
+    }
+    else if (windowEnded && desired < target) {
+        target = SDL_max(desired, target - SDL_min(target, (uint32_t)m_SamplesPerFrame / 2));
+    }
+    m_TargetFrames = target;
+
+    if (target > m_LoggedTargetFrames + m_SamplesPerFrame || target + m_SamplesPerFrame < m_LoggedTargetFrames) {
+        m_LoggedTargetFrames = target;
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "CoreAudio: buffer target %.1f ms (jitter %.1f ms, underrun pad %.1f ms)",
+                    target * 1000.0 / m_SampleRate, m_JitterFrames * 1000.0 / m_SampleRate, m_UnderrunPadFrames * 1000.0 / m_SampleRate);
+    }
+
+    m_WindowMinBuffered = SDL_min(m_WindowMinBuffered, buffered);
+    if (!windowEnded) {
+        return;
     }
 
     // The host's clock never quite matches the output device's: play slightly
@@ -219,9 +281,11 @@ bool CoreAudioRenderer::submitAudio(int bytesWritten)
         return true;
     }
 
+    uint64_t nowUs = LiGetMicroseconds();
     uint64_t write = m_WriteFrame.load(std::memory_order_relaxed);
     uint64_t buffered = write - m_ReadFrame.load(std::memory_order_acquire);
-    adjustBuffering(buffered);
+    trackArrival(nowUs, frames);
+    adjustBuffering(nowUs, buffered);
 
     // Only a burst after a stall, or the device's clock swinging (AirPods do when
     // a window goes fullscreen), gets this far ahead; the rate adjustment would

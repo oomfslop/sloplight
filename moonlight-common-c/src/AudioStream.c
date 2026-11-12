@@ -66,7 +66,9 @@ static void AudioPingThreadProc(void* context) {
 
 // Initialize the audio stream and start
 int initializeAudioStream(void) {
-    LbqInitializeLinkedBlockingQueue(&packetQueue, 30);
+    // Wi-Fi stalls deliver 100+ ms of packets in one burst, faster than the
+    // decoder thread wakes; the renderer decides what to keep
+    LbqInitializeLinkedBlockingQueue(&packetQueue, 100);
     RtpaInitializeQueue(&rtpAudioQueue);
     lastSeq = 0;
     receivedDataFromPeer = false;
@@ -164,6 +166,9 @@ static void decodeInputData(PQUEUED_AUDIO_PACKET packet) {
     // packet. Trigger packet loss concealment logic in libopus by
     // invoking the decoder with a NULL buffer.
     if (packet->header.size == 0) {
+        if (lastSeq != 0) {
+            lastSeq++;
+        }
         AudioCallbacks.decodeAndPlaySample(NULL, 0);
         return;
     }
@@ -171,6 +176,15 @@ static void decodeInputData(PQUEUED_AUDIO_PACKET packet) {
     PRTP_PACKET rtp = (PRTP_PACKET)&packet->data[0];
     if (lastSeq != 0 && (unsigned short)(lastSeq + 1) != rtp->sequenceNumber) {
         Limelog("Network dropped audio data (expected %d, but received %d)\n", lastSeq + 1, rtp->sequenceNumber);
+
+        // Conceal whole lost FEC blocks and flushed packets too, so the
+        // renderer's timeline matches the host's
+        unsigned short missing = (unsigned short)(rtp->sequenceNumber - lastSeq - 1);
+        if (missing <= 500 / AudioPacketDuration) {
+            while (missing-- > 0) {
+                AudioCallbacks.decodeAndPlaySample(NULL, 0);
+            }
+        }
     }
 
     lastSeq = rtp->sequenceNumber;
