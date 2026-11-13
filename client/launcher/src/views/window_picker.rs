@@ -230,13 +230,12 @@ pub fn render(root: &mut Root, theme: &Theme, window: &mut Window, cx: &mut Cont
                 )
                 .when(streaming, |d| {
                     d.child(div().text_size(type_scale::XS).text_color(theme.accent).child("streaming")).child(
-                        icon_button(gpui::ElementId::NamedInteger("window-stop".into(), i as u64), icon::X)
-                            .size(20., 12.)
-                            .tooltip("Stop streaming this window", None)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.close_window_stream(&hwnd, cx);
-                            })),
+                        div().on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(
+                            icon_button(gpui::ElementId::NamedInteger("window-stop".into(), i as u64), icon::X)
+                                .size(20., 12.)
+                                .tooltip("Stop streaming this window", None)
+                                .on_click(cx.listener(move |this, _, _, cx| this.close_window_stream(&hwnd, cx))),
+                        ),
                     )
                 })
                 .when(is_sel, |d| d.child(kbd(theme, "⏎")))
