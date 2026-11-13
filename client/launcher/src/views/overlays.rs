@@ -360,6 +360,10 @@ impl Root {
             );
         }
         {
+            let u = uuid.to_string();
+            entries.push(MenuEntry::new("Settings…", cx.listener(move |this, _, _, cx| this.open_app_settings(&u, app_id, cx))));
+        }
+        {
             let name = app.name.clone();
             entries.push(
                 MenuEntry::new("Copy name", cx.listener(move |this, _, _, cx| {

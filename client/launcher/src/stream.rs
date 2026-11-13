@@ -274,7 +274,7 @@ pub fn start_with_window(
 ) -> Result<StreamProcess, String> {
     let address = host.active_address.clone().or_else(|| host.unique_addresses().into_iter().next()).ok_or("The host has no known address.")?;
     let cert = host.server_cert_pem.clone().ok_or("The host isn't paired.")?;
-    let mut settings = settings.clone();
+    let mut settings = settings.with_overrides(&app.settings_overrides);
     if !app.has_process && settings.quit_processless_app_after {
         settings.quit_app_after = true;
     }

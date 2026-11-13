@@ -724,6 +724,17 @@ impl HostManager {
         self.emit(ManagerEvent::HostsChanged);
     }
 
+    pub fn set_app_settings_overrides(&self, uuid: &str, app_id: i32, overrides: serde_json::Map<String, serde_json::Value>) {
+        if let Some(host) = self.host_arc(uuid) {
+            let mut h = host.write().unwrap();
+            if let Some(app) = h.apps.iter_mut().find(|a| a.id == app_id) {
+                app.settings_overrides = overrides;
+            }
+        }
+        self.save_hosts();
+        self.emit(ManagerEvent::HostsChanged);
+    }
+
     pub fn set_app_direct_launch(&self, uuid: &str, app_id: i32, direct: bool) {
         if let Some(host) = self.host_arc(uuid) {
             let mut h = host.write().unwrap();

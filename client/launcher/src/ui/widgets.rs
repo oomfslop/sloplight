@@ -2,12 +2,14 @@
 //! renders once (`RenderOnce`), styled from the global `Theme`.
 #![allow(dead_code)]
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, AnyView, App, BoxShadow, ClickEvent, Div, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, SharedString, Stateful, StatefulInteractiveElement, Styled, Transformation, Window, div, percentage, point, px,
-    svg, prelude::*,
+    Animation, AnimationExt, AnyElement, AnyView, App, BoxShadow, Bounds, ClickEvent, Context, Div, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, Pixels, Render, RenderOnce, SharedString, Stateful, StatefulInteractiveElement, Styled, Transformation, Window, div, percentage, point, px,
+    svg, canvas, relative, prelude::*,
 };
 
 use crate::assets::icon;
@@ -364,6 +366,49 @@ pub fn toggle(theme: &Theme, id: impl Into<ElementId>, on: bool, disabled: bool,
             d.on_click(move |_, window, cx| {
                 on_change(&!on, window, cx);
             })
+        })
+}
+
+// ------------------------------------------------------------------ slider
+
+#[derive(Clone)]
+struct SliderDrag(SharedString);
+
+impl Render for SliderDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::Empty
+    }
+}
+
+/// `value` and what `on_change` gets are 0..=1
+pub fn slider(theme: &Theme, id: impl Into<SharedString>, value: f32, on_change: impl Fn(&f32, &mut Window, &mut App) + 'static) -> Stateful<Div> {
+    let id: SharedString = id.into();
+    let value = value.clamp(0., 1.);
+    let on_change = Rc::new(on_change);
+    let bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
+    let fraction_at = |b: Bounds<Pixels>, x: Pixels| if b.size.width > px(0.) { ((x - b.origin.x) / b.size.width).clamp(0., 1.) } else { 0. };
+    let on_change_down = on_change.clone();
+    let bounds_paint = bounds.clone();
+    let drag_id = id.clone();
+    div()
+        .id(ElementId::Name(id.clone()))
+        .relative()
+        .w_full()
+        .h(px(16.))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .child(canvas(move |b, _, _| bounds_paint.set(b), |_, _, _, _| {}).absolute().size_full())
+        .child(div().w_full().h(px(4.)).rounded(px(2.)).bg(theme.element_pressed).child(div().h_full().w(relative(value)).rounded(px(2.)).bg(theme.accent)))
+        .child(div().absolute().top(px(2.)).left(relative(value)).ml(px(-6.)).size(px(12.)).rounded(px(6.)).bg(theme.accent_fg).border_1().border_color(theme.accent))
+        .on_mouse_down(MouseButton::Left, move |ev, window, cx| {
+            on_change_down(&fraction_at(bounds.get(), ev.position.x), window, cx);
+        })
+        .on_drag(SliderDrag(id), |drag, _, _, cx| cx.new(|_| drag.clone()))
+        .on_drag_move::<SliderDrag>(move |ev, window, cx| {
+            if ev.drag(cx).0 == drag_id {
+                on_change(&fraction_at(ev.bounds, ev.event.position.x), window, cx);
+            }
         })
 }
 

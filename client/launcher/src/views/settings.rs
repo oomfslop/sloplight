@@ -64,6 +64,10 @@ pub struct SettingsViewState {
     pub width: Entity<TextInput>,
     pub height: Entity<TextInput>,
     pub helper: Entity<TextInput>,
+    pub mouse_x: Entity<TextInput>,
+    pub mouse_y: Entity<TextInput>,
+    /// Horizontal and vertical mouse sensitivity change together
+    pub mouse_linked: bool,
     /// The name of a preset being saved ("Save as new preset…")
     pub preset_name: Entity<TextInput>,
     pub naming_preset: bool,
@@ -93,6 +97,8 @@ impl SettingsViewState {
         let width = numeric(cx, false, 64.);
         let height = numeric(cx, false, 64.);
         let helper = cx.new(|cx| TextInput::new(cx, "Auto-detect", InputKind::Mono));
+        let mouse_x = numeric(cx, true, 52.);
+        let mouse_y = numeric(cx, true, 52.);
         let preset_name = cx.new(|cx| TextInput::new(cx, "Preset name", InputKind::Text));
 
         cx.subscribe(&preset_name, |this: &mut Root, input, ev: &TextInputEvent, cx| match ev {
@@ -131,15 +137,15 @@ impl SettingsViewState {
                         let text = input.read(cx).text().to_string();
                         let apply: fn(&mut Root, &str, &mut Context<Root>) = $apply;
                         apply(this, &text, cx);
-                        this.settings_view.sync_from(&this.settings, cx);
-                        this.save_settings();
+                        this.sync_settings_view(cx);
+                        this.save_edited_settings();
                         if matches!(ev, TextInputEvent::Submit) {
                             this.focus_main(cx);
                         }
                         cx.notify();
                     }
                     TextInputEvent::Escape => {
-                        this.settings_view.sync_from(&this.settings, cx);
+                        this.sync_settings_view(cx);
                         this.focus_main(cx);
                     }
                     _ => {}
@@ -149,50 +155,72 @@ impl SettingsViewState {
         }
         commit_on!(bitrate, |root, text, _cx| {
             if let Ok(mbps) = text.trim().parse::<f64>() {
-                let max = root.settings.max_bitrate_kbps();
+                let max = root.edited_settings_mut().max_bitrate_kbps();
                 let kbps = ((mbps * 1000.0).round() as i32).clamp(500, max);
-                if kbps != root.settings.bitrate_kbps {
-                    root.settings.bitrate_kbps = kbps;
-                    root.settings.auto_adjust_bitrate = false;
+                if kbps != root.edited_settings_mut().bitrate_kbps {
+                    root.edited_settings_mut().bitrate_kbps = kbps;
+                    root.edited_settings_mut().auto_adjust_bitrate = false;
                 }
             }
         });
         commit_on!(scale, |root, text, _cx| {
             if let Ok(v) = text.trim().parse::<i32>() {
-                root.settings.resolution_scale_factor = (v.clamp(50, 200) / 5) * 5;
+                root.edited_settings_mut().resolution_scale_factor = (v.clamp(50, 200) / 5) * 5;
             }
         });
         commit_on!(custom_fps, |root, text, _cx| {
             if let Ok(v) = text.trim().parse::<f64>()
                 && (10.0..=9999.0).contains(&v) {
                     if (v - v.round()).abs() < 1e-6 {
-                        root.settings.fps = v.round() as i32;
-                        root.settings.fractional_fps = 0.0;
+                        root.edited_settings_mut().fps = v.round() as i32;
+                        root.edited_settings_mut().fractional_fps = 0.0;
                     } else {
-                        root.settings.fps = v.round() as i32;
-                        root.settings.fractional_fps = v;
+                        root.edited_settings_mut().fps = v.round() as i32;
+                        root.edited_settings_mut().fractional_fps = v;
                     }
-                    root.settings.apply_auto_bitrate();
+                    root.edited_settings_mut().apply_auto_bitrate();
                 }
         });
         commit_on!(width, |root, text, _cx| {
             if let Ok(v) = text.trim().parse::<i32>() {
-                root.settings.width = v.clamp(256, 8192);
-                root.settings.primary_display_resolution = false;
-                root.settings.apply_auto_bitrate();
+                root.edited_settings_mut().width = v.clamp(256, 8192);
+                root.edited_settings_mut().primary_display_resolution = false;
+                root.edited_settings_mut().apply_auto_bitrate();
             }
         });
         commit_on!(height, |root, text, _cx| {
             if let Ok(v) = text.trim().parse::<i32>() {
-                root.settings.height = v.clamp(256, 8192);
-                root.settings.primary_display_resolution = false;
-                root.settings.apply_auto_bitrate();
+                root.edited_settings_mut().height = v.clamp(256, 8192);
+                root.edited_settings_mut().primary_display_resolution = false;
+                root.edited_settings_mut().apply_auto_bitrate();
             }
         });
         commit_on!(helper, |root, text, _cx| {
             root.settings.helper_path = text.trim().to_string();
             root.helper_path = crate::stream::find_helper(&root.settings);
         });
+
+        for (input, vertical) in [(&mouse_x, false), (&mouse_y, true)] {
+            cx.subscribe(input, move |this: &mut Root, input, ev: &TextInputEvent, cx| match ev {
+                TextInputEvent::Submit | TextInputEvent::Blur => {
+                    if let Ok(v) = input.read(cx).text().trim().parse::<f64>()
+                        && v > 0.
+                    {
+                        this.set_mouse_sensitivity(vertical, v);
+                    }
+                    this.after_settings_change(cx);
+                    if matches!(ev, TextInputEvent::Submit) {
+                        this.focus_main(cx);
+                    }
+                }
+                TextInputEvent::Escape => {
+                    this.sync_settings_view(cx);
+                    this.focus_main(cx);
+                }
+                _ => {}
+            })
+            .detach();
+        }
 
         let mut state = SettingsViewState {
             section: 0,
@@ -204,14 +232,26 @@ impl SettingsViewState {
             width,
             height,
             helper,
+            mouse_x,
+            mouse_y,
+            mouse_linked: true,
             preset_name,
             naming_preset: false,
             custom_res: false,
             custom_fps_mode: false,
             last_change: None,
         };
-        state.sync_from(settings, cx);
+        state.open(settings, cx);
         state
+    }
+
+    /// Fresh view state for these settings (the shared ones or an app's)
+    pub fn open(&mut self, s: &Settings, cx: &mut Context<Root>) {
+        self.custom_res = false;
+        self.custom_fps_mode = false;
+        self.naming_preset = false;
+        self.mouse_linked = s.mouse_sensitivity_x == s.mouse_sensitivity_y;
+        self.sync_from(s, cx);
     }
 
     /// Copies setting values into the text fields.
@@ -223,6 +263,8 @@ impl SettingsViewState {
         self.width.update(cx, |t, cx| t.set_text(s.width.to_string(), cx));
         self.height.update(cx, |t, cx| t.set_text(s.height.to_string(), cx));
         self.helper.update(cx, |t, cx| t.set_text(s.helper_path.clone(), cx));
+        self.mouse_x.update(cx, |t, cx| t.set_text(format!("{:.2}", s.mouse_sensitivity_x), cx));
+        self.mouse_y.update(cx, |t, cx| t.set_text(format!("{:.2}", s.mouse_sensitivity_y), cx));
         if !s.primary_display_resolution && !is_preset_res(s.width, s.height) {
             self.custom_res = true;
         }
@@ -266,12 +308,12 @@ fn fps_label(s: &Settings) -> String {
 }
 
 pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>) -> Vec<MenuEntry> {
-    let s = root.settings.clone();
+    let s = root.edited_settings().clone();
     let mut entries = Vec::new();
     let close = |this: &mut Root, cx: &mut Context<Root>| {
         this.popup = None;
-        this.settings_view.sync_from(&this.settings, cx);
-        this.save_settings();
+        this.sync_settings_view(cx);
+        this.save_edited_settings();
         cx.notify();
     };
     match kind {
@@ -279,7 +321,7 @@ pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>)
             for p in SystemPreset::ALL {
                 entries.push(
                     MenuEntry::new(p.name(), cx.listener(move |this, _, _, cx| {
-                        this.settings.apply_preset(p.id());
+                        this.edited_settings_mut().apply_preset(p.id());
                         close(this, cx);
                     }))
                     .checked(s.active_preset == p.id()),
@@ -289,7 +331,7 @@ pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>)
                 let id = format!("custom:{}", c.name);
                 let checked = s.active_preset == id;
                 let mut entry = MenuEntry::new(c.name.clone(), cx.listener(move |this, _, _, cx| {
-                    this.settings.apply_preset(&id);
+                    this.edited_settings_mut().apply_preset(&id);
                     close(this, cx);
                 }))
                 .checked(checked);
@@ -313,13 +355,13 @@ pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>)
                 if s.preset_modified() {
                     let n = name.clone();
                     entries.push(MenuEntry::new(format!("Save changes to “{name}”"), cx.listener(move |this, _, _, cx| {
-                        this.settings.save_custom_preset(&n);
+                        this.edited_settings_mut().save_custom_preset(&n);
                         close(this, cx);
                     })));
                 }
                 entries.push(
                     MenuEntry::new(format!("Delete “{name}”"), cx.listener(move |this, _, _, cx| {
-                        this.settings.delete_custom_preset(&name);
+                        this.edited_settings_mut().delete_custom_preset(&name);
                         close(this, cx);
                     }))
                     .destructive(),
@@ -330,8 +372,8 @@ pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>)
             if let Some((w, h)) = crate::display::primary_display().map(|d| d.native) {
                 entries.push(
                     MenuEntry::new(format!("Primary display  {w}×{h}"), cx.listener(move |this, _, _, cx| {
-                        this.settings.primary_display_resolution = true;
-                        this.settings.resolve_primary_display_resolution();
+                        this.edited_settings_mut().primary_display_resolution = true;
+                        this.edited_settings_mut().resolve_primary_display_resolution();
                         this.settings_view.custom_res = false;
                         close(this, cx);
                     }))
@@ -341,10 +383,10 @@ pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>)
             for (i, (name, w, h)) in PRESET_RES.into_iter().enumerate() {
                 let cur = s.width == w && s.height == h && !s.primary_display_resolution && !root.settings_view.custom_res;
                 let mut entry = MenuEntry::new(format!("{name}  {w}×{h}"), cx.listener(move |this, _, _, cx| {
-                    this.settings.width = w;
-                    this.settings.height = h;
-                    this.settings.primary_display_resolution = false;
-                    this.settings.apply_auto_bitrate();
+                    this.edited_settings_mut().width = w;
+                    this.edited_settings_mut().height = h;
+                    this.edited_settings_mut().primary_display_resolution = false;
+                    this.edited_settings_mut().apply_auto_bitrate();
                     this.settings_view.custom_res = false;
                     close(this, cx);
                 }))
@@ -357,10 +399,10 @@ pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>)
             for (i, (name, (w, h))) in crate::display::display_resolutions().into_iter().enumerate() {
                 let cur = s.width == w && s.height == h && !s.primary_display_resolution && !root.settings_view.custom_res;
                 let mut entry = MenuEntry::new(format!("{name}  {w}×{h}"), cx.listener(move |this, _, _, cx| {
-                    this.settings.width = w;
-                    this.settings.height = h;
-                    this.settings.primary_display_resolution = false;
-                    this.settings.apply_auto_bitrate();
+                    this.edited_settings_mut().width = w;
+                    this.edited_settings_mut().height = h;
+                    this.edited_settings_mut().primary_display_resolution = false;
+                    this.edited_settings_mut().apply_auto_bitrate();
                     this.settings_view.custom_res = false;
                     close(this, cx);
                 }))
@@ -373,7 +415,7 @@ pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>)
             let custom = root.settings_view.custom_res;
             entries.push(
                 MenuEntry::new("Custom…", cx.listener(move |this, _, _, cx| {
-                    this.settings.primary_display_resolution = false;
+                    this.edited_settings_mut().primary_display_resolution = false;
                     this.settings_view.custom_res = true;
                     this.popup = None;
                     let h = this.settings_view.width.read(cx).focus_handle.clone();
@@ -389,9 +431,9 @@ pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>)
                 let cur = s.fps == fps && s.fractional_fps == 0.0 && !root.settings_view.custom_fps_mode;
                 entries.push(
                     MenuEntry::new(format!("{fps} FPS"), cx.listener(move |this, _, _, cx| {
-                        this.settings.fps = fps;
-                        this.settings.fractional_fps = 0.0;
-                        this.settings.apply_auto_bitrate();
+                        this.edited_settings_mut().fps = fps;
+                        this.edited_settings_mut().fractional_fps = 0.0;
+                        this.edited_settings_mut().apply_auto_bitrate();
                         this.settings_view.custom_fps_mode = false;
                         close(this, cx);
                     }))
@@ -405,9 +447,9 @@ pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>)
                 }
                 let cur = s.fps == fps && s.fractional_fps == 0.0 && !root.settings_view.custom_fps_mode;
                 let mut entry = MenuEntry::new(format!("{fps} FPS  {name}"), cx.listener(move |this, _, _, cx| {
-                    this.settings.fps = fps;
-                    this.settings.fractional_fps = 0.0;
-                    this.settings.apply_auto_bitrate();
+                    this.edited_settings_mut().fps = fps;
+                    this.edited_settings_mut().fractional_fps = 0.0;
+                    this.edited_settings_mut().apply_auto_bitrate();
                     this.settings_view.custom_fps_mode = false;
                     close(this, cx);
                 }))
@@ -436,7 +478,7 @@ pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>)
                 let cur = s.language == i as i32;
                 entries.push(
                     MenuEntry::new(*name, cx.listener(move |this, _, _, cx| {
-                        this.settings.language = i as i32;
+                        this.edited_settings_mut().language = i as i32;
                         close(this, cx);
                     }))
                     .checked(cur),
@@ -448,7 +490,7 @@ pub fn dropdown_entries(root: &mut Root, kind: Dropdown, cx: &mut Context<Root>)
                 let r = *r;
                 entries.push(
                     MenuEntry::new(r.label(), cx.listener(move |this, _, _, cx| {
-                        this.settings.renderer_selection = r;
+                        this.edited_settings_mut().renderer_selection = r;
                         close(this, cx);
                     }))
                     .checked(s.renderer_selection == r),
@@ -471,10 +513,10 @@ struct Row {
 }
 
 fn toggle_row(root: &mut Root, cx: &mut Context<Root>, theme: &Theme, id: &'static str, label: &'static str, help: &str, get: fn(&Settings) -> bool, set: fn(&mut Settings, bool), disabled: Option<&'static str>) -> Row {
-    let on = get(&root.settings);
-    let default = get(&Settings::default());
+    let on = get(root.edited_settings());
+    let default = get(&reset_target(root));
     let control = toggle(theme, id, on, disabled.is_some(), cx.listener(move |this: &mut Root, v: &bool, _, cx| {
-        set(&mut this.settings, *v);
+        set(this.edited_settings_mut(), *v);
         this.after_settings_change(cx);
     }))
     .into_any_element();
@@ -503,11 +545,11 @@ fn segmented_row<T: Copy + PartialEq + 'static>(
     set: fn(&mut Settings, T),
     disabled: Option<&'static str>,
 ) -> Row {
-    let cur = get(&root.settings);
-    let default = get(&Settings::default());
+    let cur = get(root.edited_settings());
+    let default = get(&reset_target(root));
     let selected = options.iter().position(|o| *o == cur).unwrap_or(0);
     let control = segmented(theme, id, labels, selected, disabled.is_some(), cx.listener(move |this: &mut Root, i: &usize, _, cx| {
-        set(&mut this.settings, options[*i]);
+        set(this.edited_settings_mut(), options[*i]);
         this.after_settings_change(cx);
     }))
     .into_any_element();
@@ -600,22 +642,42 @@ impl Root {
     }
 
     pub fn after_settings_change(&mut self, cx: &mut Context<Self>) {
-        if !self.settings.enable_vsync {
-            self.settings.frame_pacing = false;
+        let s = self.edited_settings_mut();
+        if !s.enable_vsync {
+            s.frame_pacing = false;
         }
-        if !self.settings.unlock_bitrate && self.settings.bitrate_kbps > 150_000 {
-            self.settings.bitrate_kbps = 150_000;
+        if !s.unlock_bitrate && s.bitrate_kbps > 150_000 {
+            s.bitrate_kbps = 150_000;
         }
         self.manager.set_mdns_enabled(self.settings.enable_mdns);
-        self.settings_view.sync_from(&self.settings, cx);
-        self.save_settings();
+        self.sync_settings_view(cx);
+        self.save_edited_settings();
         cx.notify();
+    }
+
+    pub fn sync_settings_view(&mut self, cx: &mut Context<Self>) {
+        let s = self.edited_settings().clone();
+        self.settings_view.sync_from(&s, cx);
+    }
+
+    /// Both directions while they're locked together
+    fn set_mouse_sensitivity(&mut self, vertical: bool, value: f64) {
+        let value = (value.clamp(0.01, 20.) * 100.).round() / 100.;
+        let linked = self.settings_view.mouse_linked;
+        let s = self.edited_settings_mut();
+        if linked || !vertical {
+            s.mouse_sensitivity_x = value;
+        }
+        if linked || vertical {
+            s.mouse_sensitivity_y = value;
+        }
     }
 }
 
 fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Root>) -> Vec<Row> {
-    let s = root.settings.clone();
-    let d = Settings::default();
+    let s = root.edited_settings().clone();
+    let d = reset_target(root);
+    let scoped = root.app_settings.is_some();
     let is_macos = cfg!(target_os = "macos");
     let mut rows = Vec::new();
     match section {
@@ -672,45 +734,55 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
             rows.push(Row {
                 label: "Resolution",
                 help: if root.settings_view.custom_res { "GeForce Experience won't change the host resolution for custom values. Unsupported resolutions may fail to stream.".into() } else { String::new() },
-                modified: s.width != d.width || s.height != d.height || s.primary_display_resolution,
+                modified: s.width != d.width || s.height != d.height || s.primary_display_resolution != d.primary_display_resolution,
                 disabled_reason: None,
                 badge: None,
                 control: dropdown_control(root, theme, "dd-res", res_label(&s), Dropdown::Resolution, cx),
                 extra,
-                reset: Some(Box::new(|s| {
-                    s.width = 1920;
-                    s.height = 1080;
-                    s.primary_display_resolution = false;
-                    s.apply_auto_bitrate();
+                reset: Some(Box::new({
+                    let d = d.clone();
+                    move |s| {
+                        s.width = d.width;
+                        s.height = d.height;
+                        s.primary_display_resolution = d.primary_display_resolution;
+                        s.apply_auto_bitrate();
+                    }
                 })),
             });
             let extra = root.settings_view.custom_fps_mode.then(|| numeric_control(theme, root.settings_view.custom_fps.clone(), 72., "fps"));
             rows.push(Row {
                 label: "Frame rate",
                 help: if root.settings_view.custom_fps_mode { "Fractional rates like 59.94 need an Apollo host.".into() } else { String::new() },
-                modified: s.fps != d.fps || s.fractional_fps != 0.0,
+                modified: s.fps != d.fps || s.fractional_fps != d.fractional_fps,
                 disabled_reason: None,
                 badge: None,
                 control: dropdown_control(root, theme, "dd-fps", fps_label(&s), Dropdown::Fps, cx),
                 extra,
-                reset: Some(Box::new(|s| {
-                    s.fps = 60;
-                    s.fractional_fps = 0.0;
-                    s.apply_auto_bitrate();
+                reset: Some(Box::new({
+                    let d = d.clone();
+                    move |s| {
+                        s.fps = d.fps;
+                        s.fractional_fps = d.fractional_fps;
+                        s.apply_auto_bitrate();
+                    }
                 })),
             });
             let default_kbps = s.current_default_bitrate();
             rows.push(Row {
                 label: "Video bitrate",
                 help: "Lower on slow connections, raise for quality.".into(),
-                modified: s.bitrate_kbps != default_kbps,
+                modified: if scoped { s.auto_adjust_bitrate != d.auto_adjust_bitrate || (!s.auto_adjust_bitrate && s.bitrate_kbps != d.bitrate_kbps) } else { s.bitrate_kbps != default_kbps },
                 disabled_reason: None,
                 badge: None,
                 control: numeric_control(theme, root.settings_view.bitrate.clone(), 72., "Mbps"),
                 extra: None,
-                reset: Some(Box::new(|s| {
-                    s.auto_adjust_bitrate = true;
-                    s.apply_auto_bitrate();
+                reset: Some(Box::new({
+                    let d = d.clone();
+                    move |s| {
+                        s.auto_adjust_bitrate = d.auto_adjust_bitrate;
+                        s.bitrate_kbps = d.bitrate_kbps;
+                        s.apply_auto_bitrate();
+                    }
                 })),
             });
             let window_help = if is_macos {
@@ -775,12 +847,15 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
             rows.push(Row {
                 label: "Host render scale",
                 help: "Below 100% is faster, above supersamples. 50–200.".into(),
-                modified: s.resolution_scale_factor != 100,
+                modified: s.resolution_scale_factor != d.resolution_scale_factor,
                 disabled_reason: None,
                 badge: None,
                 control: numeric_control(theme, root.settings_view.scale.clone(), 72., "%"),
                 extra: None,
-                reset: Some(Box::new(|s| s.resolution_scale_factor = 100)),
+                reset: Some(Box::new({
+                    let v = d.resolution_scale_factor;
+                    move |s| s.resolution_scale_factor = v
+                })),
             });
             rows.push(toggle_row(root, cx, theme, "tg-clip", "Sync clipboard", "Sends your clipboard on stream start and focus, fetches the host's on focus loss.", |s| s.clipboard_sync, |s, v| s.clipboard_sync = v, None));
             rows.push(toggle_row(root, cx, theme, "tg-hide-cursor", "Draw the cursor on the Mac", "The host cursor is drawn by your Mac, so it moves without stream lag. When a game hides it, the mouse switches to relative mode. Always on for app windows.", |s| s.hide_host_cursor, |s, v| s.hide_host_cursor = v, None));
@@ -796,6 +871,22 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
             rows.push(toggle_row(root, cx, theme, "tg-touch", "Touchscreen as trackpad", "On: touch acts like a trackpad. Off: touch moves the pointer directly.", |s| !s.absolute_touch_mode, |s, v| s.absolute_touch_mode = !v, None));
             rows.push(toggle_row(root, cx, theme, "tg-swapmouse", "Swap left and right mouse buttons", "", |s| s.swap_mouse_buttons, |s, v| s.swap_mouse_buttons = v, None));
             rows.push(toggle_row(root, cx, theme, "tg-revscroll", "Reverse scroll direction", "", |s| s.reverse_scroll_direction, |s, v| s.reverse_scroll_direction = v, None));
+            rows.push(Row {
+                label: "Mouse sensitivity",
+                help: "While the game hides the cursor, like when aiming.".into(),
+                modified: s.mouse_sensitivity_x != d.mouse_sensitivity_x || s.mouse_sensitivity_y != d.mouse_sensitivity_y,
+                disabled_reason: None,
+                badge: None,
+                control: mouse_sensitivity_control(root, theme, &s, cx),
+                extra: None,
+                reset: Some(Box::new({
+                    let (x, y) = (d.mouse_sensitivity_x, d.mouse_sensitivity_y);
+                    move |s| {
+                        s.mouse_sensitivity_x = x;
+                        s.mouse_sensitivity_y = y;
+                    }
+                })),
+            });
             rows.push(toggle_row(root, cx, theme, "tg-trackpad", "Trackpad gestures on the host", "Two fingers on the trackpad act as a Windows touchpad: smooth scrolling, pinch to zoom. Off: they scroll like a mouse wheel. App windows always do this.", |s| s.trackpad_gestures, |s, v| s.trackpad_gestures = v, None));
         }
         "gamepad" => {
@@ -841,7 +932,10 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
                     badge: None,
                     control: dropdown_control(root, theme, "dd-renderer", s.renderer_selection.label().to_string(), Dropdown::Renderer, cx),
                     extra: None,
-                    reset: Some(Box::new(|s| s.renderer_selection = Renderer::Auto)),
+                    reset: Some(Box::new({
+                        let v = d.renderer_selection;
+                        move |s| s.renderer_selection = v
+                    })),
                 });
             }
             rows.push(toggle_row(root, cx, theme, "tg-yuv444", "YUV 4:4:4", "Sharper text, not for fast games. Raises the default bitrate.", |s| s.enable_yuv444, |s, v| {
@@ -903,7 +997,64 @@ fn build_rows(root: &mut Root, theme: &Theme, section: &str, cx: &mut Context<Ro
     rows
 }
 
-fn render_row(theme: &Theme, row: Row, index: usize, last: bool, cx: &mut Context<Root>) -> AnyElement {
+/// What a setting resets to: the defaults, or for an app, the shared settings
+fn reset_target(root: &Root) -> Settings {
+    if root.app_settings.is_some() { root.settings.clone() } else { Settings::default() }
+}
+
+/// Sections and rows that are the same for every app
+const SHARED_ONLY_SECTIONS: &[&str] = &["interface", "about"];
+const SHARED_ONLY_ROWS: &[&str] = &["Preset", "Launcher shortcut", "Window picker shortcut", "Discover hosts on the local network", "Detect blocked connections", "Streaming helper"];
+
+pub fn section_shown(root: &Root, id: &str) -> bool {
+    root.app_settings.is_none() || !SHARED_ONLY_SECTIONS.contains(&id)
+}
+
+/// Sensitivity is on a log scale from 0.25x to 4x, 1x in the middle
+fn sensitivity_at(t: f32) -> f64 {
+    2f64.powf(t as f64 * 4. - 2.)
+}
+
+fn sensitivity_fraction(v: f64) -> f32 {
+    ((v.log2() + 2.) / 4.) as f32
+}
+
+fn mouse_sensitivity_control(root: &Root, theme: &Theme, s: &Settings, cx: &mut Context<Root>) -> AnyElement {
+    let linked = root.settings_view.mouse_linked;
+    let axis = |vertical: bool, value: f64, input: Entity<TextInput>, cx: &mut Context<Root>| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(div().w(px(64.)).child(text_sm(theme, if vertical { "Vertical" } else { "Horizontal" })))
+            .child(div().w(px(140.)).child(slider(theme, if vertical { "mouse-y" } else { "mouse-x" }, sensitivity_fraction(value), cx.listener(move |this, t: &f32, _, cx| {
+                this.set_mouse_sensitivity(vertical, sensitivity_at(*t));
+                this.after_settings_change(cx);
+            }))))
+            .child(numeric_control(theme, input, 52., "×"))
+    };
+    let lock = icon_button("mouse-linked", if linked { icon::LOCK } else { icon::LOCK_OPEN })
+        .size(14., 8.)
+        .toggled(linked)
+        .tooltip(if linked { "Set directions separately" } else { "Same for both directions" }, None)
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.settings_view.mouse_linked = !this.settings_view.mouse_linked;
+            if this.settings_view.mouse_linked {
+                let x = this.edited_settings().mouse_sensitivity_x;
+                this.set_mouse_sensitivity(false, x);
+            }
+            this.after_settings_change(cx);
+        }));
+    div()
+        .flex()
+        .flex_col()
+        .child(axis(false, s.mouse_sensitivity_x, root.settings_view.mouse_x.clone(), cx))
+        .child(div().flex().items_center().gap(px(6.)).child(div().w(px(64. + 8. + 140. + 8.))).child(div().w(px(52.)).flex().justify_center().child(lock)).child(text_sm(theme, "×").invisible()))
+        .child(axis(true, s.mouse_sensitivity_y, root.settings_view.mouse_y.clone(), cx))
+        .into_any_element()
+}
+
+fn render_row(theme: &Theme, row: Row, index: usize, last: bool, scoped: bool, cx: &mut Context<Root>) -> AnyElement {
     let disabled = row.disabled_reason.is_some();
     let label_color = if disabled { theme.text_disabled } else { theme.text };
     let help = row.disabled_reason.map(|r| r.to_string()).unwrap_or(row.help);
@@ -952,10 +1103,10 @@ fn render_row(theme: &Theme, row: Row, index: usize, last: bool, cx: &mut Contex
                                         d.child(
                                             icon_button(gpui::ElementId::NamedInteger("reset".into(), index as u64), icon::ROTATE_CCW)
                                                 .size(20., 12.)
-                                                .tooltip("Reset to default", None)
+                                                .tooltip(if scoped { "Use the setting for all apps" } else { "Reset to default" }, None)
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     if let Some(r) = &reset {
-                                                        r(&mut this.settings);
+                                                        r(this.edited_settings_mut());
                                                     }
                                                     this.after_settings_change(cx);
                                                 })),
@@ -978,16 +1129,20 @@ pub fn handle_key(root: &mut Root, event: &KeyDownEvent, _window: &mut Window, c
     match (key, cmd) {
         ("escape", _) => root.action_back(&crate::app::Back, _window, cx),
         ("up", true) => {
-            root.settings_view.section = root.settings_view.section.saturating_sub(1);
+            if let Some(i) = (0..root.settings_view.section).rev().find(|i| section_shown(root, SECTIONS[*i].id)) {
+                root.settings_view.section = i;
+            }
             cx.notify();
         }
         ("down", true) => {
-            root.settings_view.section = (root.settings_view.section + 1).min(SECTIONS.len() - 1);
+            if let Some(i) = (root.settings_view.section + 1..SECTIONS.len()).find(|i| section_shown(root, SECTIONS[*i].id)) {
+                root.settings_view.section = i;
+            }
             cx.notify();
         }
         ("z", true) => {
             if let Some(prev) = root.settings_view.last_change.take() {
-                root.settings = prev;
+                *root.edited_settings_mut() = prev;
                 root.after_settings_change(cx);
             }
         }
@@ -1002,6 +1157,9 @@ pub fn render_sections(root: &mut Root, theme: &Theme, cx: &mut Context<Root>) -
     let current = root.settings_view.section;
     let mut nav = div().flex().flex_col().px(px(6.)).gap(px(1.));
     for (i, section) in SECTIONS.iter().enumerate() {
+        if !section_shown(root, section.id) {
+            continue;
+        }
         let selected = i == current && !filtering;
         let matches = !filtering || section_rows(section.id).iter().any(|r| r.to_lowercase().contains(&filter)) || section.title.to_lowercase().contains(&filter);
         let hover_bg = theme.element_hover;
@@ -1041,11 +1199,16 @@ pub fn render_content(root: &mut Root, theme: &Theme, content_w: f32, window: &m
 
     let mut content = div().flex().flex_col().w_full().max_w(px(640. + 24. + 16.)).min_w(px(0.)).pl(px(24.)).pr(px(16.)).pb(px(32.));
     let mut row_index = 0usize;
-    let sections_to_show: Vec<usize> = if filtering { (0..SECTIONS.len()).collect() } else { vec![current] };
+    let scoped = root.app_settings.is_some();
+    if let Some(app) = &root.app_settings {
+        content = content.child(div().pt(px(4.)).pb(px(12.)).child(callout(theme, CalloutKind::Info, format!("Changes apply to {} only. Unchanged settings follow the ones for all apps.", app.app_name))));
+    }
+    let sections_to_show: Vec<usize> = if filtering { (0..SECTIONS.len()).filter(|i| section_shown(root, SECTIONS[*i].id)).collect() } else { vec![current] };
     for si in sections_to_show {
         let section = &SECTIONS[si];
         let rows: Vec<Row> = build_rows(root, theme, section.id, cx)
             .into_iter()
+            .filter(|r| !scoped || !SHARED_ONLY_ROWS.contains(&r.label))
             .filter(|r| !filtering || r.label.to_lowercase().contains(&filter) || r.help.to_lowercase().contains(&filter))
             .collect();
         if rows.is_empty() {
@@ -1070,7 +1233,7 @@ pub fn render_content(root: &mut Root, theme: &Theme, content_w: f32, window: &m
         let n = rows.len();
         let mut items = div().flex().flex_col();
         for (k, row) in rows.into_iter().enumerate() {
-            items = items.child(render_row(theme, row, row_index, k + 1 == n, cx));
+            items = items.child(render_row(theme, row, row_index, k + 1 == n, scoped, cx));
             row_index += 1;
         }
         content = content.child(items);

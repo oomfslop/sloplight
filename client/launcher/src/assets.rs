@@ -25,7 +25,7 @@ pub mod icon {
     macro_rules! icons { ($($name:ident = $file:literal),* $(,)?) => { $(pub const $name: &str = concat!("icons/", $file, ".svg");)* }; }
     icons! {
         PLUS = "plus", SEARCH = "search", X = "x", EYE = "eye", EYE_OFF = "eye-off", REFRESH = "refresh-cw",
-        INFO = "info", ARROW_LEFT = "arrow-left", SETTINGS = "settings", LOCK = "lock", POWER = "power",
+        INFO = "info", ARROW_LEFT = "arrow-left", SETTINGS = "settings", LOCK = "lock", LOCK_OPEN = "lock-open", POWER = "power",
         PLAY = "play", SQUARE = "square", ZAP = "zap", GAMEPAD = "gamepad-2", LAYOUT_GRID = "layout-grid",
         SHIELD_ALERT = "shield-alert", CIRCLE_ALERT = "circle-alert", CIRCLE_X = "circle-x", CIRCLE_CHECK = "circle-check",
         TRIANGLE_ALERT = "triangle-alert", LOADER = "loader-circle", COPY = "copy", CHECK = "check",

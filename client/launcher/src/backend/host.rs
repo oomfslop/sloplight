@@ -84,6 +84,9 @@ pub struct App {
     /// False for apps that run nothing on the host (Desktop): quitting them loses nothing
     #[serde(default = "crate::settings::default_true")]
     pub has_process: bool,
+    /// Client-side: settings for this app only (`Settings` field name -> value)
+    #[serde(default)]
+    pub settings_overrides: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -282,6 +285,7 @@ pub fn parse_app_list(app_xml: &str) -> Result<Vec<App>, String> {
             hidden: false,
             direct_launch: false,
             has_process: text("HasProcess").map(|v| v != "0").unwrap_or(true),
+            settings_overrides: Default::default(),
         });
     }
     Ok(apps)
@@ -476,6 +480,7 @@ impl Host {
             if let Some(existing) = self.apps.iter().find(|a| a.id == new_app.id) {
                 new_app.hidden = existing.hidden;
                 new_app.direct_launch = existing.direct_launch;
+                new_app.settings_overrides = existing.settings_overrides.clone();
             }
         }
         sort_apps(&mut new_apps);

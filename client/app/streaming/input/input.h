@@ -238,6 +238,10 @@ private:
     bool m_SwapMouseButtons;
     bool m_ReverseScrollDirection;
     bool m_SwapFaceButtons;
+    double m_MouseSensitivityX;
+    double m_MouseSensitivityY;
+    double m_MouseRemainderX = 0;
+    double m_MouseRemainderY = 0;
 
     bool m_NeedsManualCaptureOnLeave;
     bool m_MouseWasInVideoRegion;

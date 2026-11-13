@@ -213,6 +213,8 @@ public:
     // Fractional refresh rate in Hz, or 0 to use the integer fps value. When
     // non-zero, fps holds the rounded value for client-side decisions.
     double fractionalFps;
+    double mouseSensitivityX = 1.0;
+    double mouseSensitivityY = 1.0;
     // Ask the host to stream from a virtual display
     bool useVirtualDisplay;
     bool vrrCapture;

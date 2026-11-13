@@ -165,6 +165,8 @@ void Launcher::applySettings(const QJsonObject& s)
     p->absoluteTouchMode = jsonBool(s, "absolute_touch_mode", p->absoluteTouchMode);
     p->swapMouseButtons = jsonBool(s, "swap_mouse_buttons", p->swapMouseButtons);
     p->reverseScrollDirection = jsonBool(s, "reverse_scroll_direction", p->reverseScrollDirection);
+    p->mouseSensitivityX = s.value("mouse_sensitivity_x").toDouble(p->mouseSensitivityX);
+    p->mouseSensitivityY = s.value("mouse_sensitivity_y").toDouble(p->mouseSensitivityY);
     p->captureSysKeysMode = static_cast<StreamingPreferences::CaptureSysKeysMode>(jsonInt(s, "capture_sys_keys_mode", p->captureSysKeysMode));
     p->multiController = jsonBool(s, "multi_controller", p->multiController);
     p->swapFaceButtons = jsonBool(s, "swap_face_buttons", p->swapFaceButtons);

@@ -15,6 +15,8 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
       m_SwapMouseButtons(prefs.swapMouseButtons),
       m_ReverseScrollDirection(prefs.reverseScrollDirection),
       m_SwapFaceButtons(prefs.swapFaceButtons),
+      m_MouseSensitivityX(prefs.mouseSensitivityX > 0 ? prefs.mouseSensitivityX : 1.0),
+      m_MouseSensitivityY(prefs.mouseSensitivityY > 0 ? prefs.mouseSensitivityY : 1.0),
       m_MouseWasInVideoRegion(false),
       m_PendingMouseButtonsAllUpOnVideoRegionLeave(false),
       m_PointerRegionLockActive(false),

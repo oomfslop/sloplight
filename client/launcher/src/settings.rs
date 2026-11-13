@@ -280,6 +280,24 @@ pub const LANGUAGES: &[(&str, &str)] = &[
     ("ta", "தமிழ்"),
 ];
 
+/// Settings no app has its own value for
+const SHARED_ONLY: &[&str] = &[
+    "launcher_hotkey",
+    "windows_hotkey",
+    "language",
+    "ui_display_mode",
+    "enable_mdns",
+    "detect_network_blocking",
+    "helper_path",
+    "active_preset",
+    "custom_presets",
+    "launcher_recent",
+    "last_host_uuid",
+    "inspector_open",
+    "window_width",
+    "window_height",
+];
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -369,6 +387,9 @@ pub struct Settings {
     pub absolute_touch_mode: bool,
     pub swap_mouse_buttons: bool,
     pub reverse_scroll_direction: bool,
+    /// Mouse movement multipliers while the host hides its cursor (relative mouse)
+    pub mouse_sensitivity_x: f64,
+    pub mouse_sensitivity_y: f64,
     /// Two-finger trackpad gestures go to the host as its own touchpad's
     pub trackpad_gestures: bool,
     pub capture_sys_keys_mode: CaptureSysKeys,
@@ -459,6 +480,8 @@ impl Default for Settings {
             absolute_touch_mode: true,
             swap_mouse_buttons: false,
             reverse_scroll_direction: false,
+            mouse_sensitivity_x: 1.0,
+            mouse_sensitivity_y: 1.0,
             trackpad_gestures: true,
             capture_sys_keys_mode: CaptureSysKeys::Off,
             multi_controller: true,
@@ -592,6 +615,37 @@ impl Settings {
         self.bitrate_kbps = self.bitrate_kbps.clamp(500, self.max_bitrate_kbps());
         if !self.enable_vsync {
             self.frame_pacing = false;
+        }
+    }
+
+    /// These settings with an app's overrides (field name -> value) on top
+    pub fn with_overrides(&self, overrides: &serde_json::Map<String, serde_json::Value>) -> Settings {
+        if overrides.is_empty() {
+            return self.clone();
+        }
+        let mut value = self.to_json_object();
+        value.extend(overrides.clone());
+        let mut s: Settings = serde_json::from_value(value.into()).unwrap_or_else(|e| {
+            log::error!("App setting overrides ignored: {e}");
+            self.clone()
+        });
+        s.apply_auto_bitrate();
+        s
+    }
+
+    /// The overrides that turn these settings into `app`'s
+    pub fn overrides_for(&self, app: &Settings) -> serde_json::Map<String, serde_json::Value> {
+        let shared = self.to_json_object();
+        app.to_json_object()
+            .into_iter()
+            .filter(|(k, v)| !SHARED_ONLY.contains(&k.as_str()) && shared.get(k) != Some(v) && !(k == "bitrate_kbps" && app.auto_adjust_bitrate))
+            .collect()
+    }
+
+    fn to_json_object(&self) -> serde_json::Map<String, serde_json::Value> {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::Object(m)) => m,
+            _ => unreachable!("settings serialize to an object"),
         }
     }
 

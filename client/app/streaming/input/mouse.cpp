@@ -5,6 +5,8 @@
 #include "SDL_compat.h"
 #include "streaming/streamutils.h"
 
+#include <cmath>
+
 #ifdef Q_OS_DARWIN
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
@@ -213,7 +215,13 @@ void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
         m_MouseWasInVideoRegion = mouseInVideoRegion;
     }
     else {
-        LiSendMouseMoveEvent(xrel, yrel);
+        double dx = xrel * m_MouseSensitivityX + m_MouseRemainderX;
+        double dy = yrel * m_MouseSensitivityY + m_MouseRemainderY;
+        m_MouseRemainderX = dx - std::trunc(dx);
+        m_MouseRemainderY = dy - std::trunc(dy);
+        if (std::trunc(dx) != 0 || std::trunc(dy) != 0) {
+            LiSendMouseMoveEvent((short)std::trunc(dx), (short)std::trunc(dy));
+        }
     }
 }
 

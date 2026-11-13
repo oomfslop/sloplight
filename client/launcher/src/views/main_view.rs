@@ -246,7 +246,15 @@ impl Root {
             t.quiet = true;
             t.placeholder = if settings { "Filter settings".into() } else { "Filter".into() };
         });
-        let left: AnyElement = if settings {
+        let left: AnyElement = if settings && let Some(app) = &self.app_settings {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .child(text_ui(theme, format!("{} settings", app.app_name)).font_weight(FontWeight::MEDIUM))
+                .child(button("settings-all-apps", "All apps").ghost().compact().icon(icon::ARROW_LEFT).on_click(cx.listener(|this, _, _, cx| this.close_app_settings(cx))))
+                .into_any_element()
+        } else if settings {
             text_ui(theme, "Settings").font_weight(FontWeight::MEDIUM).into_any_element()
         } else if self.selected().is_none() {
             div().into_any_element()

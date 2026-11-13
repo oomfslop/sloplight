@@ -107,7 +107,8 @@ fn run_selected(root: &mut Root, cx: &mut Context<Root>) {
         PaletteAction::Refresh => root.manager.refresh(),
         PaletteAction::Settings { section } => {
             root.view = ViewMode::Settings;
-            root.settings_view.sync_from(&root.settings, cx);
+            root.app_settings = None;
+            root.settings_view.open(&root.settings, cx);
             if let Some(s) = section {
                 root.settings_view.section = s;
             }

@@ -133,6 +133,14 @@ pub struct PendingLaunch {
     pub app_id: i32,
 }
 
+pub struct AppSettingsScope {
+    pub uuid: String,
+    pub app_id: i32,
+    pub app_name: String,
+    /// The shared settings with the app's overrides on top
+    pub settings: Settings,
+}
+
 pub struct Root {
     pub focus_handle: FocusHandle,
     pub manager: Arc<HostManager>,
@@ -152,6 +160,8 @@ pub struct Root {
     pub waking: std::collections::HashMap<String, Instant>,
     pub view: ViewMode,
     pub settings_view: crate::views::settings::SettingsViewState,
+    /// The settings view shows this app's settings
+    pub app_settings: Option<AppSettingsScope>,
     pub dialog: Option<Dialog>,
     pub popup: Option<Popup>,
     pub toasts: Vec<Toast>,
@@ -252,6 +262,7 @@ impl Root {
             filter,
             view: ViewMode::Main,
             settings_view,
+            app_settings: None,
             dialog: None,
             popup: None,
             toasts: Vec::new(),
@@ -1149,6 +1160,53 @@ impl Root {
         .detach();
     }
 
+    /// Settings view for one app: what changes there is the app's own
+    pub fn open_app_settings(&mut self, uuid: &str, app_id: i32, cx: &mut Context<Self>) {
+        let Some(app) = self.host_by_uuid(uuid).and_then(|h| h.apps.iter().find(|a| a.id == app_id)).cloned() else { return };
+        self.app_settings = Some(AppSettingsScope {
+            uuid: uuid.to_string(),
+            app_id,
+            app_name: app.name.clone(),
+            settings: self.settings.with_overrides(&app.settings_overrides),
+        });
+        self.view = ViewMode::Settings;
+        self.popup = None;
+        if !crate::views::settings::section_shown(self, crate::views::settings::SECTIONS[self.settings_view.section].id) {
+            self.settings_view.section = 0;
+        }
+        self.settings_view.open(self.app_settings.as_ref().map_or(&self.settings, |a| &a.settings), cx);
+        self.focus_main(cx);
+        cx.notify();
+    }
+
+    /// Settings view for every app (also on leaving the settings view)
+    pub fn close_app_settings(&mut self, cx: &mut Context<Self>) {
+        if self.app_settings.take().is_some() {
+            self.settings_view.open(&self.settings, cx);
+            cx.notify();
+        }
+    }
+
+    /// The settings the settings view shows: an app's, or the shared ones
+    pub fn edited_settings(&self) -> &Settings {
+        self.app_settings.as_ref().map_or(&self.settings, |a| &a.settings)
+    }
+
+    pub fn edited_settings_mut(&mut self) -> &mut Settings {
+        match &mut self.app_settings {
+            Some(a) => &mut a.settings,
+            None => &mut self.settings,
+        }
+    }
+
+    /// An app's settings are kept as what differs from the shared ones
+    pub fn save_edited_settings(&mut self) {
+        match &self.app_settings {
+            Some(a) => self.manager.set_app_settings_overrides(&a.uuid, a.app_id, self.settings.overrides_for(&a.settings)),
+            None => self.save_settings(),
+        }
+    }
+
     pub fn start_rename(&mut self, uuid: &str, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(host) = self.host_by_uuid(uuid).cloned() else { return };
         let input = cx.new(|cx| {
@@ -1600,14 +1658,16 @@ impl Root {
         match state.split(':').next().unwrap_or("") {
             "settings" => {
                 self.view = ViewMode::Settings;
-                self.settings_view.sync_from(&self.settings, cx);
+                self.app_settings = None;
+                self.settings_view.open(&self.settings, cx);
                 if let Some(n) = state.split(':').nth(1).and_then(|n| n.parse::<usize>().ok()) {
                     self.settings_view.section = n;
                 }
             }
             "dropdown" => {
                 self.view = ViewMode::Settings;
-                self.settings_view.sync_from(&self.settings, cx);
+                self.app_settings = None;
+                self.settings_view.open(&self.settings, cx);
                 let kind = match state.split(':').nth(1).unwrap_or("res") {
                     "fps" => crate::views::settings::Dropdown::Fps,
                     _ => crate::views::settings::Dropdown::Resolution,
@@ -1662,7 +1722,8 @@ impl Root {
     pub fn action_settings(&mut self, _: &OpenSettings, _window: &mut Window, cx: &mut Context<Self>) {
         self.view = if self.view == ViewMode::Settings { ViewMode::Main } else { ViewMode::Settings };
         self.popup = None;
-        self.settings_view.sync_from(&self.settings, cx);
+        self.app_settings = None;
+        self.settings_view.open(&self.settings, cx);
         self.focus_main(cx);
         cx.notify();
     }
@@ -1766,6 +1827,7 @@ impl Root {
         } else if self.view == ViewMode::Settings {
             if self.settings_view.filter.read(cx).is_empty() {
                 self.view = ViewMode::Main;
+                self.close_app_settings(cx);
                 self.focus_main(cx);
             } else {
                 self.settings_view.filter.update(cx, |f, cx| f.clear(cx));
