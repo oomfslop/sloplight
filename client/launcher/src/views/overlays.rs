@@ -289,6 +289,13 @@ impl Root {
         }
         {
             let u2 = u.clone();
+            entries.push(MenuEntry::new("Addresses…", cx.listener(move |this, _, _, cx| {
+                close_popup(this, cx);
+                this.start_edit_addresses(&u2, cx);
+            })));
+        }
+        {
+            let u2 = u.clone();
             entries.push(
                 MenuEntry::new("Remove…", cx.listener(move |this, _, _, cx| {
                     close_popup(this, cx);

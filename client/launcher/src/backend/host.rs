@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 
 use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
@@ -159,7 +159,7 @@ pub struct Host {
     #[serde(default)]
     pub ipv6_address: Option<Address>,
     #[serde(default)]
-    pub manual_address: Option<Address>,
+    pub manual_addresses: Vec<Address>,
     #[serde(default)]
     pub server_cert_pem: Option<String>,
     #[serde(default)]
@@ -324,7 +324,8 @@ impl Host {
         host.display_modes = parse_display_modes(info);
 
         let local_ip = xml::get_string(info, "LocalIP").unwrap_or_default();
-        host.local_address = if local_ip.is_empty() || local_ip.starts_with("127.") { None } else { Some(Address::new(local_ip, http.address().port)) };
+        // LocalIP is the server socket's address for this request, so a VPN reports its tunnel IP here
+        host.local_address = Some(Address::new(local_ip, http.address().port)).filter(Self::is_site_local_v4);
 
         host.active_https_port = xml::get_string(info, "HttpsPort").and_then(|p| p.trim().parse::<u16>().ok()).filter(|p| *p != 0).unwrap_or(DEFAULT_HTTPS_PORT);
         host.external_port = xml::get_string(info, "ExternalPort").and_then(|p| p.trim().parse::<u16>().ok()).filter(|p| *p != 0).unwrap_or(http.address().port);
@@ -394,7 +395,7 @@ impl Host {
     /// Addresses to try, in priority order, without duplicates.
     pub fn unique_addresses(&self) -> Vec<Address> {
         let mut out: Vec<Address> = Vec::new();
-        for a in [&self.active_address, &self.local_address, &self.remote_address, &self.ipv6_address, &self.manual_address].into_iter().flatten() {
+        for a in self.local_address.iter().chain(&self.ipv6_address).chain(&self.manual_addresses).chain(&self.remote_address) {
             if !out.contains(a) {
                 out.push(a.clone());
             }
@@ -404,7 +405,7 @@ impl Host {
 
     pub fn is_site_local_v4(addr: &Address) -> bool {
         match addr.ip() {
-            Some(IpAddr::V4(ip)) => ip.is_private() || ip == Ipv4Addr::LOCALHOST,
+            Some(IpAddr::V4(ip)) => ip.is_private(),
             _ => false,
         }
     }
@@ -435,10 +436,21 @@ impl Host {
             self.mac = that.mac.clone();
             changed = true;
         }
-        assign_if_some!(local_address);
+        if let Some(a) = &that.local_address
+            && self.local_address.as_ref() != Some(a)
+            && !self.manual_addresses.contains(a)
+        {
+            self.local_address = Some(a.clone());
+            changed = true;
+        }
         assign_if_some!(remote_address);
         assign_if_some!(ipv6_address);
-        assign_if_some!(manual_address);
+        for a in &that.manual_addresses {
+            if !self.manual_addresses.contains(a) {
+                self.manual_addresses.push(a.clone());
+                changed = true;
+            }
+        }
         assign!(active_https_port);
         assign!(external_port);
         assign!(pair_state);
@@ -500,7 +512,7 @@ impl Host {
             && self.local_address == that.local_address
             && self.remote_address == that.remote_address
             && self.ipv6_address == that.ipv6_address
-            && self.manual_address == that.manual_address
+            && self.manual_addresses == that.manual_addresses
             && self.server_cert_pem == that.server_cert_pem
             && self.is_nvidia_server_software == that.is_nvidia_server_software
             && self.apps == that.apps

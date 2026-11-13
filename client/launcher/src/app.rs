@@ -9,7 +9,7 @@ use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui::{App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyDownEvent, Pixels, Point, Window, actions, prelude::*};
 
-use crate::backend::{App as NvApp, Host, HostManager, Identity, ManagerEvent};
+use crate::backend::{Address, App as NvApp, Host, HostManager, Identity, ManagerEvent};
 use crate::settings::Settings;
 use crate::stream::{self, HelperEvent, StreamEvent, StreamProcess};
 use crate::ui::{InputKind, TextInput, TextInputEvent, ToastKind};
@@ -43,6 +43,7 @@ pub struct InlinePairing {
 pub enum InputPurpose {
     AddHost,
     Rename { uuid: String },
+    EditAddresses { uuid: String },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1085,7 +1086,7 @@ impl Root {
     pub fn submit_input_dialog(&mut self, cx: &mut Context<Self>) {
         let Some(Dialog::Input { purpose, input, in_progress, error, blocked_by_os, .. }) = &mut self.dialog else { return };
         let text = input.read(cx).text().trim().to_string();
-        if text.is_empty() || *in_progress {
+        if *in_progress || (text.is_empty() && !matches!(purpose, InputPurpose::EditAddresses { .. })) {
             return;
         }
         match purpose.clone() {
@@ -1101,6 +1102,25 @@ impl Root {
                 self.hosts = self.manager.snapshot();
                 self.close_dialog(cx);
                 self.toast(ToastKind::Success, format!("Renamed to {text}"), cx);
+            }
+            InputPurpose::EditAddresses { uuid } => {
+                let parts: Vec<&str> = text.split([',', ' ']).filter(|p| !p.is_empty()).collect();
+                let mut addresses: Vec<Address> = Vec::new();
+                for part in parts {
+                    match Address::parse_user_input(part) {
+                        Some(a) if !addresses.contains(&a) => addresses.push(a),
+                        Some(_) => {}
+                        None => {
+                            *error = Some(format!("\"{part}\" doesn't look like a valid address."));
+                            input.update(cx, |t, _| t.invalid = true);
+                            cx.notify();
+                            return;
+                        }
+                    }
+                }
+                self.manager.set_manual_addresses(&uuid, addresses);
+                self.hosts = self.manager.snapshot();
+                self.close_dialog(cx);
             }
         }
         cx.notify();
@@ -1222,6 +1242,31 @@ impl Root {
             title: format!("Rename {}", host.name),
             help: None,
             primary: "Rename".into(),
+            input,
+            in_progress: false,
+            error: None,
+            blocked_by_os: false,
+        });
+        self.popup = None;
+        cx.notify();
+    }
+
+    pub fn start_edit_addresses(&mut self, uuid: &str, cx: &mut Context<Self>) {
+        let Some(host) = self.host_by_uuid(uuid).cloned() else { return };
+        let text = host.manual_addresses.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ");
+        let input = cx.new(|cx| {
+            let mut t = TextInput::new(cx, "192.168.1.20, 100.64.0.5", InputKind::Mono);
+            t.set_text(text, cx);
+            t.select_all_text(cx);
+            t
+        });
+        cx.subscribe(&input, Self::on_input_dialog_event).detach();
+        self.pending_focus = Some(input.read(cx).focus_handle.clone());
+        self.dialog = Some(Dialog::Input {
+            purpose: InputPurpose::EditAddresses { uuid: uuid.to_string() },
+            title: format!("Addresses for {}", host.name),
+            help: Some("Comma-separated, tried in order after the LAN address found automatically. Use this for VPN addresses like Tailscale.".into()),
+            primary: "Save".into(),
             input,
             in_progress: false,
             error: None,

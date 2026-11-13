@@ -12,6 +12,6 @@ pub mod platform;
 pub mod wol;
 pub mod xml;
 
-pub use host::{App, Host, HostState, PairState};
+pub use host::{Address, App, Host, HostState, PairState};
 pub use identity::Identity;
 pub use manager::{HostManager, ManagerEvent};

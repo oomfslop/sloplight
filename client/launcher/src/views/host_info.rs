@@ -17,7 +17,7 @@ const ROW_H: f32 = 22.;
 
 type CopyFn = Box<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App)>;
 
-fn fact(theme: &Theme, id: &'static str, label: &'static str, value: impl Into<gpui::SharedString>, mono: bool, copy: Option<CopyFn>) -> AnyElement {
+fn fact(theme: &Theme, id: impl Into<gpui::ElementId>, label: &'static str, value: impl Into<gpui::SharedString>, mono: bool, copy: Option<CopyFn>) -> AnyElement {
     let value: gpui::SharedString = value.into();
     let copyable = copy.is_some();
     let hover_bg = theme.element_hover;
@@ -132,10 +132,13 @@ pub fn render_popover(root: &mut Root, theme: &Theme, host: &Host, max_h: f32, c
         if !host.gfe_version.is_empty() {
             rows.push(fact(theme, "i-gfe", "GFE version", host.gfe_version.clone(), true, None));
         }
-        for (id, label, a) in [("i-local", "Local", &host.local_address), ("i-remote", "Remote", &host.remote_address), ("i-v6", "IPv6", &host.ipv6_address), ("i-manual", "Manual", &host.manual_address)] {
+        for (id, label, a) in [("i-local", "Local", &host.local_address), ("i-remote", "Remote", &host.remote_address), ("i-v6", "IPv6", &host.ipv6_address)] {
             if let Some(a) = a {
                 rows.push(fact(theme, id, label, a.to_string(), true, copy(label, a.to_string())));
             }
+        }
+        for (i, a) in host.manual_addresses.iter().enumerate() {
+            rows.push(fact(theme, ("i-manual", i), if i == 0 { "Manual" } else { "" }, a.to_string(), true, copy("Manual", a.to_string())));
         }
     }
 

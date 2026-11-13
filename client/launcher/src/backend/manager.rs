@@ -502,7 +502,7 @@ impl HostManager {
                 new_host.ipv6_address = Some(v6);
             }
         } else {
-            new_host.manual_address = Some(address.clone());
+            new_host.manual_addresses = vec![address.clone()];
         }
 
         let uuid = new_host.uuid.clone();
@@ -708,6 +708,14 @@ impl HostManager {
             let mut h = host.write().unwrap();
             h.name = name;
             h.has_custom_name = true;
+        }
+        self.save_hosts();
+        self.emit(ManagerEvent::HostsChanged);
+    }
+
+    pub fn set_manual_addresses(&self, uuid: &str, addresses: Vec<Address>) {
+        if let Some(host) = self.host_arc(uuid) {
+            host.write().unwrap().manual_addresses = addresses;
         }
         self.save_hosts();
         self.emit(ManagerEvent::HostsChanged);
