@@ -274,17 +274,19 @@ pub fn start_with_window(
 ) -> Result<StreamProcess, String> {
     let address = host.active_address.clone().or_else(|| host.unique_addresses().into_iter().next()).ok_or("The host has no known address.")?;
     let cert = host.server_cert_pem.clone().ok_or("The host isn't paired.")?;
-    let mut settings = settings.with_overrides(&app.settings_overrides);
+    let mut settings = if window.is_some() { settings.clone() } else { settings.with_overrides(&app.settings_overrides) };
     if !app.has_process && settings.quit_processless_app_after {
         settings.quit_app_after = true;
     }
-    settings.resolve_primary_display_resolution();
-    if window.is_none() && settings.window_mode == WindowMode::Fullscreen && !settings.exclusive_fullscreen
-        && let Some((sw, sh)) = crate::display::primary_display().and_then(|d| d.below_notch)
-        && settings.height as i64 * sw as i64 > sh as i64 * settings.width as i64
-    {
-        log::info!("{}x{} doesn't fit the {sw}x{sh} below the notch, streaming borderless", settings.width, settings.height);
-        settings.window_mode = WindowMode::Borderless;
+    if window.is_none() {
+        settings.resolve_primary_display_resolution();
+        if settings.window_mode == WindowMode::Fullscreen && !settings.exclusive_fullscreen
+            && let Some((sw, sh)) = crate::display::primary_display().and_then(|d| d.below_notch)
+            && settings.height as i64 * sw as i64 > sh as i64 * settings.width as i64
+        {
+            log::info!("{}x{} doesn't fit the {sw}x{sh} below the notch, streaming borderless", settings.width, settings.height);
+            settings.window_mode = WindowMode::Borderless;
+        }
     }
     let config = HelperConfig {
         identity: HelperIdentity { unique_id: &identity.unique_id, certificate_pem: &identity.cert_pem, private_key_pem: &identity.key_pem },
