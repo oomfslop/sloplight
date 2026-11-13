@@ -801,7 +801,7 @@ impl Root {
             self.pending_launch = None;
             return;
         };
-        if host.current_game_id == 0 && !host.pending_quit {
+        if host.current_game_id == 0 && host.pending_quit.is_none() {
             let app_id = pending.app_id;
             self.pending_launch = None;
             self.start_stream(&host, app_id, cx);

@@ -442,12 +442,17 @@ impl Root {
 
         let focused = self.region == Region::Grid;
         let stream = self.stream.as_ref().filter(|s| s.host_uuid == host.uuid).map(|s| (s.app_id, s.connected));
+        let quitting = match host.pending_quit {
+            Some(true) => Some("Ending session…"),
+            Some(false) => Some("Quitting…"),
+            None => self.stream.as_ref().is_some_and(|s| s.host_uuid == host.uuid && s.quitting).then_some("Quitting…"),
+        };
         let uuid = host.uuid.clone();
         let split = self.visible_count().min(apps.len());
         let mut tiles: Vec<AnyElement> = Vec::with_capacity(apps.len());
         for (i, app) in apps.iter().enumerate() {
             let selected = self.grid_selected == Some(i);
-            tiles.push(self.render_tile(theme, &uuid, app, i, tile_w, tile_h, selected && focused, host.current_game_id == app.id, stream.filter(|(id, _)| *id == app.id).map(|(_, connected)| connected), cx));
+            tiles.push(self.render_tile(theme, &uuid, app, i, tile_w, tile_h, selected && focused, host.current_game_id == app.id, quitting.filter(|_| host.current_game_id == app.id), stream.filter(|(id, _)| *id == app.id).map(|(_, connected)| connected), cx));
         }
         let hidden_tiles: Vec<AnyElement> = tiles.split_off(split);
         // Window streaming: keep the host ready (after the visible apps)
@@ -576,8 +581,8 @@ impl Root {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn render_tile(&mut self, theme: &Theme, uuid: &str, app: &NvApp, index: usize, tile_w: f32, tile_h: f32, selected: bool, running: bool, streaming: Option<bool>, cx: &mut Context<Self>) -> AnyElement {
-        let launching = streaming == Some(false);
+    fn render_tile(&mut self, theme: &Theme, uuid: &str, app: &NvApp, index: usize, tile_w: f32, tile_h: f32, selected: bool, running: bool, quitting: Option<&'static str>, streaming: Option<bool>, cx: &mut Context<Self>) -> AnyElement {
+        let busy = streaming == Some(false) || quitting.is_some();
         let key = (uuid.to_string(), app.id);
         if !self.box_art_requested.contains(&key) {
             self.box_art_requested.insert(key.clone());
@@ -600,10 +605,10 @@ impl Root {
         let mut art = div().relative().w(px(tile_w)).h(px(tile_h)).rounded(px(radius)).overflow_hidden().bg(theme.surface).border_1().border_color(theme.text.alpha(0.06)).when(hidden, |d| d.opacity(0.5));
         art = match art_path {
             // The image sits inside the card's 1pt border, so its radius is 1pt smaller.
-            Some(path) => art.child(img(path).size_full().rounded(px(radius - 1.)).object_fit(gpui::ObjectFit::Cover).when(launching, |i| i.opacity(0.5))),
+            Some(path) => art.child(img(path).size_full().rounded(px(radius - 1.)).object_fit(gpui::ObjectFit::Cover).when(busy, |i| i.opacity(0.5))),
             None => art.child(div().size_full().flex().items_center().justify_center().child(icon_el(icon::GAMEPAD, icon_size, theme.text_muted))),
         };
-        if launching {
+        if busy {
             art = art.child(div().absolute().inset_0().flex().items_center().justify_center().child(spinner(spinner_size, theme.text)));
         }
         let ring = if running {
@@ -615,6 +620,7 @@ impl Root {
         };
         let hover_overlay = theme.text.alpha(0.06);
         let caption: SharedString = match streaming {
+            _ if let Some(q) = quitting => q.into(),
             Some(false) => "Starting…".into(),
             Some(true) => "Streaming…".into(),
             None => name.clone().into(),
@@ -645,7 +651,7 @@ impl Root {
                     .gap(px(5.))
                     .w_full()
                     .px(px(2.))
-                    .when(running && !launching, |d| d.child(div().flex_none().size(px(6.)).rounded(px(3.)).bg(theme.state_busy)))
+                    .when(running && !busy, |d| d.child(div().flex_none().size(px(6.)).rounded(px(3.)).bg(theme.state_busy)))
                     .child(
                         div()
                             .flex_1()
@@ -655,7 +661,7 @@ impl Root {
                             .whitespace_nowrap()
                             .overflow_hidden()
                             .text_ellipsis()
-                            .text_color(if launching || hidden { theme.text_muted } else { theme.text })
+                            .text_color(if busy || hidden { theme.text_muted } else { theme.text })
                             .when(selected, |d| d.font_weight(FontWeight::MEDIUM))
                             .child(caption),
                     ),

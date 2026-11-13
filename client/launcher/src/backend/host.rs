@@ -203,7 +203,8 @@ pub struct Host {
     #[serde(skip)]
     pub external_port: u16,
     #[serde(skip)]
-    pub pending_quit: bool,
+    /// Some(keep_app) while a quit request runs
+    pub pending_quit: Option<bool>,
     #[serde(skip)]
     pub pairing_in_progress: bool,
     /// Every known address failed with "no route to host" on the last poll.

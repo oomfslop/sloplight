@@ -638,7 +638,7 @@ impl HostManager {
 
     pub fn quit_running_app(&self, uuid: &str, keep_app: bool) {
         let Some(host) = self.host_arc(uuid) else { return };
-        host.write().unwrap().pending_quit = true;
+        host.write().unwrap().pending_quit = Some(keep_app);
         self.emit(ManagerEvent::HostsChanged);
         let me = self.me();
         let uuid = uuid.to_string();
@@ -667,7 +667,7 @@ impl HostManager {
                 }
                 {
                     let mut h = host.write().unwrap();
-                    h.pending_quit = false;
+                    h.pending_quit = None;
                     if error.is_none() {
                         h.current_game_id = 0;
                     }
