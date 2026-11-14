@@ -437,13 +437,7 @@ impl Host {
             self.mac = that.mac.clone();
             changed = true;
         }
-        if let Some(a) = &that.local_address
-            && self.local_address.as_ref() != Some(a)
-            && !self.manual_addresses.contains(a)
-        {
-            self.local_address = Some(a.clone());
-            changed = true;
-        }
+        assign_if_some!(local_address);
         assign_if_some!(remote_address);
         assign_if_some!(ipv6_address);
         for a in &that.manual_addresses {

@@ -63,8 +63,17 @@ pub fn render_popover(root: &mut Root, theme: &Theme, host: &Host, max_h: f32, c
     };
 
     let mut rows: Vec<AnyElement> = Vec::new();
-    if let Some(a) = host.active_address.clone().or_else(|| host.unique_addresses().into_iter().next()) {
-        rows.push(fact(theme, "i-addr", "Address", a.to_string(), true, copy("address", a.to_string())));
+    if let Some(a) = &host.active_address {
+        let route = if host.local_address.as_ref() == Some(a) {
+            "LAN"
+        } else if host.ipv6_address.as_ref() == Some(a) {
+            "IPv6"
+        } else if host.manual_addresses.contains(a) {
+            "manual"
+        } else {
+            "WAN"
+        };
+        rows.push(fact(theme, "i-addr", "Address", format!("{a} · {route}"), true, copy("address", a.to_string())));
     }
     if host.active_https_port != 0 && host.active_https_port != 47984 {
         rows.push(fact(theme, "i-https", "HTTPS port", host.active_https_port.to_string(), true, None));

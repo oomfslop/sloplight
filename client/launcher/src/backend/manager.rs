@@ -97,6 +97,7 @@ impl HostManager {
                             continue;
                         }
                         h.external_port = h.remote_address.as_ref().map(|a| a.port).unwrap_or(0);
+                        h.local_address = h.local_address.take().filter(Host::is_site_local_v4);
                         h.is_supported_server_version = true;
                         let mut apps = std::mem::take(&mut h.apps);
                         apps.sort_by_cached_key(|a| a.name.to_lowercase());
@@ -335,6 +336,7 @@ impl HostManager {
                 if h.state != HostState::Offline {
                     log::info!("{} is now offline", h.name);
                     h.state = HostState::Offline;
+                    h.active_address = None;
                     changed = true;
                 }
                 if h.unreachable != unreachable {
